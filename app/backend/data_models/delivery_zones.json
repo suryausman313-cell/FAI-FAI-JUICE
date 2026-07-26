@@ -1,0 +1,38 @@
+{
+    "title": "delivery_zones",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "zone_name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Zone name e.g. Zone 1"
+        },
+        "min_distance_km": {
+            "type": "number",
+            "description": "Start of zone range in km"
+        },
+        "max_distance_km": {
+            "type": "number",
+            "description": "End of zone range in km"
+        },
+        "charge": {
+            "type": "number",
+            "description": "Delivery charge in AED for this zone"
+        },
+        "is_active": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether zone is active"
+        }
+    },
+    "required": [
+        "zone_name",
+        "min_distance_km",
+        "max_distance_km",
+        "charge"
+    ]
+}

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: vita-napoli-backend
+    runtime: python
+    rootDir: app/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /database/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: PYTHON_BACKEND_URL
+        sync: false
+      - key: MGX_IGNORE_INIT_DATA
+        value: "1"

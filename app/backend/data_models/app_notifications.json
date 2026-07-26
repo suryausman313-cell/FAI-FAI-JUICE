@@ -1,0 +1,27 @@
+{
+    "title": "app_notifications",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "title": {
+            "type": "string",
+            "description": "Notification title"
+        },
+        "message": {
+            "type": "string",
+            "description": "Notification body message"
+        },
+        "is_active": {
+            "type": "boolean",
+            "description": "Whether notification is visible to customers",
+            "default": true
+        }
+    },
+    "required": [
+        "title",
+        "message"
+    ]
+}

@@ -1,0 +1,89 @@
+import { ReactNode, useState, useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, MessageSquare } from 'lucide-react';
+import { getCartItemCount, getCart } from '@/lib/cart-store';
+import { useTranslation } from '@/lib/i18n';
+import { LanguageSwitcher } from '@/components/LanguagePicker';
+
+interface CustomerLayoutProps {
+  children: ReactNode;
+}
+
+export default function CustomerLayout({ children }: CustomerLayoutProps) {
+  const location = useLocation();
+  const { t } = useTranslation();
+  const [cartCount, setCartCount] = useState(0);
+
+  useEffect(() => {
+    const updateCount = () => setCartCount(getCartItemCount(getCart()));
+    updateCount();
+    
+    // Listen for storage events to update cart count
+    window.addEventListener('storage', updateCount);
+    // Custom event for same-tab updates
+    window.addEventListener('cart-updated', updateCount);
+    return () => {
+      window.removeEventListener('storage', updateCount);
+      window.removeEventListener('cart-updated', updateCount);
+    };
+  }, [location]);
+
+  const navItems = [
+    { path: '/', icon: Home, label: t('nav.home') },
+    { path: '/menu', icon: UtensilsCrossed, label: t('nav.menu') },
+    { path: '/cart', icon: ShoppingCart, label: t('nav.cart'), badge: cartCount },
+    { path: '/my-orders', icon: ClipboardList, label: t('nav.orders') },
+    { path: '/feedback', icon: MessageSquare, label: t('nav.feedback') },
+  ];
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-black border-b border-red-900/30">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-600 to-green-700 flex items-center justify-center">
+              <span className="text-white font-bold text-sm">VN</span>
+            </div>
+            <span className="text-xl font-bold text-white tracking-tight">Vita Napoli Pizza</span>
+          </Link>
+          <LanguageSwitcher />
+
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 pb-20">
+        {children}
+      </main>
+
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-black border-t border-red-900/30">
+        <div className="max-w-7xl mx-auto flex items-center justify-around py-2">
+          {navItems.map(({ path, icon: Icon, label, badge }) => {
+            const isActive = location.pathname === path;
+            return (
+              <Link
+                key={path}
+                to={path}
+                className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg transition-colors relative cursor-pointer ${
+                  isActive ? 'text-red-500' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <div className="relative">
+                  <Icon className="w-5 h-5" />
+                  {badge && badge > 0 && (
+                    <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                      {badge > 9 ? '9+' : badge}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] font-medium">{label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    </div>
+  );
+}

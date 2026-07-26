@@ -1,0 +1,47 @@
+{
+    "title": "menu_items",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "category_id": {
+            "type": "integer"
+        },
+        "name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "description": {
+            "type": "string"
+        },
+        "price_medium": {
+            "type": "number"
+        },
+        "price_large": {
+            "type": "number"
+        },
+        "sizes_json": {
+            "type": "string"
+        },
+        "image_url": {
+            "type": "string"
+        },
+        "is_active": {
+            "type": "boolean",
+            "default": true
+        },
+        "has_extras": {
+            "type": "boolean",
+            "default": true
+        },
+        "sort_order": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "id",
+        "category_id",
+        "name"
+    ]
+}

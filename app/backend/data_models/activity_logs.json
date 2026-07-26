@@ -1,0 +1,43 @@
+{
+    "title": "activity_logs",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string",
+            "description": "Admin user who performed the action"
+        },
+        "action_type": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Type of action: order_status_change, order_delete, feedback_reply, settings_change, menu_change, customer_block"
+        },
+        "entity_type": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Entity affected: order, feedback, menu_item, customer, settings"
+        },
+        "entity_id": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "ID of the affected entity"
+        },
+        "details": {
+            "type": "string",
+            "description": "JSON string with action details"
+        },
+        "admin_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Name of the admin who performed the action"
+        }
+    },
+    "required": [
+        "action_type",
+        "entity_type",
+        "admin_name",
+        "user_id"
+    ]
+}

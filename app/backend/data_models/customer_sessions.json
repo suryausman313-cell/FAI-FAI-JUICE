@@ -1,0 +1,30 @@
+{
+    "title": "customer_sessions",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "customer_name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "customer_email": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "customer_phone": {
+            "type": "string",
+            "maxLength": 50
+        },
+        "last_active": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "first_seen": {
+            "type": "string",
+            "format": "date-time"
+        }
+    },
+    "required": []
+}

@@ -1,0 +1,481 @@
+Multi-Business Food Management Platform – Complete Requirements
+
+1. Super Admin & Multi-Business Management
+
+
+
+Create a Super Admin system that can manage unlimited businesses.
+
+Super Admin can:
+
+Create new businesses (Pizza, Juice, Burger, Coffee, Restaurant, etc.)
+
+Switch between businesses instantly from one dashboard
+
+View and manage all businesses
+
+
+Every business must be completely separate and have its own:
+
+Business Name
+
+Logo
+
+Menu
+
+Categories
+
+Products
+
+Prices
+
+Offers
+
+Customers
+
+Orders
+
+Sales Reports
+
+Kitchen Panel
+
+Riders
+
+Printers
+
+Inventory
+
+Settings
+
+Staff
+
+
+Rules:
+
+Data from one business must never appear in another business.
+
+Orders, customers, sales and reports must remain completely isolated.
+
+Each business has its own Admin.
+
+Business Admin can only manage their assigned business.
+
+Only Super Admin can access all businesses.
+
+
+
+---
+
+Rider Communication System
+
+After rider picks up an order, customer should see:
+
+Rider Name
+
+Rider Photo
+
+Rider Mobile Number
+
+Rider WhatsApp Number
+
+
+Add buttons:
+
+Call Rider
+
+WhatsApp Rider
+
+
+Create in-app chat:
+
+Customer App ↔ Rider App
+
+Features:
+
+Rider can send messages to customer.
+
+Customer can reply to rider.
+
+Messages saved with order history.
+
+
+
+---
+
+Delivery Order Details
+
+For every delivery order rider must see:
+
+Customer Name
+
+Customer Mobile Number
+
+Full Delivery Address
+
+Customer Location on Google Maps
+
+
+Buttons:
+
+Call Customer
+
+WhatsApp Customer
+
+Navigate
+
+
+Navigation:
+
+Open customer location directly in Google Maps.
+
+
+
+---
+
+Admin Rider Control
+
+Admin can:
+
+Assign rider manually.
+
+Change rider anytime.
+
+View live rider location.
+
+Contact rider.
+
+Reassign order if rider rejects or does not accept.
+
+View complete rider activity history.
+
+
+
+---
+
+Customer Delivery Tracking
+
+After rider pickup, customer sees:
+
+Rider Name
+
+Rider Photo
+
+Rider Phone Number
+
+Rider WhatsApp Number
+
+Live Rider Location
+
+Estimated Arrival Time (ETA)
+
+
+Delivery tracking updates in real time.
+
+
+---
+
+Rider App Workflow
+
+Create separate workflows for Pickup and Delivery orders.
+
+Delivery Order Flow:
+
+Customer Places Order
+
+↓
+
+Admin Receives Order
+
+↓
+
+Kitchen Accepts Order
+
+↓
+
+Kitchen Starts Preparing
+
+↓
+
+Kitchen Marks Order Ready for Pickup
+
+↓
+
+Rider Receives Notification
+
+↓
+
+Rider Accepts Delivery
+
+↓
+
+Rider Picks Up Order
+
+↓
+
+Status:
+"Picked Up by Rider"
+
+(Customer + Admin can see)
+
+↓
+
+Rider Starts Delivery
+
+↓
+
+Status:
+"Out for Delivery"
+
+(Customer + Admin can see)
+
+↓
+
+Rider Marks Delivered
+
+↓
+
+Status:
+"Delivered"
+
+(All users can see)
+
+Rules:
+
+Rider only sees assigned delivery orders.
+
+Pickup and Delivery orders must have different statuses.
+
+
+
+---
+
+Location & Google Maps System
+
+Features:
+
+Integrate Google Maps.
+
+Admin can create multiple branches.
+
+Admin can edit/delete branches.
+
+Admin selects country and city for every branch.
+
+
+Customer:
+
+Automatically sees nearest branch.
+
+Can open restaurant location in Google Maps.
+
+
+Rider:
+
+Can navigate to customer location.
+
+Customer can see live rider location during delivery.
+
+
+
+---
+
+Admin CMS (Customer App Control)
+
+Admin can customize customer home page without coding.
+
+Admin can manage:
+
+Home banners
+
+Promotional images
+
+Offers
+
+Categories
+
+Featured products
+
+Home sections
+
+
+Changes must appear instantly in Customer App.
+
+
+---
+
+Customer Feedback System
+
+After completed order:
+
+Show optional feedback popup.
+
+Customer can:
+
+Give 1–5 star rating.
+
+Write review.
+
+Skip feedback.
+
+
+Admin Panel:
+
+View all ratings.
+
+View customer reviews.
+
+
+
+---
+
+First Time User Experience
+
+When app opens first time:
+
+Show Language Selection screen.
+
+Languages:
+
+🇬🇧 English
+🇦🇪 Arabic
+🇵🇰 Urdu
+
+After selection:
+
+Save language permanently.
+
+Open app next time in selected language.
+
+Customer can change language from:
+
+
+Profile → Language
+
+
+---
+
+Customer App Flow
+
+1. Language Selection
+
+
+
+↓
+
+2. Vita Napoli Pizza Splash Screen
+
+
+
+↓
+
+3. Login / Sign Up
+
+
+
+↓
+
+4. Home Page
+
+
+
+
+---
+
+Splash Screen Design
+
+Show official Vita Napoli Pizza logo.
+
+Branding:
+
+Vita = Large Bold Black
+
+Napoli = Large Bold Red
+
+Features:
+
+Premium loading animation.
+
+Automatically open Login after few seconds.
+
+
+
+---
+
+Complete Language System
+
+Support:
+
+English
+
+Arabic
+
+Urdu
+
+
+Translate entire system:
+
+Customer App:
+
+Menu
+
+Categories
+
+Buttons
+
+Offers
+
+Notifications
+
+Checkout
+
+Payment
+
+Order Status
+
+Profile
+
+
+Rider App:
+
+All screens
+
+Messages
+
+Delivery status
+
+
+Kitchen Panel:
+
+Orders
+
+Status
+
+Notifications
+
+
+Admin Panel:
+
+Settings
+
+Reports
+
+Management
+
+
+Requirements:
+
+Arabic must support RTL.
+
+English and Urdu must support LTR.
+
+Admin can edit translations.
+
+Admin can add new languages in future without code changes.
+
+
+
+---
+
+Final Goal
+
+Create a complete Food Business Management Platform similar to professional systems like Foodics, where multiple restaurants can operate separately under one Super Admin system with Customer App, Rider App, Kitchen Panel and Admin Dashboard. Ya karwana h bas

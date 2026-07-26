@@ -1,0 +1,42 @@
+[
+    {
+        "name": "Offers",
+        "sort_order": 1,
+        "is_active": true
+    },
+    {
+        "name": "Pizza",
+        "sort_order": 2,
+        "is_active": true
+    },
+    {
+        "name": "Pasta",
+        "sort_order": 3,
+        "is_active": true
+    },
+    {
+        "name": "Risotto",
+        "sort_order": 4,
+        "is_active": true
+    },
+    {
+        "name": "Calzone",
+        "sort_order": 5,
+        "is_active": true
+    },
+    {
+        "name": "Appetizers",
+        "sort_order": 6,
+        "is_active": true
+    },
+    {
+        "name": "Panozzo",
+        "sort_order": 7,
+        "is_active": true
+    },
+    {
+        "name": "Drinks",
+        "sort_order": 8,
+        "is_active": true
+    }
+]

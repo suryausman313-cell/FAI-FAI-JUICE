@@ -1,0 +1,301 @@
+# Requirements & Progress
+
+## Requirements Overview
+Build a comprehensive mobile restaurant app for "Vita Napoli" Italian restaurant with customer ordering, admin dashboard, and menu management.
+
+## User Stories
+- As a customer, I can browse the menu, add items to cart, customize with extras, and place pickup orders
+- As a customer, I can view my order history and track order status
+- As an admin, I can manage orders, update statuses, view sales reports, and manage menu items
+
+## Task Breakdown
+- [x] Database schema design and table creation (categories, menu_items, extras, orders, restaurant_settings)
+- [x] Insert mock data for menu items, categories, extras, and restaurant settings
+- [x] Generate restaurant images (hero banner, pizza images)
+- [x] Customer homepage with hero section and restaurant info
+- [x] Menu page with categories and item selection
+- [x] Cart management with size/extras customization
+- [x] Checkout page with order placement API
+- [x] Order confirmation and My Orders pages
+- [x] Admin login and dashboard with sales reports
+- [x] Admin order management with status updates
+- [x] Admin menu management (CRUD for items, categories, extras)
+- [x] Admin customers page and settings page
+- [x] Backend custom APIs (admin orders, customers, sales report, order placement)
+- [x] Order timer + WhatsApp notification + auto-expiry (frontend timer, WhatsApp button, backend auto-cancel)
+- [x] Customer cancel order feature with admin-configurable permissions
+- [x] Fix 1970 date bug in orders display
+- [x] Admin settings UI for order timer & cancellation configuration
+
+## Progress Log
+- Zone-based delivery charge system implemented: backend delivery_zones CRUD + /calculate endpoint, frontend Checkout calls API for zone-based charges, AdminSettings multi-zone CRUD manager, RiderPanel shows delivery earnings per order
+- [x] Fixed rider online status sync - added heartbeat endpoint (15s interval) with 60s threshold
+- [x] Added last_heartbeat column to riders table and model
+- [x] Created customer_sessions table for tracking online customers
+- [x] Added customer heartbeat endpoint (POST /api/v1/admin/customer-heartbeat)
+- [x] Added enhanced customers API (GET /api/v1/admin/customers-enhanced) with online status
+- [x] Created useCustomerHeartbeat hook for automatic customer activity tracking
+- [x] Rebuilt AdminCustomers page with online/offline filtering, stats cards, and real-time status
+- 2026-07-19: Added phone country codes management in AdminSettings (comma-separated, saved to backend)
+- 2026-07-19: Updated Checkout phone validation to use admin-configured country codes
+- 2026-07-19: Added image upload for offers in AdminOffers (using storage bucket pattern)
+- 2026-07-19: Created offer-images storage bucket
+- 2026-07-19: Added blog visibility toggle (ON/OFF) in AdminSettings Homepage Content section
+- 2026-07-19: Index.tsx blog section now conditionally renders based on blog_enabled setting
+- 2026-07-19: Made shop location/address more prominent and clearly labeled in AdminSettings
+- 2026-07-19: Updated restaurant_settings DB schema with allowed_country_codes and blog_enabled fields
+- 2026-07-21: CRITICAL BUG FIX - Eliminated fake orders on app open/refresh: verified no auto /api/v1/orders/place calls exist outside explicit Checkout submit
+- 2026-07-21: Backend orders/place hardened: shop-closed check (status + auto schedule), delivery zone validation (haversine), menu/price/tip validation, rate limiting (1 order/10s), deduplication prevention
+- 2026-07-21: Admin status transitions enforced with valid state machine (pending→confirmed→preparing→ready→picked_up→delivered, cancel from any)
+- 2026-07-21: Sales metrics corrected - cancelled orders excluded from total_orders, revenue, and averages
+- 2026-07-21: BUG FIX - Delivery charge disappears on pin move: (1) Frontend validateForm blocks order when delivery charge is 0, (2) Place Order button disabled when delivery charge missing/zero, (3) Backend rejects delivery orders with missing GPS coordinates (now mandatory), (4) Backend validates matched zone has charge > 0, (5) Removed conditional that allowed skipping zone validation when lat/lng was null
+- 2026-07-21: Fixed "My Location" button in Checkout map - separated marker/map ref checks, increased zoom to 15 for clarity, improved toast message, ensures pin always moves back to GPS and delivery charge recalculates immediately
+- 2026-07-21: Location permission UX improvement - friendly deny banner with "Try Again" button, auto-request GPS on delivery selection, loading spinner state, graceful fallback messages for denied/timeout/error cases, manual pin always works
+- 2026-07-21: Frontend Checkout aligned - blocks shop-closed submissions, passes order_type + delivery GPS, prevents duplicate submits
+- 2026-07-21: BUG FIX - "Delivery not available" shown incorrectly within valid distance: Root cause was strict zone boundary matching (min_d <= distance <= max_d) failing when zones had gaps between them. Fixed both backend /calculate endpoint and orders/place validation to use gap-tolerant matching (sorted zones by max_distance, fallback to first zone whose max covers the distance). Now customer at 2.5km with 6km limit correctly gets delivery.
+- 2026-07-16: Database tables created and mock data inserted
+- 2026-07-16: Generated 5 images for restaurant (hero banner, pizza variants, calzone)
+- 2026-07-16: Built all customer-facing pages (Index, Menu, Cart, Checkout, OrderConfirmation, MyOrders, Contact)
+- 2026-07-16: Built admin pages (Login, Dashboard, Orders, Menu, Customers, Settings)
+- 2026-07-16: Created backend custom APIs for admin and order management
+- 2026-07-16: All lint and build checks passing, UI rendering validated (Grade 4)
+- 2026-07-16: Enhanced Sales & Reports page with filters, export, delete/restore
+- 2026-07-16: Kitchen Notification Sound System - persistent alarm for new orders, stops on accept, per-order notification, sound ON/OFF toggle
+- 2026-07-16: Menu Size Management - added sizes_json to DB, admin can add custom sizes (Small/Medium/Large/Family/Custom), customer sees only admin-defined sizes
+- 2026-07-16: Removed notification sound from Admin Panel (sound only in Kitchen)
+- 2026-07-16: Updated Cart page to display actual size names instead of hardcoded Medium/Large
+- 2026-07-16: Added payment method breakdown reports (Cash, Card, Talabat) to Sales page and Dashboard
+- 2026-07-16: Fixed kitchen sound - added "Tap to Activate Sound" prompt for browser autoplay policy, sound activates on PIN login
+- 2026-07-17: Added kitchen printer connection feature - supports Browser Print, Network Printer (IP/WiFi), USB Printer with auto-print option, paper width settings, and test connection
+- 2026-07-17: Added image upload for menu items - admin can upload custom images via Object Storage (menu-images bucket) or paste URL
+- 2026-07-18: Major upgrade - Removed Talabat payment, added car number/color field for pickup identification
+- 2026-07-18: Added restaurant status control (Open/Busy/Closed) on admin dashboard with customer-facing display
+- 2026-07-18: Created Offers & Promotions management page (CRUD) with customer-facing offers carousel on homepage
+- 2026-07-18: Added has_extras toggle per menu item - admin can disable extras/toppings for specific items
+- 2026-07-18: Redesigned homepage with modern branding (Vita in white, Napoli in red), status indicator, offers section
+- 2026-07-18: Added new database tables: offers, notifications; updated menu_items with has_extras, restaurant_settings with status fields
+- 2026-07-18: Added Customer Feedback system - star rating + comments, order selection, admin view with visibility toggle and stats
+- 2026-07-18: Added Delivery option - admin toggle in Settings, delivery address at checkout, configurable delivery charges and estimated time
+- 2026-07-18: Added Promo Code at checkout - validates against active offers in DB, applies discount
+- 2026-07-18: Added Public Customer Reviews page - shows all visible feedback with ratings (no personal data)
+- 2026-07-18: Added GPS Location sharing for delivery - browser geolocation API, saves lat/lng with order
+- 2026-07-18: Added Rider Panel (/rider) - separate login with phone+PIN, view assigned deliveries, update status, navigate to customer via Google Maps
+- 2026-07-18: Added Auto Open/Close scheduling - admin sets daily times, auto-changes status like Talabat
+- 2026-07-18: Added Rider management in Admin Settings - create riders with name/phone/PIN
+- 2026-07-18: Fixed Rider Panel - added auto-refresh (8s), map view with Leaflet showing all active deliveries, Navigate button opens Google Maps
+- 2026-07-18: Fixed Admin Orders - added "Assign Rider" button for delivery orders, auto-refresh reduced to 8s
+- 2026-07-18: Fixed Promo Code - validates against active offers entity (public data, no auth needed)
+- 2026-07-18: Added Map-based delivery location (Leaflet/OpenStreetMap) - customer drags pin, sees delivery zones
+- 2026-07-18: Added Delivery Zone Management - admin sets near/far radius + charges, restaurant in Fujairah UAE
+- 2026-07-18: Fixed Reviews page - public entity query shows all visible feedback to all customers
+- 2026-07-18: Fixed Rider backend API - removed Atoms auth requirement for admin endpoints (uses localStorage PIN auth)
+- 2026-07-18: Fixed delivery option visibility at checkout - AdminSettings now saves delivery settings to backend entity (not just localStorage), Checkout reads from backend entity so all customers see correct delivery/pickup options
+- 2026-07-18: Added "First Order Only" discount feature - toggle in Admin Offers, validation at checkout checks user's previous orders before applying promo
+- 2026-07-18: Fixed Rider Panel not showing orders - changed GET request to pass rider_id as URL query parameter instead of body data
+- 2026-07-18: Full Rider CRUD in Admin Settings - edit (name/phone/PIN), delete permanently, toggle active/inactive with Switch
+- 2026-07-18: Added PUT /api/v1/rider/admin/{rider_id} endpoint for updating rider info
+- 2026-07-18: Changed DELETE /api/v1/rider/admin/{rider_id} to permanently delete rider (not just deactivate)
+- 2026-07-18: Added delivery tracking for customers - MyOrders shows extended delivery status steps (Confirmed→Preparing→Ready→Picked Up→On the Way→Delivered)
+- 2026-07-18: Added Rider contact card - after rider picks up order, customer sees rider name + Call button + WhatsApp button
+- 2026-07-18: Updated /my-orders API to include delivery_status, rider_name, rider_phone from delivery_assignments + riders tables
+- 2026-07-18: Increased MyOrders auto-refresh to 8 seconds for real-time delivery tracking
+- 2026-07-18: FULL AUDIT & FIX - Removed `data: {}` from all GET/DELETE API calls (SDK compatibility fix)
+- 2026-07-18: FULL AUDIT & FIX - Switched Reviews/Feedback pages from SDK entity calls to direct apiCall.invoke for reliability
+- 2026-07-18: FULL AUDIT & FIX - Fixed Feedback page loadOrder to use my-orders API instead of entity get
+- 2026-07-18: FULL AUDIT & FIX - Verified all admin CRUD (menu, offers, riders, orders, settings, feedback) working
+- 2026-07-18: FULL AUDIT & FIX - Verified customer app (homepage, menu, cart, checkout, MyOrders, Reviews, Feedback) all connected
+- 2026-07-18: FULL AUDIT & FIX - Verified Kitchen Panel with auto-refresh and sound notifications
+- 2026-07-18: ROOT CAUSE FIX - SDK passes `data` as query params for GET (not URL params). Changed rider deliveries to use `data: { rider_id }` instead of URL query string
+- 2026-07-18: ROOT CAUSE FIX - Changed all feedbacks API calls to pass query/sort/limit via `data` object (not URL params)
+- 2026-07-18: ROOT CAUSE FIX - Fixed WhatsApp link to always include UAE country code (971) for local numbers starting with 0
+- 2026-07-18: ROOT CAUSE FIX - Fixed isDeliveryOrder to also check order_notes for "Order Type: Delivery" when no delivery_status exists yet
+- 2026-07-18: FEEDBACK FIX - Switched Reviews page from apiCall.invoke to client.entities.feedbacks.query() which works without auth for public entities
+- 2026-07-18: FEEDBACK FIX - Switched Feedback submission from apiCall.invoke POST to client.entities.feedbacks.create() for proper SDK entity creation
+- 2026-07-18: FEEDBACK FIX - Switched MyOrders loadReviewedOrders to client.entities.feedbacks.query() for consistency
+- 2026-07-18: FEEDBACK FIX - Added fallback in Reviews page: tries entity query first, falls back to apiCall.invoke if that fails
+- 2026-07-18: FIX #5 - Rider Panel: Changed GET deliveries to use path parameter `/deliveries/{rider_id}` instead of query param (eliminates SDK data handling issues)
+- 2026-07-18: FIX #5 - Kitchen Panel: Added separate "READY - PICKUP" and "READY - DELIVERY" sections; delivery orders show "Waiting for Rider" instead of "Picked Up" button
+- 2026-07-18: FIX #5 - Kitchen Panel: Added Pickup/Delivery badge to all order cards (New, In Progress sections)
+- 2026-07-18: FIX #5 - Location: Updated all default coordinates to Murbah, Fujairah (25.2747, 56.3450)
+- 2026-07-18: FIX #5 - Contact page: Updated from "Pickup Only" to "Find Us" with Google Maps link
+- 2026-07-18: FIX #6 - Added "Set Shop Location" interactive map in Admin Settings with Leaflet draggable pin + "Use My Current Location" (GPS) button. Location saves to backend and is used everywhere (delivery zone, contact page, customer maps).
+- 2026-07-18: FIX #7 - Improved delivery pin-drop at checkout: fixed map init race condition (delayed init for DOM readiness), added explicit "My Location" GPS button, fixed delivery_enabled detection for string/boolean values from backend entity.
+- 2026-07-18: FIX #8 - Kitchen "Waiting for Rider" vs Rider "No orders" investigation: ROOT CAUSE is Kitchen showed "Waiting for Rider" for ALL ready delivery orders without checking if admin actually assigned a rider. Fixed Kitchen to fetch delivery_assignments and show actual status: "Assigned to: [rider name]" (green) or "No rider assigned yet - assign from Admin Orders" (orange warning). Also improved Rider Panel error feedback.
+- 2026-07-18: MULTI-LANGUAGE (i18n) - Added full multi-language support with English, Arabic, and Urdu translations
+- 2026-07-18: MULTI-LANGUAGE - Language picker modal on first visit, language switcher in header (all customer pages)
+- 2026-07-18: MULTI-LANGUAGE - Full RTL support for Arabic and Urdu (auto dir attribute on html element)
+- 2026-07-18: MULTI-LANGUAGE - Translated all customer UI: Homepage, Menu, Cart, Checkout, MyOrders, Feedback, Reviews, Contact
+- 2026-07-18: MULTI-LANGUAGE - Admin Language Management page (/admin/languages) with enable/disable, set default, RTL info
+- 2026-07-18: MULTI-LANGUAGE - Language preference persisted in localStorage, accessible from Admin Settings
+- 2026-07-18: SEO CONTENT - Generated 5 SEO blog articles for local Google search ranking (pizza Fujairah, Khorfakkan, Murbah, Italian pizza)
+- 2026-07-18: SEO CONTENT - Articles saved to /app/frontend/seo/content/ with full frontmatter metadata for embedding
+- 2026-07-18: SEO CONTENT - Topics: Pizza Delivery Fujairah, Every Occasion, Delivery Problems Solved, Art of Italian Pizza, FAQ
+- 2026-07-19: SEO EMBEDDING - Integrated blog routes into App.tsx (/blog/* route with BlogRoutes component)
+- 2026-07-19: SEO EMBEDDING - Restyled BlogIndexPage, BlogArticleLayout, MarkdownArticle to dark theme (matching app)
+- 2026-07-19: SEO EMBEDDING - Added blog link on homepage ("Blog & Pizza Tips" with native <a href="/blog/">)
+- 2026-07-19: SEO EMBEDDING - All 5 articles prerendered as static HTML for SEO (vite-prerender-plugin)
+- 2026-07-19: SEO EMBEDDING - Meta tags (title, description, keywords, OG, Twitter) auto-injected per article from frontmatter
+- 2026-07-19: SEO EMBEDDING - Sitemap generated at build time via vite-plugin-sitemap
+- 2026-07-19: RIDER LOCATION - Added current_lat, current_lng, location_updated_at columns to riders table
+- 2026-07-19: RIDER LOCATION - Rider Panel sends GPS every 30s via POST /api/v1/rider/location/{rider_id}
+- 2026-07-19: RIDER LOCATION - New GET /api/v1/rider/admin/locations endpoint returns riders with GPS + active delivery count
+- 2026-07-19: RIDER LOCATION - Admin Orders "Assign Rider" shows rider cards with distance to customer, location age, active deliveries count
+- 2026-07-19: RIDER LOCATION - Haversine distance calculation between rider GPS and customer GPS from order notes
+- 2026-07-19: SERVICE FEE - Added service_fee column to orders table, admin toggle ON/OFF + amount in Settings
+- 2026-07-19: SERVICE FEE - Fee applies to every order, shown in Cart and Checkout order summary
+- 2026-07-19: SMALL ORDER FEE - Added small_order_fee column to orders table, admin toggle + amount + threshold in Settings
+- 2026-07-19: SMALL ORDER FEE - Fee auto-applies when subtotal < threshold, disappears when customer adds more items
+- 2026-07-19: SMALL ORDER FEE - Cart shows "Add AED X more to remove this fee" hint to encourage larger orders
+- 2026-07-19: FEE SETTINGS - Added service_fee_enabled, service_fee_amount, small_order_fee_enabled, small_order_fee_amount, small_order_fee_threshold to restaurant_settings
+- 2026-07-19: FEE SETTINGS - Admin Settings saves fee config to backend entity (auto-updates in customer app)
+- 2026-07-19: SALES REPORT - Added "Service Fee Collected" and "Small Order Fee Collected" sections in Admin Sales
+- 2026-07-19: SALES REPORT - Fee totals available for Today, This Week, This Month, This Year, All Time
+- 2026-07-19: SALES REPORT - Backend API returns fee_report with period breakdowns alongside payment breakdown
+- 2026-07-19: DEAL BUILDER - Created deals table with name, price, description, image_url, is_active, categories_json
+- 2026-07-19: DEAL BUILDER - Admin page (/admin/deals) for creating unlimited dynamic deals with category-based item selection
+- 2026-07-19: DEAL BUILDER - Each deal has categories (e.g., "Choose 2 Pizzas", "Choose 1 Drink") with required quantity per category
+- 2026-07-19: DEAL BUILDER - Customer page (/deals) shows active deals, lets customers select items per category and add to cart
+- 2026-07-19: DEAL BUILDER - Cart shows deal items with 🎁 DEAL badge and selected items breakdown per category
+- 2026-07-19: DEAL BUILDER - Public API (/api/v1/deals/public) enriches deals with available menu items per category
+- 2026-07-19: DEAL BUILDER - Admin Dashboard links to Deal Builder, Homepage links to Deals page
+- 2026-07-19: BUG FIX - Admin Deals "not saving" issue: Fixed error handling (e?.data?.detail → e?.response?.data?.detail for axios errors), made loadData response parsing more robust with multiple fallback paths for SDK response structure, added console.error logging for all deal operations to surface real errors
+- 2026-07-19: PAYMENT METHODS - Admin can toggle Cash/Card ON/OFF separately for Pickup and Delivery orders
+- 2026-07-19: PAYMENT METHODS - Customer Checkout dynamically shows only enabled payment methods for their order type
+- 2026-07-19: PAYMENT METHODS - Auto-selects first available method when switching order type, shows warning if none enabled
+- 2026-07-19: SERVICE FEE ORDER TYPE - Admin can choose to apply service fee to Pickup Only, Delivery Only, or Both
+- 2026-07-19: SERVICE FEE ORDER TYPE - Added service_fee_applies_to field to restaurant_settings backend schema
+- 2026-07-19: SERVICE FEE ORDER TYPE - Checkout only charges service fee when order type matches admin setting
+- 2026-07-19: CHECKOUT VALIDATION - Field-level validation with red error text below Name, Phone, Location, Payment fields
+- 2026-07-19: CHECKOUT VALIDATION - Error summary box above Place Order button listing all issues
+- 2026-07-19: CHECKOUT VALIDATION - Auto-scroll to first error field on submit
+- 2026-07-19: CHECKOUT VALIDATION - Real-time error clearing as user fixes each field
+- 2026-07-19: CHECKOUT VALIDATION - Backend API errors shown as specific toast messages (not generic)
+- 2026-07-19: VIDEO SCRIPTS - Created customer-video-script.md (2:30 min guide: login, menu, cart, pickup/delivery, checkout, payment)
+- 2026-07-19: VIDEO SCRIPTS - Created admin-video-script.md (3:00 min guide: orders, accept, pickup flow, delivery flow, rider assign, settings)
+- 2026-07-19: AI VIDEO - Generated admin tutorial video showing dark-themed dashboard, order acceptance, pickup/delivery flows, rider assignment
+- 2026-07-19: ADMIN ENHANCED - Created activity_logs table for tracking all admin actions
+- 2026-07-19: ADMIN ENHANCED - Backend API: DELETE order, activity logs CRUD, feedback reply, staff notes on orders
+- 2026-07-19: ADMIN ENHANCED - Admin can permanently delete orders with confirmation
+- 2026-07-19: ADMIN ENHANCED - Activity Logs page showing all admin actions with filters
+- 2026-07-19: ADMIN ENHANCED - Admin can reply to customer feedback (visible in reviews)
+- 2026-07-19: ADMIN ENHANCED - Staff can add internal notes to orders
+- 2026-07-19: ADMIN ENHANCED - Auto-popular items badge on homepage based on best sellers
+- 2026-07-19: ADMIN ENHANCED - Customer block/unblock feature
+- 2026-07-19: ADMIN ENHANCED - Service fee supports percentage-based option
+- 2026-07-19: TRASH PERMANENT DELETE - Added "Permanent Delete" button per order and "Delete All Permanently" in trash section
+- 2026-07-19: TRASH PERMANENT DELETE - OTP verification dialog (4-digit code shown, must type to confirm) prevents accidental permanent deletion
+- 2026-07-19: TRASH PERMANENT DELETE - Deletes from both localStorage and backend database permanently
+- 2026-07-19: ADMIN ACCOUNTS - Created AdminAccounts page (/admin/accounts) for managing sub-admin accounts
+- 2026-07-19: ADMIN ACCOUNTS - Super Admin can create new admin accounts with username/password/role (Admin or Manager)
+- 2026-07-19: ADMIN ACCOUNTS - Per-account permission toggles: Orders, Menu, Sales, Customers, Settings, Deals, Notifications, Feedback, Accounts
+- 2026-07-19: ADMIN ACCOUNTS - Activate/deactivate accounts, delete accounts, view/hide passwords
+- 2026-07-19: ADMIN ACCOUNTS - Updated AdminLogin to support sub-admin login (checks both super admin and sub-accounts)
+- 2026-07-19: ADMIN ACCOUNTS - Added "Admin Accounts" link in Dashboard navigation
+- 2026-07-19: UAE PHONE VALIDATION - Delivery orders require valid UAE mobile number (+971 5X XXX XXXX or 05X XXX XXXX)
+- 2026-07-19: UAE PHONE VALIDATION - Pickup orders require minimum 9 digits (allows international numbers)
+- 2026-07-19: UAE PHONE VALIDATION - Clear error messages guide customer to correct format
+- 2026-07-19: AUTO-FILL CUSTOMER INFO - Name and phone saved to localStorage after successful order
+- 2026-07-19: AUTO-FILL CUSTOMER INFO - Next order pre-fills name and phone fields automatically
+- 2026-07-19: AUTO-FILL CUSTOMER INFO - Customer can easily edit/change pre-filled info
+- 2026-07-20: SERVICE FEE PERCENTAGE - Added fee type selector (Fixed Amount vs Percentage) in AdminSettings
+- 2026-07-20: SERVICE FEE PERCENTAGE - Checkout calculates fee as % of subtotal when type is 'percentage'
+- 2026-07-20: SERVICE FEE PERCENTAGE - Order summary shows percentage label (e.g. "Service Fee (5%)")
+- 2026-07-20: OFFER IMAGE UPLOAD - offer-images storage bucket created for image uploads
+- 2026-07-20: OFFER IMAGE UPLOAD - AdminOffers already has full upload UI (file picker + URL paste + preview + remove)
+- 2026-07-20: PROMO USAGE LIMIT - Added usage_limit_per_customer field to Offer interface and AdminOffers form
+- 2026-07-20: PROMO USAGE LIMIT - Checkout validates promo usage count by checking order_notes in previous orders
+- 2026-07-20: PROMO USAGE LIMIT - Admin can set per-customer usage limit (0 = unlimited, default 1)
+- 2026-07-20: SERVICE FEE HIDDEN % - Customer checkout now shows only "Service Fee: AED X.XX" without showing percentage
+- 2026-07-20: DEAL IMAGE UPLOAD - Added full image upload UI to Deal Builder (upload file or paste URL, preview, remove)
+- 2026-07-20: DEAL IMAGE UPLOAD - Uses same offer-images storage bucket, deals/ subfolder
+- 2026-07-20: POPULAR ITEMS AUTO+MANUAL - Auto-calculates popular items from order history (most ordered items)
+- 2026-07-20: POPULAR ITEMS AUTO+MANUAL - Admin can manually mark items as Popular (⭐ toggle in Menu item editor)
+- 2026-07-20: POPULAR ITEMS AUTO+MANUAL - Admin Settings: toggle Auto ON/OFF, Manual ON/OFF, max items shown (2-12)
+- 2026-07-20: POPULAR ITEMS AUTO+MANUAL - Homepage combines manual picks + auto-calculated, fills remaining with menu items
+- 2026-07-20: HOMEPAGE FULL CONTROL - Admin can show/hide every section: Status Banner, Offers, Quick Actions, Popular Items, Reviews, Blog, Restaurant Info, Bottom Nav
+- 2026-07-20: HOMEPAGE FULL CONTROL - All toggles saved to backend entity (accessible to customer app immediately)
+- 2026-07-20: HOMEPAGE FULL CONTROL - Customer homepage reads section visibility from settings and conditionally renders each section
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - Service Worker (rider-sw.js) polls for new deliveries every 10s in background
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - Push notification with sound/vibration when new order assigned (works when app minimized/closed)
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - Notification permission request on first login, toggle ON/OFF in rider header
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - In-app notification sound (oscillator beep) + toast when new order arrives while app is open
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - Clicking notification focuses/opens rider panel, notification shows order details
+- 2026-07-20: RIDER PUSH NOTIFICATIONS - Status banner prompts rider to enable notifications if not yet granted
+- 2026-07-20: CART NO SERVICE FEE - Removed service fee and small order fee from Cart page (shows items + subtotal only)
+- 2026-07-20: CART NO SERVICE FEE - Cart now shows "Service fee & other charges will be shown at checkout" note
+- 2026-07-20: CART NO SERVICE FEE - All fees (service fee, small order fee) appear ONLY on final Checkout/Place Order page
+- 2026-07-20: CHECKOUT FLOW CONTROL - Admin can choose "Two-Step" (Cart → Checkout) or "Direct" (Cart + Checkout together)
+- 2026-07-20: CHECKOUT FLOW CONTROL - Two-Step: customer sees cart items, clicks Proceed to Checkout, then fills details
+- 2026-07-20: CHECKOUT FLOW CONTROL - Direct: customer sees items + checkout form on same page (name, phone, location, Place Order)
+- 2026-07-20: CHECKOUT FLOW CONTROL - Setting saved to backend entity, accessible to customer app immediately
+- 2026-07-20: RIDER DASHBOARD - Individual rider dashboard with stats (today/week/month deliveries, earnings, cash/card breakdown, pending/completed)
+- 2026-07-20: RIDER DASHBOARD - Tab switcher in Rider Panel: "My Orders" (existing) and "Dashboard" (new stats view)
+- 2026-07-20: RIDER DASHBOARD - Backend GET /api/v1/rider/stats/{rider_id} calculates time-based delivery counts and earnings
+- 2026-07-20: ADMIN RIDER MANAGEMENT - New dedicated page (/admin/riders) with full rider reports and controls
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Summary cards: total riders, online count, total deliveries, total earnings
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Per-rider stats: total orders, earnings, cash collected, pending orders, online status, last location
+- 2026-07-20: ADMIN RIDER MANAGEMENT - CRUD: add/edit/delete riders, toggle active/inactive, edit name/phone/PIN
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Time limit control: configurable rider working time limit (15min-2hr)
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Cash collection summary: total cash collected by all riders, card order counts
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Backend GET /api/v1/rider/admin/reports returns comprehensive rider analytics
+- 2026-07-20: ADMIN RIDER MANAGEMENT - Backend POST /api/v1/rider/admin/reassign allows reassigning orders between riders
+- 2026-07-20: CUSTOMER LIVE TRACKING - New page (/track/:orderId) with real-time GPS tracking on Leaflet map
+- 2026-07-20: CUSTOMER LIVE TRACKING - Shows rider location on map with custom marker, auto-refreshes every 10s
+- 2026-07-20: CUSTOMER LIVE TRACKING - ETA calculation: distance-based (Haversine) + status-based fallback
+- 2026-07-20: CUSTOMER LIVE TRACKING - Delivery progress stepper (Assigned → Picked Up → On the Way → Delivered)
+- 2026-07-20: CUSTOMER LIVE TRACKING - Rider contact card with call button, ETA display
+- 2026-07-20: CUSTOMER LIVE TRACKING - Backend GET /api/v1/rider/delivery-eta/{order_id} returns status, ETA, rider GPS
+- 2026-07-20: CUSTOMER LIVE TRACKING - "Track Live on Map" button added to MyOrders for active delivery orders
+- 2026-07-20: ADMIN DASHBOARD - Added "Rider Management" link with Bike icon in admin navigation
+- 2026-07-20: DATA RESET - Added POST /api/v1/admin/reset-data endpoint to clear all test data (orders, deliveries, sessions, logs, feedback, notifications)
+- 2026-07-20: DATA RESET - Added "Danger Zone - Reset All Data" section in Admin Settings with double-confirmation dialog
+- 2026-07-20: DATA RESET - Keeps menu items, categories, extras, settings, riders, deals, and offers intact
+- 2026-07-20: FULL APP REVIEW - All backend routers import successfully (17 model files, all router modules compile)
+- 2026-07-20: FULL APP REVIEW - Frontend lint passes with zero errors
+- 2026-07-20: FULL APP REVIEW - Frontend build succeeds (7 pages prerendered, all routes valid)
+- 2026-07-20: FULL APP REVIEW - All customer pages verified: Index, Menu, Cart, Checkout, OrderConfirmation, MyOrders, Contact, Deals, Feedback, Reviews, DeliveryTracking
+- 2026-07-20: FULL APP REVIEW - All admin pages verified: Login, Dashboard, Orders, Menu, Customers, Settings, Sales, Offers, Feedback, Kitchen, Languages, Deals, Notifications, ActivityLogs, Accounts, Riders
+- 2026-07-20: FULL APP REVIEW - Rider Panel verified with heartbeat, dashboard stats, push notifications
+- 2026-07-20: FULL APP REVIEW - Customer heartbeat hook active for online status tracking
+- 2026-07-20: FULL APP REVIEW - UI rendering validated (Grade 2 - passes)
+- 2026-07-20: BUG FIX - Customer registration not showing in admin: Added missing user_id column to customer_sessions table (was causing heartbeat to fail silently)
+- 2026-07-20: BUG FIX - Updated customer_sessions model to include user_id field with unique index
+- 2026-07-20: BUG FIX - Improved useCustomerHeartbeat hook to fire immediately on mount (no 2s delay) for faster registration
+- 2026-07-20: SELECTIVE RESET - Replaced single "Reset All" with individual reset buttons in Admin Settings
+- 2026-07-20: SELECTIVE RESET - Options: Reset Orders, Sales/Revenue, Menu, Customers, Rider History, Feedback, Activity Logs, Notifications, ALL
+- 2026-07-20: SELECTIVE RESET - Each option has its own icon, description, and confirmation dialog
+- 2026-07-20: SELECTIVE RESET - "Reset ALL" has double-confirmation (extra danger styling)
+- 2026-07-20: SELECTIVE RESET - Backend POST /api/v1/admin/reset-selective endpoint handles all reset types
+- 2026-07-20: DATA CLEAR - Cleared ALL test orders (Ahmad Al Rashid etc.) from database - 0 orders remaining
+- 2026-07-20: DATA CLEAR - Cleared all customer sessions, activity logs, feedback, notifications
+- 2026-07-20: GUEST TRACKING - Added POST /api/v1/admin/guest-heartbeat endpoint (NO auth required)
+- 2026-07-20: GUEST TRACKING - Every visitor (guest or registered) now tracked via browser session ID
+- 2026-07-20: GUEST TRACKING - useCustomerHeartbeat hook sends guest heartbeat immediately on app open
+- 2026-07-20: GUEST TRACKING - If user is also logged in, sends authenticated heartbeat too (full details)
+- 2026-07-20: GUEST TRACKING - AdminCustomers shows Guest/Registered badge for each visitor
+- 2026-07-20: GUEST TRACKING - Removed unique constraint on user_id in customer_sessions table
+- 2026-07-20: PERFORMANCE FIX - Lazy loading: All 30+ pages now code-split (loaded on demand, not all at once)
+- 2026-07-20: PERFORMANCE FIX - localStorage caching: Homepage and Menu show cached data instantly, refresh in background
+- 2026-07-20: PERFORMANCE FIX - Deferred heartbeat: Customer tracking delayed 5 seconds (doesn't block page render)
+- 2026-07-20: PERFORMANCE FIX - Reduced heartbeat frequency: 60s intervals instead of 30s
+- 2026-07-20: PERFORMANCE FIX - Deferred notifications: NotificationBanner loads 3 seconds after page render
+- 2026-07-20: PERFORMANCE FIX - React Query optimization: 60s staleTime, no refetch on window focus, single retry
+- 2026-07-20: PERFORMANCE FIX - Image lazy loading: All menu/item images use loading="lazy" attribute
+- 2026-07-20: PERFORMANCE FIX - No more refresh needed: Cache-first strategy shows content immediately on first open
+
+## Current Task Breakdown (Bug Fixes + Features)
+- [x] PERFORMANCE FIX: App loading speed optimization
+- [x] ADMIN PERMISSIONS: Role-based access control for sub-admins (nav items filtered by permissions)
+- [x] POPULAR ITEMS VISUAL: New "⭐ Popular" tab in Menu with image grid + toggle
+- [x] RIDER CUSTOM TIME: Custom time input for working time limit (not just presets)
+- [x] BUG 1: Fix duplicate/ghost orders in Kitchen (polling race condition)
+- [x] BUG 2: Fix reset not persisting (clear localStorage on reset)
+- [x] BUG 3: Fix admin cancel order with reason selection
+- [x] FEATURE 1: Rider delivery charges (separate from order total) - already implemented in model + admin UI
+- [x] FEATURE 2: Popular items admin control + customer "Order Again" - Order Again button added to MyOrders past orders
+- [x] FEATURE 3: Rider custom shift time (admin configurable) - already implemented in model + admin UI
+- [x] FEATURE 4: Rider live location map for admin
+- [x] CUSTOMER TIP FEATURE: Tip input at checkout (preset amounts + custom), tip_type (rider/shop), displayed in order summary
+- [x] FAKE ORDERS FIX: Menu item validation, price manipulation detection, rate limiting (5 orders/5min), duplicate prevention (60s window)
+- [x] TIPS IN RIDER EARNINGS: Rider Panel dashboard shows tips earned (today/week/month), per-delivery tip display
+- [x] ADMIN TIPS REPORT: GET /api/v1/admin/tips-report with rider/shop/total breakdown by period + per-rider breakdown

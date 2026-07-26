@@ -1,0 +1,35 @@
+{
+    "title": "notifications",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "title": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "message": {
+            "type": "string"
+        },
+        "type": {
+            "type": "string",
+            "maxLength": 50,
+            "default": "general"
+        },
+        "target": {
+            "type": "string",
+            "maxLength": 50,
+            "default": "all"
+        },
+        "is_read": {
+            "type": "boolean",
+            "default": false
+        }
+    },
+    "required": [
+        "id",
+        "title",
+        "message"
+    ]
+}

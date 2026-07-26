@@ -1,0 +1,44 @@
+{
+  "status": "success",
+  "results": [
+    {
+      "status": "success",
+      "filename": "hero-banner-italian-pizza.jpg",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jeacai2a/hero-banner-italian-pizza.png",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jeacai2a/hero-banner-italian-pizza.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jeacai2a/hero-banner-italian-pizza.png"
+    },
+    {
+      "status": "success",
+      "filename": "pizza-margherita.jpg",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jqycaiya/pizza-margherita.png",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jqycaiya/pizza-margherita.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jqycaiya/pizza-margherita.png"
+    },
+    {
+      "status": "success",
+      "filename": "pizza-pepperoni.jpg",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5j7qcaiza/pizza-pepperoni.png",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5j7qcaiza/pizza-pepperoni.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5j7qcaiza/pizza-pepperoni.png"
+    },
+    {
+      "status": "success",
+      "filename": "pizza-truffle.jpg",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kmicai2q/pizza-truffle.png",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kmicai2q/pizza-truffle.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kmicai2q/pizza-truffle.png"
+    },
+    {
+      "status": "success",
+      "filename": "calzone-chicken.jpg",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kzacai2a/calzone-chicken.png",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kzacai2a/calzone-chicken.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kzacai2a/calzone-chicken.png"
+    }
+  ],
+  "success_count": 5,
+  "failed_count": 0,
+  "running_count": 0,
+  "message": "Generated 5/5 images total"
+}

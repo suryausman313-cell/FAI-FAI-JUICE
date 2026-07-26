@@ -1,0 +1,245 @@
+Build a complete professional mobile restaurant app and admin dashboard for Vita Napoli.
+
+Restaurant App
+
+Restaurant Name:
+Vita Napoli
+
+Logo:
+Use the uploaded Vita Napoli logo as:
+
+- App logo
+- Splash screen logo
+- Navbar logo
+
+Design Theme
+
+- Modern Italian restaurant style
+- Premium clean design
+- Colors:
+  - Black
+  - White
+  - Red
+  - Green
+
+Restaurant Information
+
+Phone: +971 54 294 0112
+Address: Murbah, Fujairah, UAE
+Opening Hours: Daily 3:00 PM – 2:00 AM
+
+Ordering System
+
+Order Type:
+
+- Pickup Only
+- Completely disable delivery
+- Never ask for delivery address
+- Customer can only choose pickup
+
+Homepage
+
+Create:
+
+- Italian pizza hero banner
+- Text:
+  "Authentic Italian Pizza & Pasta"
+- Button:
+  "Order for Pickup"
+- Show:
+  - Opening hours
+  - Phone number
+  - Restaurant location
+
+Customer App Navigation
+
+- Home
+- Menu
+- Cart
+- My Orders
+- Contact Us
+
+Menu Categories
+
+- Offers
+- Pizza
+- Pasta
+- Risotto
+- Calzone
+- Appetizers
+- Panozzo
+- Drinks
+
+Pizza Menu
+
+Margherita:
+Medium AED 25
+Large AED 45
+
+Pepperoni:
+Medium AED 28
+Large AED 48
+
+Truffle:
+Medium AED 32
+Large AED 55
+
+Alfredo Chicken:
+Medium AED 28
+Large AED 48
+
+Chicken Mushroom:
+Medium AED 28
+Large AED 48
+
+Quattro Formaggi:
+Medium AED 28
+Large AED 48
+
+Vegetarian:
+Medium AED 28
+Large AED 48
+
+Meat Pizza:
+Medium AED 28
+Large AED 48
+
+Calzone
+
+Chicken Calzone:
+Medium AED 32
+Large AED 45
+
+Extras
+
+Extra Mozzarella Cheese AED 8
+Extra Pepperoni AED 8
+Extra Chicken AED 8
+Extra Mushrooms AED 5
+Extra Black Olives AED 5
+Extra Jalapeños AED 5
+
+System must automatically calculate total price when:
+
+- Size changes
+- Extras are added or removed
+
+Checkout
+
+Customer fields:
+
+- Name
+- Mobile Number
+- Pickup Time
+- Order Notes
+
+Payment:
+
+- Cash on Pickup
+- Card on Pickup
+
+Order Confirmation Message
+
+"Thank you! Your order has been received. Please collect your order from Vita Napoli at your selected pickup time."
+
+---
+
+Admin Dashboard
+
+Create a secure admin dashboard for Vita Napoli.
+
+Admin Login
+
+- Secure username and password
+- Only authorized admin can access
+
+Order Management
+
+Admin can:
+
+- View all orders
+- Accept orders
+- Reject orders
+- Update order status
+- Print receipts
+- View order details
+
+Order statuses:
+
+- New Order
+- Accepted
+- Preparing
+- Ready for Pickup
+- Completed
+- Cancelled
+
+Sales Reports
+
+Dashboard should show:
+
+- Daily sales
+- Weekly sales
+- Monthly sales
+- Total orders
+- Best selling items
+
+Menu Management
+
+Admin can:
+
+- Add categories
+- Add new menu items
+- Edit item names
+- Edit descriptions
+- Change prices anytime
+- Upload/remove item images
+- Delete items
+- Enable/disable items (Out of Stock)
+- Change Medium/Large prices
+- Change extra topping prices
+- Create discount offers
+- Rearrange menu categories with drag and drop
+
+Restaurant Settings
+
+Admin can change:
+
+- Restaurant name
+- Logo
+- Phone number
+- Address
+- Opening hours
+- Pickup settings
+
+Customer Management
+
+Admin can:
+
+- View customer list
+- View customer order history
+- Search customers by phone number
+
+Real-Time Sync
+
+Customer app and admin dashboard must work in real time.
+
+Any changes made by admin:
+
+- Menu changes
+- Price changes
+- Offers
+- Logo changes
+- Phone/address changes
+
+must appear instantly in customer app without requiring app republishing.
+
+Final Requirement
+
+Create a complete production-ready mobile restaurant application with:
+
+- Customer ordering app
+- Admin dashboard
+- Real-time database
+- Receipt printing support
+- Premium Italian restaurant design
+- Ready for publishing.

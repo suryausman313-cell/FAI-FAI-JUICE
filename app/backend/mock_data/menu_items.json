@@ -1,0 +1,83 @@
+[
+    {
+        "category_id": 2,
+        "name": "Margherita",
+        "description": "Classic Italian pizza with fresh mozzarella and basil",
+        "price_medium": 25,
+        "price_large": 45,
+        "is_active": true,
+        "sort_order": 1
+    },
+    {
+        "category_id": 2,
+        "name": "Pepperoni",
+        "description": "Loaded with premium pepperoni slices",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 2
+    },
+    {
+        "category_id": 2,
+        "name": "Truffle",
+        "description": "Luxurious truffle oil with mushrooms and mozzarella",
+        "price_medium": 32,
+        "price_large": 55,
+        "is_active": true,
+        "sort_order": 3
+    },
+    {
+        "category_id": 2,
+        "name": "Alfredo Chicken",
+        "description": "Creamy alfredo sauce with grilled chicken",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 4
+    },
+    {
+        "category_id": 2,
+        "name": "Chicken Mushroom",
+        "description": "Tender chicken with sautéed mushrooms",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 5
+    },
+    {
+        "category_id": 2,
+        "name": "Quattro Formaggi",
+        "description": "Four cheese blend - mozzarella, gorgonzola, parmesan, fontina",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 6
+    },
+    {
+        "category_id": 2,
+        "name": "Vegetarian",
+        "description": "Fresh seasonal vegetables with mozzarella",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 7
+    },
+    {
+        "category_id": 2,
+        "name": "Meat Pizza",
+        "description": "Premium meat lovers with pepperoni, sausage, and beef",
+        "price_medium": 28,
+        "price_large": 48,
+        "is_active": true,
+        "sort_order": 8
+    },
+    {
+        "category_id": 5,
+        "name": "Chicken Calzone",
+        "description": "Folded pizza stuffed with chicken, cheese and vegetables",
+        "price_medium": 32,
+        "price_large": 45,
+        "is_active": true,
+        "sort_order": 1
+    }
+]

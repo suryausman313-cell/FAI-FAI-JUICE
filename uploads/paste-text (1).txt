@@ -1,0 +1,159 @@
+Update my Vita Napoli Pizza App and make it 100% professional, modern, fast, secure and fully functional.
+
+Remove Talabat completely. Keep only Cash and Card payment methods.
+
+CUSTOMER APP
+
+- Show the official Vita Napoli Pizza logo as a splash screen before opening the app.
+- First-time customers must sign up using only their mobile number.
+- OTP verification is mandatory.
+- After OTP verification, ask the customer to create a 4-digit PIN.
+- Save the customer account securely on the device.
+- After the first login, the customer should open the app using only the 4-digit PIN.
+- Do not ask for the mobile number again unless the customer resets the PIN.
+- Add a "Forgot PIN" option.
+- Reset the PIN only after Mobile Number + OTP verification.
+- One mobile number can create only one account.
+- Prevent fake account creation.
+- Lock the app for 5 minutes after multiple incorrect PIN attempts.
+
+HOME PAGE
+
+- Remove the oven image completely.
+- Replace it with the official Vita Napoli Pizza branding.
+- Show the restaurant logo.
+- Display "Vita" in large bold black text.
+- Display "Napoli" in large bold red text.
+- Keep the design premium, clean and modern.
+- Show only Menu, My Orders and Profile.
+- Do not show Admin buttons, Remix, Reports or Settings to customers.
+- Display large food images with prices.
+- Show Out of Stock when an item is unavailable.
+- Display current offers and promotions.
+- Display restaurant opening hours.
+- Display restaurant contact number.
+- Display the current restaurant status (Open, Busy or Closed).
+
+ORDER
+
+- During checkout ask for:
+  - Customer Name
+  - Mobile Number (first time only)
+  - Car Number (optional)
+  - Kitchen Notes (optional)
+- Customer can cancel the order only before the Kitchen accepts it.
+- Once the order status changes to "Preparing", the Cancel button must disappear.
+- Show live order status:
+  Pending → Accepted → Preparing → Ready → Completed.
+- Send a push notification when the order is Ready.
+
+MENU
+
+- Do not show Extra Toppings on every menu item.
+- Admin decides which items have Extra Toppings.
+- Pizza sizes must have separate prices.
+- Replace Image URL with Direct Image Upload.
+- Allow image crop after upload.
+- Allow Admin to mark items as Available or Out of Stock.
+
+ADMIN PANEL
+
+- Admin must have full control.
+- Add, Edit and Delete:
+  - Menu
+  - Categories
+  - Pizza Sizes
+  - Extra Toppings
+  - Prices
+  - Images
+  - Customers
+  - Orders
+  - Discounts
+  - Offers
+  - Promo Codes
+  - Settings
+- Upload logo, banners and promotional images.
+- Change app name, phone number, address and opening hours.
+- Enable or disable Extra Toppings for each item.
+- Upload images directly without using Image URL.
+- Block or unblock customers.
+- View Daily, Weekly, Monthly and Yearly Sales.
+- View Top Selling Items.
+- View Order History.
+- View Customer Statistics.
+- Every button and every page must be fully functional.
+
+OFFERS & PROMOTIONS
+
+- Banner Text, Offer Text, Promo Code and Discount must save correctly in the database.
+- After clicking Save, all changes must immediately appear on the customer home page.
+- Save button must always work correctly.
+
+NOTIFICATIONS
+
+- When the Admin creates a new Offer, Discount or Promo Code, automatically send a Push Notification to all registered customers.
+- If SMS service is configured, also send an SMS notification.
+- When the customer taps the notification, open the Offers page.
+- Customers can enable or disable notifications.
+- Admin can send promotional notifications to all customers or selected customers.
+- Save notification history in the Admin Panel.
+
+RESTAURANT STATUS
+
+- Admin can change the restaurant status anytime.
+- Status options:
+  - Open
+  - Busy
+  - Closed
+
+OPEN
+- Customers can place orders normally.
+
+BUSY
+- Show:
+  "We are currently very busy. Your order may take longer than usual."
+- Customers can still place orders.
+- Show estimated waiting time.
+
+CLOSED
+- Show:
+  "Sorry, Vita Napoli Pizza is currently closed."
+- Disable Order and Checkout buttons.
+- Customers can browse the menu but cannot place orders.
+
+- Display the restaurant status clearly on the customer home page.
+- Admin can schedule automatic opening and closing times.
+- Kitchen staff can change the restaurant status to Busy.
+- Send a Push Notification whenever the restaurant status changes.
+
+KITCHEN PANEL
+
+- Show live incoming orders.
+- Add Kitchen Printer support.
+- Automatically print Kitchen Order Tickets.
+- Play a notification sound for every new order.
+- Kitchen staff can update order status.
+- Kitchen staff can change restaurant status (Open, Busy, Closed).
+
+APP BRANDING
+
+- Show the Vita Napoli Pizza logo on the Splash Screen, Login Screen, Home Page, Order Receipt and App Header.
+- Remove the oven image completely.
+- Use the official Vita Napoli branding.
+- "Vita" should be large, bold and black.
+- "Napoli" should be large, bold and red.
+- Admin should be able to change the logo from the Admin Panel without coding.
+
+GENERAL
+
+- Store everything in the database.
+- No dummy buttons.
+- No placeholder pages.
+- No Remix button visible to customers.
+- Customers must never see Admin features.
+- Fast loading.
+- Mobile, Tablet and Desktop responsive.
+- Premium modern UI.
+- Fix all existing bugs.
+- Make every feature work perfectly without errors.
+- All Admin changes must save instantly and appear immediately in the Customer App.

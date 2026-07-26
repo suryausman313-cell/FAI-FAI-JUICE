@@ -1,0 +1,57 @@
+[
+    {
+        "customer_name": "Ahmed Al Rashid",
+        "customer_phone": "+971 50 123 4567",
+        "pickup_time": "18:30",
+        "order_notes": "Extra napkins please",
+        "payment_method": "Cash on Pickup",
+        "status": "new",
+        "total_amount": 85.0,
+        "items_json": "[{\"name\":\"Margherita Pizza\",\"size\":\"large\",\"quantity\":2,\"extras\":[\"Extra Cheese\"],\"price\":45.00},{\"name\":\"Pepperoni Pizza\",\"size\":\"medium\",\"quantity\":1,\"extras\":[],\"price\":40.00}]",
+        "user_id": "1436013"
+    },
+    {
+        "customer_name": "Fatima Hassan",
+        "customer_phone": "+971 55 987 6543",
+        "pickup_time": "19:00",
+        "order_notes": "",
+        "payment_method": "Card on Pickup",
+        "status": "preparing",
+        "total_amount": 120.5,
+        "items_json": "[{\"name\":\"Quattro Formaggi\",\"size\":\"large\",\"quantity\":1,\"extras\":[\"Truffle Oil\"],\"price\":55.00},{\"name\":\"Calzone\",\"size\":\"large\",\"quantity\":1,\"extras\":[\"Mushrooms\",\"Olives\"],\"price\":65.50}]",
+        "user_id": "1436013"
+    },
+    {
+        "customer_name": "Mohammed Khalid",
+        "customer_phone": "+971 52 555 1234",
+        "pickup_time": "20:15",
+        "order_notes": "No onions on the pizza",
+        "payment_method": "Cash on Pickup",
+        "status": "new",
+        "total_amount": 55.0,
+        "items_json": "[{\"name\":\"Diavola Pizza\",\"size\":\"large\",\"quantity\":1,\"extras\":[\"Jalapeños\"],\"price\":55.00}]",
+        "user_id": "1436013"
+    },
+    {
+        "customer_name": "Sara Al Maktoum",
+        "customer_phone": "+971 56 777 8899",
+        "pickup_time": "17:45",
+        "order_notes": "",
+        "payment_method": "Card on Pickup",
+        "status": "ready",
+        "total_amount": 95.0,
+        "items_json": "[{\"name\":\"Margherita Pizza\",\"size\":\"medium\",\"quantity\":1,\"extras\":[],\"price\":35.00},{\"name\":\"Pepperoni Pizza\",\"size\":\"large\",\"quantity\":1,\"extras\":[\"Extra Cheese\",\"Mushrooms\"],\"price\":60.00}]",
+        "user_id": "1436013"
+    },
+    {
+        "customer_name": "Omar Bin Zayed",
+        "customer_phone": "+971 54 333 2211",
+        "pickup_time": "21:00",
+        "order_notes": "Call when ready",
+        "payment_method": "Cash on Pickup",
+        "status": "completed",
+        "total_amount": 150.0,
+        "items_json": "[{\"name\":\"Quattro Formaggi\",\"size\":\"large\",\"quantity\":2,\"extras\":[\"Truffle Oil\"],\"price\":110.00},{\"name\":\"Calzone\",\"size\":\"medium\",\"quantity\":1,\"extras\":[],\"price\":40.00}]",
+        "user_id": "1436013"
+    }
+]

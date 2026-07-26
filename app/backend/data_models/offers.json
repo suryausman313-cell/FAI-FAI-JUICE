@@ -1,0 +1,48 @@
+{
+    "title": "offers",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "title": {
+            "type": "string"
+        },
+        "description": {
+            "type": "string"
+        },
+        "discount_percent": {
+            "type": "number",
+            "default": 0
+        },
+        "promo_code": {
+            "type": "string",
+            "default": ""
+        },
+        "banner_image_url": {
+            "type": "string",
+            "default": ""
+        },
+        "is_active": {
+            "type": "boolean",
+            "default": true
+        },
+        "start_date": {
+            "type": "string"
+        },
+        "end_date": {
+            "type": "string"
+        },
+        "first_order_only": {
+            "type": "boolean",
+            "default": false
+        },
+        "usage_limit_per_customer": {
+            "type": "integer",
+            "default": 1
+        }
+    },
+    "required": [
+        "title"
+    ]
+}

@@ -1,0 +1,50 @@
+{
+    "title": "deals",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "name": {
+            "type": "string",
+            "description": "Deal name"
+        },
+        "price": {
+            "type": "number",
+            "description": "Deal price in AED"
+        },
+        "image_url": {
+            "type": "string",
+            "description": "Optional image URL"
+        },
+        "description": {
+            "type": "string",
+            "description": "Optional description"
+        },
+        "is_active": {
+            "type": "boolean",
+            "description": "Whether deal is visible to customers",
+            "default": true
+        },
+        "categories_json": {
+            "type": "string",
+            "description": "JSON array of deal categories"
+        },
+        "discount_type": {
+            "type": "string",
+            "description": "Discount type: none, percentage, flat",
+            "default": "none"
+        },
+        "discount_value": {
+            "type": "number",
+            "description": "Discount value (percent or flat AED amount)",
+            "default": 0
+        }
+    },
+    "required": [
+        "name",
+        "price",
+        "categories_json"
+    ]
+}

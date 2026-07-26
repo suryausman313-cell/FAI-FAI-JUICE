@@ -1,0 +1,32 @@
+{
+    "title": "feedbacks",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "order_id": {
+            "type": "integer"
+        },
+        "customer_name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "rating": {
+            "type": "integer",
+            "default": 5
+        },
+        "comment": {
+            "type": "string"
+        },
+        "is_visible": {
+            "type": "boolean",
+            "default": true
+        }
+    },
+    "required": [
+        "id",
+        "customer_name",
+        "rating"
+    ]
+}

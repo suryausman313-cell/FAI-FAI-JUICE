@@ -1,0 +1,41 @@
+{
+    "title": "delivery_assignments",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "order_id": {
+            "type": "integer"
+        },
+        "rider_id": {
+            "type": "integer"
+        },
+        "status": {
+            "type": "string",
+            "maxLength": 50,
+            "default": "assigned"
+        },
+        "customer_lat": {
+            "type": "number"
+        },
+        "customer_lng": {
+            "type": "number"
+        },
+        "customer_address": {
+            "type": "string"
+        },
+        "customer_name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "customer_phone": {
+            "type": "string",
+            "maxLength": 50
+        }
+    },
+    "required": [
+        "order_id",
+        "rider_id"
+    ]
+}

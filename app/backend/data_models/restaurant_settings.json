@@ -1,0 +1,127 @@
+{
+    "title": "restaurant_settings",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "restaurant_name": {
+            "type": "string"
+        },
+        "phone": {
+            "type": "string"
+        },
+        "address": {
+            "type": "string"
+        },
+        "opening_hours": {
+            "type": "string"
+        },
+        "logo_url": {
+            "type": "string"
+        },
+        "restaurant_status": {
+            "type": "string"
+        },
+        "busy_message": {
+            "type": "string"
+        },
+        "estimated_wait_time": {
+            "type": "string"
+        },
+        "delivery_enabled": {
+            "type": "boolean"
+        },
+        "delivery_charges": {
+            "type": "string"
+        },
+        "estimated_delivery_time": {
+            "type": "string"
+        },
+        "restaurant_lat": {
+            "type": "string"
+        },
+        "restaurant_lng": {
+            "type": "string"
+        },
+        "near_radius": {
+            "type": "string"
+        },
+        "far_radius": {
+            "type": "string"
+        },
+        "near_charge": {
+            "type": "string"
+        },
+        "far_charge": {
+            "type": "string"
+        },
+        "auto_schedule_enabled": {
+            "type": "boolean"
+        },
+        "auto_open_time": {
+            "type": "string"
+        },
+        "auto_close_time": {
+            "type": "string"
+        },
+        "service_fee_enabled": {
+            "type": "boolean"
+        },
+        "service_fee_amount": {
+            "type": "number"
+        },
+        "service_fee_type": {
+            "type": "string"
+        },
+        "small_order_fee_enabled": {
+            "type": "boolean"
+        },
+        "small_order_fee_amount": {
+            "type": "number"
+        },
+        "small_order_fee_threshold": {
+            "type": "number"
+        },
+        "service_fee_applies_to": {
+            "type": "string"
+        },
+        "cash_enabled_pickup": {
+            "type": "boolean"
+        },
+        "card_enabled_pickup": {
+            "type": "boolean"
+        },
+        "cash_enabled_delivery": {
+            "type": "boolean"
+        },
+        "card_enabled_delivery": {
+            "type": "boolean"
+        },
+        "allowed_country_codes": {
+            "type": "string"
+        },
+        "blog_enabled": {
+            "type": "boolean"
+        },
+        "allow_cancel_preparing": {
+            "type": "boolean"
+        },
+        "allow_cancel_ready": {
+            "type": "boolean"
+        },
+        "allow_modify_preparing": {
+            "type": "boolean"
+        },
+        "order_accept_timeout_minutes": {
+            "type": "integer"
+        },
+        "order_expire_timeout_minutes": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "id",
+        "restaurant_name"
+    ]
+}

@@ -1,0 +1,50 @@
+from core.database import Base
+from datetime import datetime
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+
+
+class Restaurant_settings(Base):
+    __tablename__ = "restaurant_settings"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True, nullable=False)
+    restaurant_name = Column(String, nullable=False)
+    phone = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    opening_hours = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)
+    restaurant_status = Column(String, nullable=True)
+    busy_message = Column(String, nullable=True)
+    estimated_wait_time = Column(String, nullable=True)
+    delivery_enabled = Column(Boolean, nullable=True)
+    delivery_charges = Column(String, nullable=True)
+    estimated_delivery_time = Column(String, nullable=True)
+    restaurant_lat = Column(String, nullable=True)
+    restaurant_lng = Column(String, nullable=True)
+    near_radius = Column(String, nullable=True)
+    far_radius = Column(String, nullable=True)
+    near_charge = Column(String, nullable=True)
+    far_charge = Column(String, nullable=True)
+    auto_schedule_enabled = Column(Boolean, nullable=True)
+    auto_open_time = Column(String, nullable=True)
+    auto_close_time = Column(String, nullable=True)
+    service_fee_enabled = Column(Boolean, nullable=True)
+    service_fee_amount = Column(Float, nullable=True)
+    service_fee_type = Column(String, nullable=True)
+    small_order_fee_enabled = Column(Boolean, nullable=True)
+    small_order_fee_amount = Column(Float, nullable=True)
+    small_order_fee_threshold = Column(Float, nullable=True)
+    service_fee_applies_to = Column(String, nullable=True)
+    cash_enabled_pickup = Column(Boolean, nullable=True)
+    card_enabled_pickup = Column(Boolean, nullable=True)
+    cash_enabled_delivery = Column(Boolean, nullable=True)
+    card_enabled_delivery = Column(Boolean, nullable=True)
+    allowed_country_codes = Column(String, nullable=True)
+    blog_enabled = Column(Boolean, nullable=True)
+    allow_cancel_preparing = Column(Boolean, nullable=True)
+    allow_cancel_ready = Column(Boolean, nullable=True)
+    allow_modify_preparing = Column(Boolean, nullable=True)
+    order_accept_timeout_minutes = Column(Integer, nullable=True)
+    order_expire_timeout_minutes = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

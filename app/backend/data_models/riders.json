@@ -1,0 +1,30 @@
+{
+    "title": "riders",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "phone": {
+            "type": "string",
+            "maxLength": 50
+        },
+        "pin": {
+            "type": "string",
+            "maxLength": 10
+        },
+        "is_active": {
+            "type": "boolean",
+            "default": true
+        }
+    },
+    "required": [
+        "name",
+        "phone",
+        "pin"
+    ]
+}
