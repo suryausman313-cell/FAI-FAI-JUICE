@@ -2704,7 +2704,9 @@ return (
       </div>  
 
       <div>
-        <Label className="text-gray-300 mb-3 block">  
+       <Label 
+ className="text-gray-300
+ mb-3 block">  
           💝 Add a Tip{' '}  
           {orderType ===  
           'delivery'  
@@ -3052,6 +3054,7 @@ return (
 
               <span className="text-green-400">  
                 -AED{' '}
+
                 {discountAmount.toFixed(  
                   2  
                 )}  
@@ -3095,7 +3098,7 @@ return (
                     key={  
                       index
                       }  
-                    className="text-red-400/80 text-xs"  
+           className="text-red-400/80 text-xs"  
                   >  
                     • {error}  
                   </li>  
