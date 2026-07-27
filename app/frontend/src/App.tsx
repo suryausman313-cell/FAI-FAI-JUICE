@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { I18nProvider } from '@/lib/i18n';
 import { LanguagePickerModal } from '@/components/LanguagePicker';
 import { CustomerHeartbeatProvider } from '@/components/CustomerHeartbeatProvider';
+import { CustomerAuthProvider } from '@/contexts/CustomerAuthContext';
 
 // Lazy load all pages for code splitting
 const Index = lazy(() => import('./pages/Index'));
@@ -18,6 +19,7 @@ const Contact = lazy(() => import('./pages/Contact'));
 const Deals = lazy(() => import('./pages/Deals'));
 const Feedback = lazy(() => import('./pages/Feedback'));
 const Reviews = lazy(() => import('./pages/Reviews'));
+const CustomerAuth = lazy(() => import('./pages/CustomerAuth'));
 const RiderPanel = lazy(() => import('./pages/RiderPanel'));
 const DeliveryTracking = lazy(() => import('./pages/DeliveryTracking'));
 const BlogRoutes = lazy(() => import('./blog-routes'));
@@ -40,23 +42,21 @@ const AdminActivityLogs = lazy(() => import('./pages/admin/AdminActivityLogs'));
 const AdminAccounts = lazy(() => import('./pages/admin/AdminAccounts'));
 const AdminRiders = lazy(() => import('./pages/admin/AdminRiders'));
 
-// Auth pages
+// Old Auth pages
 const AuthCallback = lazy(() => import('./pages/AuthCallback'));
 const AuthError = lazy(() => import('./pages/AuthError'));
 
-// Configure QueryClient with caching to reduce redundant fetches
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 60000, // Data stays fresh for 60 seconds
-      gcTime: 300000, // Cache kept for 5 minutes
-      refetchOnWindowFocus: false, // Don't refetch when user switches tabs
-      retry: 1, // Only retry once on failure
+      staleTime: 60000,
+      gcTime: 300000,
+      refetchOnWindowFocus: false,
+      retry: 1,
     },
   },
 });
 
-// Minimal loading fallback - shows instantly
 function PageLoader() {
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -65,6 +65,7 @@ function PageLoader() {
           <span className="text-white">Vita</span>{' '}
           <span className="text-red-600">Napoli</span>
         </div>
+
         <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-3" />
       </div>
     </div>
@@ -85,6 +86,9 @@ const AppRoutes = () => (
       <Route path="/deals" element={<Deals />} />
       <Route path="/feedback" element={<Feedback />} />
       <Route path="/reviews" element={<Reviews />} />
+
+      {/* Customer Login and Sign Up */}
+      <Route path="/account" element={<CustomerAuth />} />
 
       {/* Blog Routes */}
       <Route path="/blog/*" element={<BlogRoutes />} />
@@ -111,7 +115,7 @@ const AppRoutes = () => (
       <Route path="/admin/riders" element={<AdminRiders />} />
       <Route path="/kitchen" element={<KitchenOrders />} />
 
-      {/* Auth Routes */}
+      {/* Old Auth Routes */}
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/auth/error" element={<AuthError />} />
     </Routes>
@@ -124,10 +128,13 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <LanguagePickerModal />
+
         <BrowserRouter>
-          <CustomerHeartbeatProvider>
-            <AppRoutes />
-          </CustomerHeartbeatProvider>
+          <CustomerAuthProvider>
+            <CustomerHeartbeatProvider>
+              <AppRoutes />
+            </CustomerHeartbeatProvider>
+          </CustomerAuthProvider>
         </BrowserRouter>
       </TooltipProvider>
     </I18nProvider>
