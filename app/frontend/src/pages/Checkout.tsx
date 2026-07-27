@@ -68,12 +68,12 @@ throw new Error('Please login again');
 }
 
 const response = await axios.request<T>({
-url: ${getAPIBaseURL()}${url},
+url: `${getAPIBaseURL()}${url}`,
 method,
 data,
 headers: {
 'Content-Type': 'application/json',
-Authorization: Bearer ${token},
+Authorization: `Bearer ${token}`,
 },
 });
 
