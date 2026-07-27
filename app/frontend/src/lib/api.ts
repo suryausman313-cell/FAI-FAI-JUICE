@@ -10,11 +10,24 @@ async function request({ url, method = 'GET', data }: RequestOptions) {
   const base = getAPIBaseURL().replace(/\/$/, '');
   const target = url.startsWith('http') ? url : `${base}${url}`;
   const upper = method.toUpperCase();
-  const init: RequestInit = {
-    method: upper,
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  };
+  const token =
+  localStorage.getItem('token') ||
+  localStorage.getItem('access_token') ||
+  localStorage.getItem('authToken');
+
+const headers: Record<string, string> = {
+  'Content-Type': 'application/json',
+};
+
+if (token) {
+  headers['Authorization'] = `Bearer ${token}`;
+}
+
+const init: RequestInit = {
+  method: upper,
+  headers,
+  credentials: 'include',
+};
   if (data !== undefined && upper !== 'GET' && upper !== 'HEAD') {
     init.body = JSON.stringify(data);
   }
