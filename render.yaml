@@ -11,7 +11,7 @@ services:
         sync: false
       - key: JWT_SECRET_KEY
         generateValue: true
-      - key: PYTHON_BACKEND_URL
-        sync: false
+    - key: PYTHON_BACKEND_URL
+  value: https://vita-napoli-backend.onrender.com
       - key: MGX_IGNORE_INIT_DATA
         value: "1"
