@@ -11,6 +11,8 @@ async function request({ url, method = 'GET', data }: RequestOptions) {
   const target = url.startsWith('http') ? url : `${base}${url}`;
   const upper = method.toUpperCase();
   const token =
+  sessionStorage.getItem('vita_customer_token') ||
+  localStorage.getItem('vita_customer_token') ||
   localStorage.getItem('token') ||
   localStorage.getItem('access_token') ||
   localStorage.getItem('authToken');
