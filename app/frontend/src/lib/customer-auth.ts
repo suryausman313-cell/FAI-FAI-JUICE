@@ -25,23 +25,39 @@ const api = axios.create({
   },
 });
 
-function getAuthHeader() {
-  const token = localStorage.getItem(TOKEN_KEY);
+function getAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem(TOKEN_KEY);
 
-  return token
-    ? { Authorization: `Bearer ${token}` }
-    : {};
+  if (!token) {
+    return {};
+  }
+
+  return {
+    Authorization: `Bearer ${token}`,
+  };
 }
 
 function saveSession(data: AuthResponse) {
-  localStorage.setItem(TOKEN_KEY, data.token);
-  localStorage.setItem(
+  sessionStorage.setItem(TOKEN_KEY, data.token);
+  sessionStorage.setItem(
     CUSTOMER_KEY,
     JSON.stringify(data.customer)
   );
 }
 
-function getErrorMessage(error: unknown, fallback: string) {
+function clearSession() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(CUSTOMER_KEY);
+
+  // Purana permanent login bhi remove kar do
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(CUSTOMER_KEY);
+}
+
+function getErrorMessage(
+  error: unknown,
+  fallback: string
+) {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
 
@@ -54,14 +70,23 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export const customerAuthApi = {
-  async signup(name: string, phone: string, pin: string) {
+  async signup(
+    name: string,
+    phone: string,
+    pin: string
+  ) {
     try {
       const response = await api.post<AuthResponse>(
         `${getAPIBaseURL()}/api/v1/customer-auth/signup`,
-        { name, phone, pin }
+        {
+          name,
+          phone,
+          pin,
+        }
       );
 
       saveSession(response.data);
+
       return response.data.customer;
     } catch (error) {
       throw new Error(
@@ -74,10 +99,14 @@ export const customerAuthApi = {
     try {
       const response = await api.post<AuthResponse>(
         `${getAPIBaseURL()}/api/v1/customer-auth/login`,
-        { phone, pin }
+        {
+          phone,
+          pin,
+        }
       );
 
       saveSession(response.data);
+
       return response.data.customer;
     } catch (error) {
       throw new Error(
@@ -87,31 +116,37 @@ export const customerAuthApi = {
   },
 
   async getCurrentCustomer() {
-    const token = localStorage.getItem(TOKEN_KEY);
+    const token = sessionStorage.getItem(TOKEN_KEY);
 
     if (!token) {
+      clearSession();
       return null;
     }
 
     try {
       const response = await api.get<Customer>(
         `${getAPIBaseURL()}/api/v1/customer-auth/me`,
-        { headers: getAuthHeader() }
+        {
+          headers: getAuthHeaders(),
+        }
       );
 
-      localStorage.setItem(
+      sessionStorage.setItem(
         CUSTOMER_KEY,
         JSON.stringify(response.data)
       );
 
       return response.data;
     } catch {
-      this.logout();
+      clearSession();
       return null;
     }
   },
 
-  async changePin(oldPin: string, newPin: string) {
+  async changePin(
+    oldPin: string,
+    newPin: string
+  ) {
     try {
       const response = await api.post(
         `${getAPIBaseURL()}/api/v1/customer-auth/change-pin`,
@@ -119,7 +154,9 @@ export const customerAuthApi = {
           old_pin: oldPin,
           new_pin: newPin,
         },
-        { headers: getAuthHeader() }
+        {
+          headers: getAuthHeaders(),
+        }
       );
 
       return response.data;
@@ -131,7 +168,7 @@ export const customerAuthApi = {
   },
 
   getSavedCustomer(): Customer | null {
-    const saved = localStorage.getItem(CUSTOMER_KEY);
+    const saved = sessionStorage.getItem(CUSTOMER_KEY);
 
     if (!saved) {
       return null;
@@ -140,16 +177,16 @@ export const customerAuthApi = {
     try {
       return JSON.parse(saved) as Customer;
     } catch {
+      clearSession();
       return null;
     }
   },
 
   getToken() {
-    return localStorage.getItem(TOKEN_KEY);
+    return sessionStorage.getItem(TOKEN_KEY);
   },
 
   logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(CUSTOMER_KEY);
+    clearSession();
   },
 };
