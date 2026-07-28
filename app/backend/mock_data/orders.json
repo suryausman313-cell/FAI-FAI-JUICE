@@ -1,1 +1,53 @@
-[]
+@@ -0,0 +1,52 @@
+{
+    "title": "orders",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "customer_name": {
+            "type": "string",
+            "maxLength": 200
+        },
+        "customer_phone": {
+            "type": "string",
+            "maxLength": 50
+        },
+        "pickup_time": {
+            "type": "string",
+            "maxLength": 100
+        },
+        "order_notes": {
+            "type": "string",
+            "default": ""
+        },
+        "payment_method": {
+            "type": "string",
+            "maxLength": 50
+        },
+        "status": {
+            "type": "string",
+            "maxLength": 50,
+            "default": "new"
+        },
+        "total_amount": {
+            "type": "number"
+        },
+        "items_json": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "customer_name",
+        "customer_phone",
+        "pickup_time",
+        "payment_method",
+        "total_amount",
+        "items_json",
+        "user_id"
+    ]
+}
