@@ -505,6 +505,9 @@ export default function KitchenOrders() {
   const [printerConfig, setPrinterConfig] = useState<PrinterConfig>(getPrinterConfig());
   const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
   const [deliveryAssignments, setDeliveryAssignments] = useState<DeliveryAssignment[]>([]);
+  const [restaurantStatus, setRestaurantStatus] = useState<'open' | 'busy' | 'closed'>('open');
+  const [settingsId, setSettingsId] = useState<number | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState(false);
   const [rejectingOrder, setRejectingOrder] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [customRejectReason, setCustomRejectReason] = useState('');
@@ -535,12 +538,48 @@ export default function KitchenOrders() {
     if (!authenticated) return;
     loadOrders();
     loadDeliveryAssignments();
+    loadRestaurantSettings();
     const interval = setInterval(() => {
       loadOrders();
       loadDeliveryAssignments();
     }, 8000);
     return () => clearInterval(interval);
   }, [authenticated]);
+
+  async function loadRestaurantSettings() {
+    try {
+      const res = await client.entities.restaurant_settings.query({ query: {}, limit: 1 });
+      const settings = res?.data?.items?.[0];
+      if (settings) {
+        setRestaurantStatus(settings.restaurant_status || 'open');
+        setSettingsId(Number(settings.id));
+      }
+    } catch (e) {
+      console.error('Failed to load restaurant settings:', e);
+    }
+  }
+
+  async function updateRestaurantStatus(newStatus: 'open' | 'busy' | 'closed') {
+    if (!settingsId) {
+      toast.error('Restaurant settings not found');
+      return;
+    }
+
+    try {
+      setStatusUpdating(true);
+      await client.entities.restaurant_settings.update({
+        id: String(settingsId),
+        data: { restaurant_status: newStatus },
+      });
+      setRestaurantStatus(newStatus);
+      toast.success(`Restaurant is now ${newStatus.toUpperCase()}`);
+    } catch (e) {
+      console.error('Failed to update restaurant status:', e);
+      toast.error('Failed to update restaurant status');
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
 
   async function loadDeliveryAssignments() {
     try {
@@ -639,8 +678,8 @@ export default function KitchenOrders() {
           ? payload.items
           : [];
 
-      const activeOrders = allOrders.filter((order: Order) =>
-        ['new', 'accepted', 'preparing', 'ready'].includes(order.status)
+      const visibleOrders = allOrders.filter((order: Order) =>
+        ['new', 'accepted', 'preparing', 'ready', 'completed'].includes(order.status)
       );
 
       // Filter out stale poll data for recently-updated orders (10s guard)
@@ -655,7 +694,7 @@ export default function KitchenOrders() {
 
       const currentOrders = ordersRef.current;
 
-      const mergedOrders = activeOrders.map((polledOrder: Order) => {
+      const mergedOrders = visibleOrders.map((polledOrder: Order) => {
         if (recentUpdates.has(polledOrder.id)) {
           const localOrder = currentOrders.find(
             (order) => order.id === polledOrder.id
@@ -675,7 +714,7 @@ export default function KitchenOrders() {
 
           if (
             localOrder &&
-            !['new', 'accepted', 'preparing', 'ready'].includes(localOrder.status)
+            !['new', 'accepted', 'preparing', 'ready', 'completed'].includes(localOrder.status)
           ) {
             return false;
           }
@@ -800,8 +839,7 @@ export default function KitchenOrders() {
         { status: newStatus }
       );
 
-      if (newStatus === 'completed' || newStatus === 'cancelled') {
-        // Remove from active list immediately
+      if (newStatus === 'cancelled') {
         setOrders(prev => prev.filter(o => o.id !== orderId));
       } else {
         setOrders(prev =>
@@ -879,6 +917,10 @@ export default function KitchenOrders() {
   const newOrders = orders.filter(o => o.status === 'new');
   const activeOrders = orders.filter(o => ['accepted', 'preparing'].includes(o.status));
   const readyOrders = orders.filter(o => o.status === 'ready');
+  const completedOrders = orders
+    .filter(o => o.status === 'completed')
+    .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
+    .slice(0, 20);
 
   // Helper to check if order is delivery
   function isDeliveryOrder(order: Order): boolean {
@@ -941,6 +983,51 @@ export default function KitchenOrders() {
             </Button>
           </div>
         </div>
+
+        {/* Restaurant Open / Busy / Closed control */}
+        <Card className="bg-gray-900 border-gray-800 p-3 mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-white font-semibold text-sm">Restaurant Status</p>
+              <p className="text-gray-500 text-xs">Customers will immediately see this status</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                disabled={statusUpdating}
+                onClick={() => updateRestaurantStatus('open')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
+                  restaurantStatus === 'open'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                🟢 OPEN
+              </button>
+              <button
+                disabled={statusUpdating}
+                onClick={() => updateRestaurantStatus('busy')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
+                  restaurantStatus === 'busy'
+                    ? 'bg-yellow-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                🟡 BUSY
+              </button>
+              <button
+                disabled={statusUpdating}
+                onClick={() => updateRestaurantStatus('closed')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
+                  restaurantStatus === 'closed'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                🔴 CLOSED
+              </button>
+            </div>
+          </div>
+        </Card>
 
         {/* Printer connection status banner */}
         {printerConfig.type !== 'browser' && !printerConfig.connected && (
@@ -1279,6 +1366,81 @@ export default function KitchenOrders() {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Completed Orders */}
+        <div className="mt-5">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-green-600" />
+              <h2 className="text-green-400 font-semibold text-sm">
+                COMPLETED ORDERS ({completedOrders.length})
+              </h2>
+            </div>
+            <span className="text-gray-600 text-[10px]">Latest 20 completed orders</span>
+          </div>
+
+          {completedOrders.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {completedOrders.map(order => {
+                let items: any[] = [];
+                try { items = JSON.parse(order.items_json); } catch { /* */ }
+
+                const completedAt = order.updated_at || order.created_at;
+
+                return (
+                  <Card key={order.id} className="bg-gray-900 border-green-600/30 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <span className="text-white font-bold text-lg">#{order.id}</span>
+                        <p className="text-gray-500 text-[10px]">
+                          {new Date(completedAt).toLocaleString('en-AE', {
+                            timeZone: 'Asia/Dubai',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            day: '2-digit',
+                            month: 'short',
+                          })}
+                        </p>
+                      </div>
+                      <Badge className="bg-green-600 text-white text-[10px]">COMPLETED</Badge>
+                    </div>
+
+                    <p className="text-gray-300 text-sm mb-1">
+                      {order.customer_name} • {order.customer_phone}
+                    </p>
+
+                    <div className="space-y-0.5 mb-2">
+                      {items.map((item: any, idx: number) => (
+                        <div key={idx} className="text-gray-400 text-xs">
+                          {item.quantity}x {item.name}
+                          {item.size ? ` (${item.size})` : ''}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-800">
+                      <span className="text-green-400 font-bold text-sm">
+                        AED {order.total_amount?.toFixed(2)}
+                      </span>
+                      <button
+                        onClick={() => handlePrintOrder(order)}
+                        className="flex items-center gap-1 text-gray-400 hover:text-orange-400 text-xs cursor-pointer"
+                      >
+                        <Printer className="w-3 h-3" />
+                        Print
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl py-10 text-center">
+              <Check className="w-8 h-8 text-gray-700 mx-auto mb-2" />
+              <p className="text-gray-600 text-sm">No completed orders yet</p>
+            </div>
+          )}
         </div>
       </div>
 
