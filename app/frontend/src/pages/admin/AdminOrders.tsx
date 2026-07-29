@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,33 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+
+const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
+
+type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+async function adminPanelApiRequest<T>(
+  url: string,
+  method: AdminPanelRequestMethod,
+  data?: unknown
+): Promise<T> {
+  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1234';
+  const baseURL = getAPIBaseURL().replace(/\/$/, '');
+
+  const response = await axios.request<T>({
+    url: `${baseURL}${url}`,
+    method,
+    data,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Kitchen-Pin': pin,
+    },
+  });
+
+  return response.data;
+}
+
 
 interface RiderInfo {
   id: number;
@@ -71,12 +99,16 @@ export default function AdminOrders() {
       if (filterStatus && filterStatus !== 'all') params.status = filterStatus;
       if (search) params.search = search;
 
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/admin/orders',
-        method: 'GET',
-        data: params,
-      });
-      const newOrders = res.data?.items || [];
+      const query = new URLSearchParams();
+      query.set('limit', String(params.limit));
+      if (params.status) query.set('status', String(params.status));
+      if (params.search) query.set('search', String(params.search));
+
+      const payload = await adminPanelApiRequest<{ items?: Order[] }>(
+        `/api/v1/admin/orders?${query.toString()}`,
+        'GET'
+      );
+      const newOrders = payload?.items || [];
 
       // Clean old entries from recently-updated map (older than 5s)
       const now = Date.now();
@@ -115,8 +147,7 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Session expired. Please login again.');
-        navigate('/admin');
+        toast.error('Admin PIN was rejected. Check that the backend and panel both use PIN 1234.');
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
@@ -223,11 +254,11 @@ export default function AdminOrders() {
   async function acceptOrder(orderId: number, minutes: number) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'accepted', estimated_minutes: minutes },
-      });
+      await adminPanelApiRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'accepted', estimated_minutes: minutes }
+      );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
       );
@@ -243,11 +274,11 @@ export default function AdminOrders() {
   async function updateStatus(orderId: number, newStatus: string) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: newStatus },
-      });
+      await adminPanelApiRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: newStatus }
+      );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
       );
@@ -262,11 +293,11 @@ export default function AdminOrders() {
   async function cancelOrder(orderId: number, reason?: string) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'cancelled', cancel_reason: reason || '' },
-      });
+      await adminPanelApiRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'cancelled', cancel_reason: reason || '' }
+      );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
       );
