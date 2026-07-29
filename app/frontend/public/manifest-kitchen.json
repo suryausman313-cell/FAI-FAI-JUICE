@@ -1,0 +1,24 @@
+{
+  "id": "/kitchen",
+  "name": "Vita Napoli Kitchen",
+  "short_name": "VN Kitchen",
+  "description": "Vita Napoli kitchen order panel",
+  "start_url": "/kitchen",
+  "scope": "/kitchen",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#dc2626",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
