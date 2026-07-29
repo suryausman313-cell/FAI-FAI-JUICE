@@ -33,6 +33,10 @@ def verify_kitchen_pin(
 
 def serialize_order(order: Orders) -> dict:
     """Return the order shape expected by the Admin and Kitchen frontends."""
+    status = (order.status or "new").lower().strip()
+    if status in {"pending", "placed", "order_placed", "created"}:
+        status = "new"
+
     return {
         "id": order.id,
         "user_id": order.user_id,
@@ -41,7 +45,7 @@ def serialize_order(order: Orders) -> dict:
         "estimated_time": order.pickup_time or "",
         "order_notes": order.order_notes or "",
         "payment_method": order.payment_method,
-        "status": order.status or "new",
+        "status": status,
         "total_amount": order.total_amount,
         "service_fee": order.service_fee or 0,
         "small_order_fee": order.small_order_fee or 0,
@@ -197,15 +201,22 @@ async def get_orders(
     search: Optional[str] = None,
     limit: int = 100,
     skip: int = 0,
-    current_user: UserResponse = Depends(get_current_user),
+    panel_access: bool = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all orders with optional filtering"""
+    """Get all orders for the Admin panel using the X-Kitchen-Pin header."""
+    del panel_access
+
     try:
         query = select(Orders).order_by(desc(Orders.created_at))
 
-        if status and status != 'all':
-            query = query.where(Orders.status == status)
+        if status and status != "all":
+            if status == "new":
+                query = query.where(
+                    Orders.status.in_(["new", "pending", "placed", "order_placed", "created"])
+                )
+            else:
+                query = query.where(Orders.status == status)
 
         if search:
             query = query.where(
@@ -229,10 +240,12 @@ async def get_orders(
 async def update_order_status(
     order_id: int,
     data: OrderStatusUpdate,
-    current_user: UserResponse = Depends(get_current_user),
+    panel_access: bool = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update order status with valid transition enforcement"""
+    """Update order status from the Admin panel using the X-Kitchen-Pin header."""
+    del panel_access
+
     try:
         result = await db.execute(select(Orders).where(Orders.id == order_id))
         order = result.scalar_one_or_none()
@@ -246,6 +259,10 @@ async def update_order_status(
         # Any status can go to "cancelled" (admin override)
         VALID_TRANSITIONS = {
             "new": ["accepted", "preparing", "cancelled"],
+            "pending": ["accepted", "preparing", "cancelled"],
+            "placed": ["accepted", "preparing", "cancelled"],
+            "order_placed": ["accepted", "preparing", "cancelled"],
+            "created": ["accepted", "preparing", "cancelled"],
             "accepted": ["preparing", "ready", "cancelled"],
             "preparing": ["ready", "cancelled"],
             "ready": ["completed", "cancelled"],
@@ -253,7 +270,7 @@ async def update_order_status(
             "cancelled": [],  # Terminal state - no further transitions
         }
 
-        current_status = order.status or "new"
+        current_status = (order.status or "new").lower().strip()
         new_status = data.status.lower().strip()
 
         # Validate the new status is a recognized value
@@ -590,10 +607,12 @@ async def get_customers_enhanced(
 
 @router.get("/tips-report")
 async def get_tips_report(
-    current_user: UserResponse = Depends(get_current_user),
+    panel_access: bool = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get tips report - separate from sales, showing rider tips and shop tips"""
+    """Get the Admin tips report using the X-Kitchen-Pin header."""
+    del panel_access
+
     try:
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -708,10 +727,11 @@ async def get_tips_report(
 
 @router.get("/sales-report")
 async def get_sales_report(
-    current_user: UserResponse = Depends(get_current_user),
+    panel_access: bool = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get sales summary report with daily/weekly/monthly breakdowns"""
+    """Get the Admin sales report using the X-Kitchen-Pin header."""
+    del panel_access
     from datetime import datetime, timedelta
 
     try:
