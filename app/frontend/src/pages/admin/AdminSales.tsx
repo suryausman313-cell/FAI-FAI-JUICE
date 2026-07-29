@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, TrendingUp, BarChart3, ShoppingBag, DollarSign, Download, Trash2, RotateCcw, Search, Calendar, Star, Eye, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+
+const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
+
+type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+async function adminPanelApiRequest<T>(
+  url: string,
+  method: AdminPanelRequestMethod,
+  data?: unknown
+): Promise<T> {
+  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1234';
+  const baseURL = getAPIBaseURL().replace(/\/$/, '');
+
+  const response = await axios.request<T>({
+    url: `${baseURL}${url}`,
+    method,
+    data,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Kitchen-Pin': pin,
+    },
+  });
+
+  return response.data;
+}
+
 
 type FilterPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' | 'custom';
 
@@ -57,8 +85,11 @@ function TipsReport() {
 
   async function loadTips() {
     try {
-      const res = await client.apiCall.invoke({ url: '/api/v1/admin/tips-report', method: 'GET', data: {} });
-      setTipsData(res.data);
+      const payload = await adminPanelApiRequest<NonNullable<typeof tipsData>>(
+        '/api/v1/admin/tips-report',
+        'GET'
+      );
+      setTipsData(payload);
     } catch (e) {
       console.error('Tips report error:', e);
     } finally {
@@ -203,16 +234,22 @@ export default function AdminSales() {
     try {
       // Load sales report
       try {
-        const reportRes = await client.apiCall.invoke({ url: '/api/v1/admin/sales-report', method: 'GET', data: {} });
-        setReport(reportRes.data);
+        const reportPayload = await adminPanelApiRequest<SalesStats>(
+          '/api/v1/admin/sales-report',
+          'GET'
+        );
+        setReport(reportPayload);
       } catch (e) {
         console.error('Sales report API error:', e);
       }
 
       // Load all orders
       try {
-        const ordersRes = await client.apiCall.invoke({ url: '/api/v1/admin/orders', method: 'GET', data: { sort: '-created_at', limit: 500 } });
-        setOrders(ordersRes.data?.items || []);
+        const ordersPayload = await adminPanelApiRequest<{ items?: Order[] }>(
+          '/api/v1/admin/orders?limit=500',
+          'GET'
+        );
+        setOrders(ordersPayload?.items || []);
       } catch (e) {
         console.error('Orders API error:', e);
         // Fallback: try entity query
@@ -320,11 +357,11 @@ export default function AdminSales() {
   async function deleteOrder(order: Order) {
     if (!confirm(`⚠️ Delete Order #${order.id}?\n\nCustomer: ${order.customer_name}\nAmount: AED ${order.total_amount?.toFixed(2)}\n\nIt will be moved to trash and can be restored later.`)) return;
     try {
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${order.id}/status`,
-        method: 'PUT',
-        data: { status: 'deleted' },
-      });
+      await adminPanelApiRequest(
+        `/api/v1/admin/orders/${order.id}/status`,
+        'PUT',
+        { status: 'cancelled', cancel_reason: 'Moved to sales trash' }
+      );
     } catch {
       // If API fails, still move to trash locally
     }
