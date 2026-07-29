@@ -1,10 +1,38 @@
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, ShoppingBag, Users, UtensilsCrossed, Settings, LogOut, TrendingUp, ChefHat, Tag, MessageSquare, Package, Bell, ClipboardList, Shield, Bike } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { client, SalesReport, RestaurantSettings } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+
+
+const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
+
+type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+async function adminPanelApiRequest<T>(
+  url: string,
+  method: AdminPanelRequestMethod,
+  data?: unknown
+): Promise<T> {
+  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1234';
+  const baseURL = getAPIBaseURL().replace(/\/$/, '');
+
+  const response = await axios.request<T>({
+    url: `${baseURL}${url}`,
+    method,
+    data,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Kitchen-Pin': pin,
+    },
+  });
+
+  return response.data;
+}
 
 interface AdminPermissions {
   orders?: boolean;
@@ -69,12 +97,11 @@ export default function AdminDashboard() {
 
   async function loadReport() {
     try {
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/admin/sales-report',
-        method: 'GET',
-        data: {},
-      });
-      setReport(res.data);
+      const data = await adminPanelApiRequest<SalesReport>(
+        '/api/v1/admin/sales-report',
+        'GET'
+      );
+      setReport(data);
     } catch (e) {
       console.error('Failed to load report:', e);
     }
