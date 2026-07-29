@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import axios from 'axios';
 import { RefreshCw, Bell, Clock, Check, X, ChefHat, Volume2, VolumeX, Printer, Settings, Wifi, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -9,6 +10,33 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+
+
+const KITCHEN_PIN_STORAGE_KEY = 'kitchen_pin';
+
+type KitchenRequestMethod = 'GET' | 'PUT';
+
+async function kitchenApiRequest<T>(
+  url: string,
+  method: KitchenRequestMethod,
+  data?: unknown
+): Promise<T> {
+  const pin = localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1234';
+  const baseURL = getAPIBaseURL().replace(/\/$/, '');
+
+  const response = await axios.request<T>({
+    url: `${baseURL}${url}`,
+    method,
+    data,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Kitchen-Pin': pin,
+    },
+  });
+
+  return response.data;
+}
 
 const TIME_OPTIONS = [
   { value: 10, label: '10 min' },
@@ -487,6 +515,9 @@ export default function KitchenOrders() {
   useEffect(() => {
     const kitchenAuth = localStorage.getItem('kitchen_auth');
     if (kitchenAuth) {
+      if (!localStorage.getItem(KITCHEN_PIN_STORAGE_KEY)) {
+        localStorage.setItem(KITCHEN_PIN_STORAGE_KEY, '1234');
+      }
       setAuthenticated(true);
       if (!hasInteractedRef.current) {
         setShowSoundPrompt(true);
@@ -558,6 +589,7 @@ export default function KitchenOrders() {
     e.preventDefault();
     if (pin === '1234') {
       localStorage.setItem('kitchen_auth', 'true');
+      localStorage.setItem(KITCHEN_PIN_STORAGE_KEY, pin);
       setAuthenticated(true);
       hasInteractedRef.current = true;
       setShowSoundPrompt(false);
@@ -595,81 +627,106 @@ export default function KitchenOrders() {
   const loadOrders = useCallback(async () => {
     try {
       setRefreshing(true);
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/admin/orders',
-        method: 'GET',
-        data: { sort: '-created_at', limit: 50 },
-      });
-      const allOrders = res.data?.items || [];
-      const activeOrders = allOrders.filter(
-        (o: Order) => ['new', 'accepted', 'preparing', 'ready'].includes(o.status)
+
+      const payload = await kitchenApiRequest<{ items?: Order[] } | Order[]>(
+        '/api/v1/admin/kitchen/orders?limit=50&skip=0',
+        'GET'
+      );
+
+      const allOrders = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.items)
+          ? payload.items
+          : [];
+
+      const activeOrders = allOrders.filter((order: Order) =>
+        ['new', 'accepted', 'preparing', 'ready'].includes(order.status)
       );
 
       // Filter out stale poll data for recently-updated orders (10s guard)
       const now = Date.now();
       const recentUpdates = recentlyUpdatedRef.current;
-      // Clean old entries (older than 10s)
-      for (const [id, ts] of recentUpdates.entries()) {
-        if (now - ts > 10000) recentUpdates.delete(id);
+
+      for (const [id, timestamp] of recentUpdates.entries()) {
+        if (now - timestamp > 10000) {
+          recentUpdates.delete(id);
+        }
       }
 
-      // Use ref to get current orders (avoids stale closure)
       const currentOrders = ordersRef.current;
 
-      // Merge: keep local state for recently-updated orders, use poll data for others
       const mergedOrders = activeOrders.map((polledOrder: Order) => {
         if (recentUpdates.has(polledOrder.id)) {
-          // Use local state version instead of polled version
-          const localOrder = currentOrders.find(o => o.id === polledOrder.id);
+          const localOrder = currentOrders.find(
+            (order) => order.id === polledOrder.id
+          );
+
           return localOrder || polledOrder;
         }
+
         return polledOrder;
       });
 
-      // Also keep locally-removed orders (status changed to completed/cancelled) from reappearing
-      const filteredOrders = mergedOrders.filter((o: Order) => {
-        if (recentUpdates.has(o.id)) {
-          const localOrder = currentOrders.find(lo => lo.id === o.id);
-          // If local state shows it was moved out of active, don't show it
-          if (localOrder && !['new', 'accepted', 'preparing', 'ready'].includes(localOrder.status)) {
+      const filteredOrders = mergedOrders.filter((order: Order) => {
+        if (recentUpdates.has(order.id)) {
+          const localOrder = currentOrders.find(
+            (currentOrder) => currentOrder.id === order.id
+          );
+
+          if (
+            localOrder &&
+            !['new', 'accepted', 'preparing', 'ready'].includes(localOrder.status)
+          ) {
             return false;
           }
-          // If the order was removed from local state (e.g. completed/cancelled), filter it out
+
           if (!localOrder) {
             return false;
           }
         }
+
         return true;
       });
 
-      // Deduplicate by order ID (prevent ghost duplicates)
       const seen = new Set<number>();
-      const deduplicatedOrders = filteredOrders.filter((o: Order) => {
-        if (seen.has(o.id)) return false;
-        seen.add(o.id);
+      const deduplicatedOrders = filteredOrders.filter((order: Order) => {
+        if (seen.has(order.id)) {
+          return false;
+        }
+
+        seen.add(order.id);
         return true;
       });
 
       const currentNewOrderIds = new Set(
-        deduplicatedOrders.filter((o: Order) => o.status === 'new').map((o: Order) => o.id)
+        deduplicatedOrders
+          .filter((order: Order) => order.status === 'new')
+          .map((order: Order) => order.id)
       );
-      const prevIds = prevNewOrderIdsRef.current;
-      const brandNewOrders = [...currentNewOrderIds].filter(id => !prevIds.has(id));
 
-      if (brandNewOrders.length > 0 && prevIds.size > 0) {
+      const previousIds = prevNewOrderIdsRef.current;
+      const brandNewOrders = [...currentNewOrderIds].filter(
+        (id) => !previousIds.has(id)
+      );
+
+      if (brandNewOrders.length > 0 && previousIds.size > 0) {
         brandNewOrders.forEach(() => {
           kitchenAlarm.playOnce();
         });
-        toast.success(`${brandNewOrders.length} new order${brandNewOrders.length > 1 ? 's' : ''} received!`, {
-          duration: 5000,
-        });
 
-        // Auto-print new orders if enabled
+        toast.success(
+          `${brandNewOrders.length} new order${
+            brandNewOrders.length > 1 ? 's' : ''
+          } received!`,
+          { duration: 5000 }
+        );
+
         if (printerConfig.autoPrint) {
-          const newOrdersList = deduplicatedOrders.filter((o: Order) => brandNewOrders.includes(o.id));
-          newOrdersList.forEach((order: Order) => {
-            printOrderReceipt(order, printerConfig);
-          });
+          deduplicatedOrders
+            .filter((order: Order) => brandNewOrders.includes(order.id))
+            .forEach((order: Order) => {
+              printOrderReceipt(order, printerConfig);
+            });
         }
       }
 
@@ -684,8 +741,20 @@ export default function KitchenOrders() {
       prevNewOrderIdsRef.current = currentNewOrderIds;
       setOrders(deduplicatedOrders);
       setLastRefresh(new Date());
-    } catch (e) {
-      console.error('Failed to load orders:', e);
+    } catch (error: any) {
+      console.error('Failed to load orders:', error);
+
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail;
+
+      if (status === 401 || status === 403) {
+        toast.error(detail || 'Invalid kitchen PIN');
+        localStorage.removeItem('kitchen_auth');
+        localStorage.removeItem(KITCHEN_PIN_STORAGE_KEY);
+        setAuthenticated(false);
+      } else {
+        toast.error(detail || 'Failed to load kitchen orders');
+      }
     } finally {
       setRefreshing(false);
     }
@@ -696,11 +765,11 @@ export default function KitchenOrders() {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'accepted', estimated_minutes: minutes },
-      });
+      await kitchenApiRequest(
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
+        'PUT',
+        { status: 'accepted', estimated_minutes: minutes }
+      );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
       );
@@ -725,11 +794,11 @@ export default function KitchenOrders() {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: newStatus },
-      });
+      await kitchenApiRequest(
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
+        'PUT',
+        { status: newStatus }
+      );
 
       if (newStatus === 'completed' || newStatus === 'cancelled') {
         // Remove from active list immediately
@@ -753,11 +822,14 @@ export default function KitchenOrders() {
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
       const cancelReason = reason || (rejectReason === 'Other' ? customRejectReason : rejectReason);
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'cancelled', cancel_reason: cancelReason || 'Rejected by kitchen' },
-      });
+      await kitchenApiRequest(
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
+        'PUT',
+        {
+          status: 'cancelled',
+          cancel_reason: cancelReason || 'Rejected by kitchen',
+        }
+      );
       setOrders(prev => prev.filter(o => o.id !== orderId));
 
       prevNewOrderIdsRef.current.delete(orderId);
