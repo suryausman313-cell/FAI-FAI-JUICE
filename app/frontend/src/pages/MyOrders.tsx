@@ -24,22 +24,23 @@ import CustomerLayout from '@/components/CustomerLayout';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 import { client, Order, CartItem } from '@/lib/api';
 import { getCart, saveCart } from '@/lib/cart-store';
+import { useTranslation } from '@/lib/i18n';
 
 const PICKUP_STEPS = [
-  { key: 'new', label: 'Order Placed', icon: Store },
-  { key: 'accepted', label: 'Accepted', icon: CheckCircle },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready!', icon: Package },
+  { key: 'new', translationKey: 'orders.status.new', icon: Store },
+  { key: 'accepted', translationKey: 'orders.status.accepted', icon: CheckCircle },
+  { key: 'preparing', translationKey: 'orders.status.preparing', icon: ChefHat },
+  { key: 'ready', translationKey: 'orders.status.ready', icon: Package },
 ];
 
 const DELIVERY_STEPS = [
-  { key: 'new', label: 'Order Placed', icon: Store },
-  { key: 'accepted', label: 'Confirmed', icon: CheckCircle },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready', icon: Package },
-  { key: 'picked_up', label: 'Picked Up', icon: Bike },
-  { key: 'on_the_way', label: 'On the Way', icon: Navigation },
-  { key: 'delivered', label: 'Delivered', icon: CheckCircle },
+  { key: 'new', translationKey: 'orders.status.new', icon: Store },
+  { key: 'accepted', translationKey: 'orders.status.accepted', icon: CheckCircle },
+  { key: 'preparing', translationKey: 'orders.status.preparing', icon: ChefHat },
+  { key: 'ready', translationKey: 'orders.status.ready', icon: Package },
+  { key: 'picked_up', translationKey: 'orders.status.picked_up', icon: Bike },
+  { key: 'on_the_way', translationKey: 'orders.status.on_the_way', icon: Navigation },
+  { key: 'delivered', translationKey: 'orders.status.delivered', icon: CheckCircle },
 ];
 
 function getStepIndex(
@@ -69,10 +70,12 @@ function getDeliveryStepIndex(
 }
 
 function formatDate(
-  dateString: string | null | undefined
+  dateString: string | null | undefined,
+  language: 'en' | 'ar' | 'ur',
+  unavailableText: string
 ): string {
   if (!dateString) {
-    return 'Date unavailable';
+    return unavailableText;
   }
 
   try {
@@ -82,20 +85,22 @@ function formatDate(
       date.getFullYear() < 2000 ||
       Number.isNaN(date.getTime())
     ) {
-      return 'Date unavailable';
+      return unavailableText;
     }
 
-    return date.toLocaleString();
+    return date.toLocaleString(language === 'ar' ? 'ar-AE' : language === 'ur' ? 'ur-PK' : 'en-AE');
   } catch {
-    return 'Date unavailable';
+    return unavailableText;
   }
 }
 
 function formatDateShort(
-  dateString: string | null | undefined
+  dateString: string | null | undefined,
+  language: 'en' | 'ar' | 'ur',
+  unavailableText: string
 ): string {
   if (!dateString) {
-    return 'Date unavailable';
+    return unavailableText;
   }
 
   try {
@@ -105,12 +110,12 @@ function formatDateShort(
       date.getFullYear() < 2000 ||
       Number.isNaN(date.getTime())
     ) {
-      return 'Date unavailable';
+      return unavailableText;
     }
 
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(language === 'ar' ? 'ar-AE' : language === 'ur' ? 'ur-PK' : 'en-AE');
   } catch {
-    return 'Date unavailable';
+    return unavailableText;
   }
 }
 
@@ -152,6 +157,7 @@ function OrderProgressTracker({
   isDelivery,
   deliveryStatus,
 }: OrderProgressTrackerProps) {
+  const { t } = useTranslation();
   const steps = isDelivery
     ? DELIVERY_STEPS
     : PICKUP_STEPS;
@@ -184,7 +190,7 @@ function OrderProgressTracker({
 
           <div>
             <p className="text-green-400 font-bold text-sm">
-              Estimated ready time
+              {t('orders.estimated_ready_time')}
             </p>
 
             <p className="text-green-300 text-lg font-bold">
@@ -247,12 +253,12 @@ function OrderProgressTracker({
                       : ''
                   }`}
                 >
-                  {step.label}
+                  {t(step.translationKey)}
                 </p>
 
                 {isCurrent && (
                   <p className="text-green-400/60 text-xs mt-0.5">
-                    Current status
+                    {t('orders.current_status')}
                   </p>
                 )}
               </div>
@@ -273,6 +279,7 @@ function RiderContactCard({
   riderName,
   riderPhone,
 }: RiderContactCardProps) {
+  const { t } = useTranslation();
   let whatsappPhone = riderPhone
     .replace(/[^0-9+]/g, '')
     .replace('+', '');
@@ -313,7 +320,7 @@ function RiderContactCard({
           className="flex-1 flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-lg py-2.5 px-3 text-sm font-medium transition-colors"
         >
           <Phone className="w-4 h-4" />
-          Call
+          {t('orders.call')}
         </a>
 
         <a
@@ -322,7 +329,7 @@ function RiderContactCard({
           rel="noopener noreferrer"
           className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg py-2.5 px-3 text-sm font-medium transition-colors"
         >
-          WhatsApp
+          {t('orders.whatsapp')}
         </a>
       </div>
     </div>
@@ -348,6 +355,7 @@ function OrderTimerNotification({
   expireTimeout,
   onExpired,
 }: OrderTimerNotificationProps) {
+  const { t } = useTranslation();
   const [elapsedMinutes, setElapsedMinutes] =
     useState(
       getElapsedMinutes(order.created_at)
@@ -413,15 +421,14 @@ function OrderTimerNotification({
 
           <div className="flex-1">
             <p className="text-yellow-400 font-bold text-sm">
-              Restaurant ne abhi tak aapka
-              order accept nahi kiya
+{t('orders.restaurant_not_accepted')}
             </p>
 
             <p className="text-yellow-400/70 text-xs mt-1">
-              {elapsedMinutes} min ho gaye hain
-              • Auto-cancel in{' '}
+              {elapsedMinutes} {t('orders.minutes_elapsed')} •
+              {t('orders.auto_cancel_in')}{' '}
               {expireTimeout - elapsedMinutes}{' '}
-              min
+              {t('common.minutes')}
             </p>
           </div>
         </div>
@@ -432,7 +439,7 @@ function OrderTimerNotification({
           rel="noopener noreferrer"
           className="mt-3 w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-lg py-3 px-4 text-sm font-medium transition-colors"
         >
-          WhatsApp Restaurant
+          {t('orders.whatsapp_restaurant')}
         </a>
       </div>
     );
@@ -451,13 +458,11 @@ function OrderTimerNotification({
 
           <div className="flex-1">
             <p className="text-red-400 font-bold text-sm">
-              Order expired — Restaurant ne
-              accept nahi kiya
+{t('orders.expired_title')}
             </p>
 
             <p className="text-red-400/70 text-xs mt-1">
-              {expireTimeout}+ minutes wait •
-              Order auto-cancelled
+              {expireTimeout}+ {t('orders.expired_subtitle')}
             </p>
           </div>
         </div>
@@ -473,13 +478,13 @@ function OrderTimerNotification({
 
       <div>
         <p className="text-blue-400 font-bold text-sm">
-          Waiting for restaurant to accept
+          {t('orders.waiting_accept')}
         </p>
 
         <p className="text-blue-300/70 text-xs">
-          {elapsedMinutes} min elapsed •
-          Usually accepted within{' '}
-          {acceptTimeout} min
+          {elapsedMinutes} {t('orders.minutes_elapsed')} •
+          {t('orders.usually_accepted')}{' '}
+          {acceptTimeout} {t('common.minutes')}
         </p>
       </div>
     </div>
@@ -502,6 +507,7 @@ function CancelOrderDialog({
   onCancel,
   onClose,
 }: CancelOrderDialogProps) {
+  const { t, dir } = useTranslation();
   const [reason, setReason] =
     useState('');
 
@@ -521,10 +527,10 @@ function CancelOrderDialog({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full">
+      <div dir={dir} className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-white font-bold text-lg">
-            Cancel Order #{orderId}?
+            {t('orders.cancel_order')} #{orderId}?
           </h3>
 
           <button
@@ -537,14 +543,12 @@ function CancelOrderDialog({
         </div>
 
         <p className="text-gray-400 text-sm mb-4">
-          {orderStatus === 'new'
-            ? 'Your order has not been accepted yet. Are you sure you want to cancel?'
-            : `Your order is currently "${orderStatus}". Are you sure you want to cancel?`}
+          {t('orders.cancel_question')}
         </p>
 
         <div className="mb-4">
           <label className="text-gray-300 text-sm block mb-1">
-            Reason (optional)
+            {t('orders.reason_optional')}
           </label>
 
           <textarea
@@ -552,7 +556,7 @@ function CancelOrderDialog({
             onChange={(event) =>
               setReason(event.target.value)
             }
-            placeholder="e.g. Changed my mind, taking too long..."
+            placeholder={t('orders.reason_placeholder')}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm resize-none"
             rows={2}
           />
@@ -564,7 +568,7 @@ function CancelOrderDialog({
             variant="outline"
             className="flex-1 border-gray-600 text-gray-300 cursor-pointer"
           >
-            Keep Order
+            {t('orders.keep_order')}
           </Button>
 
           <Button
@@ -573,8 +577,8 @@ function CancelOrderDialog({
             className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
           >
             {cancelling
-              ? 'Cancelling...'
-              : 'Yes, Cancel'}
+              ? t('orders.cancelling')
+              : t('orders.yes_cancel')}
           </Button>
         </div>
       </div>
@@ -584,6 +588,7 @@ function CancelOrderDialog({
 
 export default function MyOrders() {
   const navigate = useNavigate();
+  const { t, language, dir } = useTranslation();
 
   const {
     isLoggedIn: customerLoggedIn,
@@ -800,7 +805,7 @@ export default function MyOrders() {
     } catch (error: any) {
       const message =
         error?.data?.detail ||
-        'Failed to cancel order';
+        t('orders.failed_cancel');
 
       window.alert(message);
     }
@@ -960,9 +965,9 @@ export default function MyOrders() {
   if (loading || authLoading) {
     return (
       <CustomerLayout>
-        <div className="bg-black min-h-screen flex items-center justify-center">
+        <div dir={dir} className="bg-black min-h-screen flex items-center justify-center">
           <div className="text-gray-400">
-            Loading...
+            {t('common.loading')}
           </div>
         </div>
       </CustomerLayout>
@@ -972,13 +977,13 @@ export default function MyOrders() {
   if (!customerLoggedIn) {
     return (
       <CustomerLayout>
-        <div className="bg-black min-h-screen flex flex-col items-center justify-center px-4">
+        <div dir={dir} className="bg-black min-h-screen flex flex-col items-center justify-center px-4">
           <h2 className="text-white text-2xl font-bold mb-4">
-            Login Required
+            {t('orders.login_required')}
           </h2>
 
           <p className="text-gray-400 mb-6">
-            Please login to view your orders
+            {t('orders.login_message')}
           </p>
 
           <Button
@@ -987,7 +992,7 @@ export default function MyOrders() {
             }
             className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
           >
-            Login / Sign Up
+            {t('orders.login_signup')}
           </Button>
         </div>
       </CustomerLayout>
@@ -1004,10 +1009,10 @@ export default function MyOrders() {
 
   return (
     <CustomerLayout>
-      <div className="bg-black min-h-screen px-4 py-6 max-w-2xl mx-auto">
+      <div dir={dir} className="bg-black min-h-screen px-4 py-6 max-w-2xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-white text-2xl font-bold">
-            My Orders
+            {t('orders.title')}
           </h1>
 
           <Button
@@ -1036,12 +1041,11 @@ export default function MyOrders() {
             </div>
 
             <p className="text-gray-400 text-lg font-medium">
-              No orders yet
+              {t('orders.no_orders')}
             </p>
 
             <p className="text-gray-600 text-sm mt-2">
-              Your orders will appear here
-              after you place them
+              {t('orders.no_orders_subtitle')}
             </p>
           </div>
         ) : (
@@ -1049,7 +1053,7 @@ export default function MyOrders() {
             {activeOrders.length > 0 && (
               <div>
                 <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">
-                  Active Orders
+                  {t('orders.active_orders')}
                 </h2>
 
                 <div className="space-y-4">
@@ -1095,7 +1099,7 @@ export default function MyOrders() {
                               {isDelivery && (
                                 <Badge className="bg-blue-600/20 text-blue-400 border border-blue-600/30 text-xs">
                                   <Bike className="w-3 h-3 mr-1" />
-                                  Delivery
+                                  {t('orders.delivery')}
                                 </Badge>
                               )}
                             </div>
@@ -1104,7 +1108,7 @@ export default function MyOrders() {
                               {order.delivery_charge >
                                 0 && (
                                 <span className="text-[10px] text-gray-400">
-                                  Delivery: AED{' '}
+                                  {t('orders.delivery')}: AED{' '}
                                   {order.delivery_charge?.toFixed(
                                     2
                                   )}
@@ -1114,7 +1118,7 @@ export default function MyOrders() {
                               {order.tip_amount >
                                 0 && (
                                 <span className="text-[10px] text-green-400">
-                                  Tip: AED{' '}
+                                  {t('orders.tip')}: {t('common.aed')}{' '}
                                   {order.tip_amount?.toFixed(
                                     2
                                   )}
@@ -1122,7 +1126,7 @@ export default function MyOrders() {
                               )}
 
                               <span className="text-red-400 font-bold">
-                                AED{' '}
+                                {t('common.aed')}{' '}
                                 {order.total_amount?.toFixed(
                                   2
                                 )}
@@ -1132,7 +1136,9 @@ export default function MyOrders() {
 
                           <p className="text-gray-500 text-xs mb-3">
                             {formatDate(
-                              order.created_at
+                              order.created_at,
+                              language,
+                              t('orders.date_unavailable')
                             )}
                           </p>
 
@@ -1174,7 +1180,7 @@ export default function MyOrders() {
                                 size="sm"
                               >
                                 <Navigation className="w-4 h-4 mr-2" />
-                                Track Live on Map
+                                {t('orders.track_live_map')}
                               </Button>
                             )}
 
@@ -1194,7 +1200,7 @@ export default function MyOrders() {
 
                           <div className="border-t border-gray-800 pt-3">
                             <p className="text-gray-500 text-xs uppercase mb-2">
-                              Items
+                              {t('orders.items')}
                             </p>
 
                             {items.map(
@@ -1213,7 +1219,7 @@ export default function MyOrders() {
                                   </span>
 
                                   <span className="text-gray-400">
-                                    AED{' '}
+                                    {t('common.aed')}{' '}
                                     {item.price?.toFixed(
                                       2
                                     )}
@@ -1238,7 +1244,7 @@ export default function MyOrders() {
                                 className="border-red-600/50 text-red-400 hover:bg-red-600/10 hover:text-red-300 cursor-pointer w-full"
                               >
                                 <XCircle className="w-4 h-4 mr-2" />
-                                Cancel Order
+                                {t('orders.cancel_order')}
                               </Button>
                             </div>
                           )}
@@ -1253,7 +1259,7 @@ export default function MyOrders() {
             {pastOrders.length > 0 && (
               <div>
                 <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">
-                  Past Orders
+                  {t('orders.past_orders')}
                 </h2>
 
                 <div className="space-y-3">
@@ -1301,12 +1307,12 @@ export default function MyOrders() {
                                 {completed ? (
                                   <>
                                     <CheckCircle className="w-3 h-3 mr-1" />
-                                    Completed
+                                    {t('orders.status.completed')}
                                   </>
                                 ) : (
                                   <>
                                     <XCircle className="w-3 h-3 mr-1" />
-                                    Cancelled
+                                    {t('orders.status.cancelled')}
                                   </>
                                 )}
                               </Badge>
@@ -1316,7 +1322,7 @@ export default function MyOrders() {
                               {order.delivery_charge >
                                 0 && (
                                 <span className="text-[10px] text-gray-500">
-                                  Delivery: AED{' '}
+                                  {t('orders.delivery')}: AED{' '}
                                   {order.delivery_charge?.toFixed(
                                     2
                                   )}
@@ -1326,7 +1332,7 @@ export default function MyOrders() {
                               {order.tip_amount >
                                 0 && (
                                 <span className="text-[10px] text-green-500">
-                                  Tip: AED{' '}
+                                  {t('orders.tip')}: {t('common.aed')}{' '}
                                   {order.tip_amount?.toFixed(
                                     2
                                   )}
@@ -1334,7 +1340,7 @@ export default function MyOrders() {
                               )}
 
                               <span className="text-gray-400 font-medium">
-                                AED{' '}
+                                {t('common.aed')}{' '}
                                 {order.total_amount?.toFixed(
                                   2
                                 )}
@@ -1345,7 +1351,9 @@ export default function MyOrders() {
                           <div className="flex items-center justify-between mt-1">
                             <p className="text-gray-600 text-xs">
                               {formatDateShort(
-                                order.created_at
+                                order.created_at,
+                                language,
+                                t('orders.date_unavailable')
                               )}{' '}
                               • {items.length}{' '}
                               item
@@ -1371,7 +1379,7 @@ export default function MyOrders() {
                                   className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
                                 >
                                   <MessageSquare className="w-3 h-3" />
-                                  Give Feedback
+                                  {t('orders.leave_review')}
                                 </button>
                               ))}
                           </div>
@@ -1388,7 +1396,7 @@ export default function MyOrders() {
                                 className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer"
                               >
                                 <ShoppingCart className="w-4 h-4 mr-2" />
-                                Order Again
+                                {t('orders.order_again')}
                               </Button>
                             </div>
                           )}
