@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, TrendingUp, BarChart3, ShoppingBag, DollarSign, Download, Trash2, RotateCcw, Search, Calendar, Star, Eye, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -10,33 +9,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
-import { getAPIBaseURL } from '@/lib/config';
-
-const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
-
-type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
-
-async function adminPanelApiRequest<T>(
-  url: string,
-  method: AdminPanelRequestMethod,
-  data?: unknown
-): Promise<T> {
-  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1234';
-  const baseURL = getAPIBaseURL().replace(/\/$/, '');
-
-  const response = await axios.request<T>({
-    url: `${baseURL}${url}`,
-    method,
-    data,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Kitchen-Pin': pin,
-    },
-  });
-
-  return response.data;
-}
-
 
 type FilterPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' | 'custom';
 
@@ -85,11 +57,8 @@ function TipsReport() {
 
   async function loadTips() {
     try {
-      const payload = await adminPanelApiRequest<NonNullable<typeof tipsData>>(
-        '/api/v1/admin/tips-report',
-        'GET'
-      );
-      setTipsData(payload);
+      const res = await client.apiCall.invoke({ url: '/api/v1/admin/tips-report', method: 'GET', data: {} });
+      setTipsData(res.data);
     } catch (e) {
       console.error('Tips report error:', e);
     } finally {
@@ -234,22 +203,16 @@ export default function AdminSales() {
     try {
       // Load sales report
       try {
-        const reportPayload = await adminPanelApiRequest<SalesStats>(
-          '/api/v1/admin/sales-report',
-          'GET'
-        );
-        setReport(reportPayload);
+        const reportRes = await client.apiCall.invoke({ url: '/api/v1/admin/sales-report', method: 'GET', data: {} });
+        setReport(reportRes.data);
       } catch (e) {
         console.error('Sales report API error:', e);
       }
 
       // Load all orders
       try {
-        const ordersPayload = await adminPanelApiRequest<{ items?: Order[] }>(
-          '/api/v1/admin/orders?limit=500',
-          'GET'
-        );
-        setOrders(ordersPayload?.items || []);
+        const ordersRes = await client.apiCall.invoke({ url: '/api/v1/admin/orders', method: 'GET', data: { sort: '-created_at', limit: 500 } });
+        setOrders(ordersRes.data?.items || []);
       } catch (e) {
         console.error('Orders API error:', e);
         // Fallback: try entity query
@@ -264,6 +227,11 @@ export default function AdminSales() {
             order_notes: o.order_notes || '',
             payment_method: o.payment_method || 'Cash',
             status: o.status || 'new',
+            subtotal_amount: o.subtotal_amount || o.total_amount || 0,
+            promo_code: o.promo_code || '',
+            discount_type: o.discount_type || '',
+            discount_percent: o.discount_percent || 0,
+            discount_amount: o.discount_amount || 0,
             total_amount: o.total_amount || 0,
             items_json: o.items_json || '[]',
             created_at: o.created_at || '',
@@ -357,11 +325,11 @@ export default function AdminSales() {
   async function deleteOrder(order: Order) {
     if (!confirm(`⚠️ Delete Order #${order.id}?\n\nCustomer: ${order.customer_name}\nAmount: AED ${order.total_amount?.toFixed(2)}\n\nIt will be moved to trash and can be restored later.`)) return;
     try {
-      await adminPanelApiRequest(
-        `/api/v1/admin/orders/${order.id}/status`,
-        'PUT',
-        { status: 'cancelled', cancel_reason: 'Moved to sales trash' }
-      );
+      await client.apiCall.invoke({
+        url: `/api/v1/admin/orders/${order.id}/status`,
+        method: 'PUT',
+        data: { status: 'deleted' },
+      });
     } catch {
       // If API fails, still move to trash locally
     }
@@ -894,7 +862,12 @@ End of Report
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-green-400 font-bold text-sm">AED {order.total_amount?.toFixed(2)}</span>
+                            <div className="text-right">
+                              <span className="text-green-400 font-bold text-sm block">AED {order.total_amount?.toFixed(2)}</span>
+                              {Number((order as any).discount_amount || 0) > 0 && (
+                                <span className="text-orange-400 text-[10px]">Discount: AED {Number((order as any).discount_amount).toFixed(2)}</span>
+                              )}
+                            </div>
                             <button onClick={() => setDetailOrder(order)} className="text-gray-600 hover:text-blue-400 cursor-pointer p-1">
                               <Eye className="w-3.5 h-3.5" />
                             </button>
@@ -1078,9 +1051,29 @@ End of Report
                 </div>
               </div>
 
-              <div className="bg-green-600/10 border border-green-600/20 rounded-lg p-4 text-center">
-                <p className="text-gray-400 text-xs">Total Amount</p>
-                <p className="text-green-400 font-bold text-2xl">AED {detailOrder.total_amount?.toFixed(2)}</p>
+              <div className="bg-gray-800 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Subtotal</span>
+                  <span className="text-white">AED {Number((detailOrder as any).subtotal_amount || detailOrder.total_amount || 0).toFixed(2)}</span>
+                </div>
+                {Number((detailOrder as any).discount_amount || 0) > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-orange-400">Discount</span>
+                      <span className="text-orange-400">-AED {Number((detailOrder as any).discount_amount).toFixed(2)}</span>
+                    </div>
+                    {(detailOrder as any).promo_code && (
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">Promo Code</span>
+                        <span className="text-orange-300 font-mono">{(detailOrder as any).promo_code}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="border-t border-gray-700 pt-2 flex justify-between items-end">
+                  <span className="text-gray-300 font-medium">Final Total</span>
+                  <span className="text-green-400 font-bold text-2xl">AED {detailOrder.total_amount?.toFixed(2)}</span>
+                </div>
               </div>
             </div>
           )}
