@@ -1,8 +1,9 @@
 {
-  "name": "Vita Napoli Pizza",
-  "short_name": "Vita Napoli",
-  "description": "Order authentic Italian pizza & pasta for pickup",
-  "start_url": "/",
+  "name": "Vita Napoli Admin",
+  "short_name": "VN Admin",
+  "description": "Vita Napoli restaurant admin panel",
+  "start_url": "/admin",
+  "scope": "/admin",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#dc2626",
