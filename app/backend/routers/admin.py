@@ -17,11 +17,178 @@ from models.customer_sessions import Customer_sessions
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
+# Kitchen panel uses its own PIN header instead of an admin JWT.
+# On Render, you can set KITCHEN_PIN as an environment variable.
+KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1234")
+
+
+def verify_kitchen_pin(
+    x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
+) -> bool:
+    """Allow only requests that include the correct kitchen PIN header."""
+    if not x_kitchen_pin or x_kitchen_pin != KITCHEN_PIN:
+        raise HTTPException(status_code=401, detail="Invalid kitchen PIN")
+    return True
+
+
+def serialize_order(order: Orders) -> dict:
+    """Return the order shape expected by the Admin and Kitchen frontends."""
+    return {
+        "id": order.id,
+        "user_id": order.user_id,
+        "customer_name": order.customer_name,
+        "customer_phone": order.customer_phone,
+        "estimated_time": order.pickup_time or "",
+        "order_notes": order.order_notes or "",
+        "payment_method": order.payment_method,
+        "status": order.status or "new",
+        "total_amount": order.total_amount,
+        "service_fee": order.service_fee or 0,
+        "small_order_fee": order.small_order_fee or 0,
+        "delivery_charge": order.delivery_charge or 0,
+        "tip_amount": order.tip_amount or 0,
+        "tip_type": order.tip_type or "",
+        "items_json": order.items_json,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+    }
+
 
 class OrderStatusUpdate(BaseModel):
     status: str
     estimated_minutes: Optional[int] = None
     cancel_reason: Optional[str] = None
+
+
+@router.get("/kitchen/orders")
+async def get_kitchen_orders(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0,
+    kitchen_access: bool = Depends(verify_kitchen_pin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get orders for the Kitchen panel using the X-Kitchen-Pin header."""
+    del kitchen_access
+
+    try:
+        query = select(Orders).order_by(desc(Orders.created_at))
+
+        if status and status != "all":
+            query = query.where(Orders.status == status)
+
+        if search:
+            query = query.where(
+                or_(
+                    Orders.customer_name.ilike(f"%{search}%"),
+                    Orders.customer_phone.ilike(f"%{search}%"),
+                )
+            )
+
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
+        orders = result.scalars().all()
+
+        return {"items": [serialize_order(order) for order in orders]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to get kitchen orders")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/kitchen/orders/{order_id}/status")
+async def update_kitchen_order_status(
+    order_id: int,
+    data: OrderStatusUpdate,
+    kitchen_access: bool = Depends(verify_kitchen_pin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update order status from the Kitchen panel using the kitchen PIN."""
+    del kitchen_access
+
+    try:
+        result = await db.execute(select(Orders).where(Orders.id == order_id))
+        order = result.scalar_one_or_none()
+
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        valid_transitions = {
+            "new": ["accepted", "preparing", "cancelled"],
+            "pending": ["accepted", "preparing", "cancelled"],
+            "placed": ["accepted", "preparing", "cancelled"],
+            "accepted": ["preparing", "ready", "cancelled"],
+            "preparing": ["ready", "cancelled"],
+            "ready": ["completed", "cancelled"],
+            "completed": [],
+            "cancelled": [],
+        }
+
+        current_status = (order.status or "new").lower().strip()
+        new_status = data.status.lower().strip()
+        valid_statuses = [
+            "new",
+            "accepted",
+            "preparing",
+            "ready",
+            "completed",
+            "cancelled",
+        ]
+
+        if new_status not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid status '{new_status}'. "
+                    f"Valid statuses: {', '.join(valid_statuses)}"
+                ),
+            )
+
+        allowed_next = valid_transitions.get(current_status, [])
+        if new_status not in allowed_next:
+            if current_status in ("completed", "cancelled"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot change status of a {current_status} order.",
+                )
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot transition from '{current_status}' to '{new_status}'. "
+                    f"Allowed: {', '.join(allowed_next) if allowed_next else 'none'}"
+                ),
+            )
+
+        order.status = new_status
+
+        if data.estimated_minutes is not None:
+            order.pickup_time = f"{data.estimated_minutes} min"
+
+        if new_status == "cancelled" and data.cancel_reason:
+            existing_notes = order.order_notes or ""
+            separator = " | " if existing_notes else ""
+            order.order_notes = (
+                f"{existing_notes}{separator}Cancelled by kitchen: {data.cancel_reason}"
+            )
+
+        await db.commit()
+        await db.refresh(order)
+
+        return {
+            "success": True,
+            "status": new_status,
+            "estimated_minutes": data.estimated_minutes,
+            "order": serialize_order(order),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to update kitchen order status")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/orders")
@@ -52,29 +219,7 @@ async def get_orders(
         result = await db.execute(query)
         orders = result.scalars().all()
 
-        items = []
-        for order in orders:
-            items.append({
-                "id": order.id,
-                "user_id": order.user_id,
-                "customer_name": order.customer_name,
-                "customer_phone": order.customer_phone,
-                "estimated_time": order.pickup_time or "",
-                "order_notes": order.order_notes or "",
-                "payment_method": order.payment_method,
-                "status": order.status,
-                "total_amount": order.total_amount,
-                "service_fee": order.service_fee or 0,
-                "small_order_fee": order.small_order_fee or 0,
-                "delivery_charge": order.delivery_charge or 0,
-                "tip_amount": order.tip_amount or 0,
-                "tip_type": order.tip_type or "",
-                "items_json": order.items_json,
-                "created_at": order.created_at.isoformat() if order.created_at else None,
-                "updated_at": order.updated_at.isoformat() if order.updated_at else None,
-            })
-
-        return {"items": items}
+        return {"items": [serialize_order(order) for order in orders]}
     except Exception as e:
         logging.error(f"Failed to get orders: {e}")
         raise HTTPException(status_code=500, detail=str(e))
