@@ -62,7 +62,20 @@ export default function Index() {
       const settingsData = settingsRes?.data?.items?.[0] || null;
       const items = itemsRes?.data?.items || [];
       const cats = catRes?.data?.items || [];
-      const offersList = offersRes?.data?.items || [];
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const offersList = (offersRes?.data?.items || []).filter((offer: any) => {
+        if (!offer.is_active) return false;
+        if (offer.start_date) {
+          const start = new Date(`${offer.start_date}T00:00:00`);
+          if (!Number.isNaN(start.getTime()) && now < start) return false;
+        }
+        if (offer.end_date) {
+          const end = new Date(`${offer.end_date}T23:59:59`);
+          if (!Number.isNaN(end.getTime()) && now > end) return false;
+        }
+        return true;
+      });
 
       setSettings(settingsData);
       setFeaturedItems(items);
@@ -237,10 +250,19 @@ export default function Index() {
                 >
                   <h3 className="text-white font-bold text-sm">{offer.title}</h3>
                   <p className="text-gray-400 text-xs mt-1">{offer.description}</p>
-                  {offer.discount_percent > 0 && (
+                  {(offer as any).discount_type === 'fixed' && Number((offer as any).fixed_discount_amount || 0) > 0 ? (
                     <Badge className="bg-red-600 text-white mt-2 text-xs">
-                      {offer.discount_percent}% OFF
+                      AED {Number((offer as any).fixed_discount_amount).toFixed(2)} OFF
                     </Badge>
+                  ) : Number(offer.discount_percent || 0) > 0 ? (
+                    <Badge className="bg-red-600 text-white mt-2 text-xs">
+                      {Number(offer.discount_percent)}% OFF
+                    </Badge>
+                  ) : null}
+                  {Number((offer as any).minimum_order_amount || 0) > 0 && (
+                    <p className="text-gray-500 text-[10px] mt-1">
+                      Minimum order: AED {Number((offer as any).minimum_order_amount).toFixed(2)}
+                    </p>
                   )}
                   {offer.promo_code && (
                     <p className="text-orange-400 text-xs mt-1 font-mono">Code: {offer.promo_code}</p>
