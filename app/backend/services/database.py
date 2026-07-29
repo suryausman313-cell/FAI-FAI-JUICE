@@ -36,12 +36,7 @@ async def check_database_health() -> bool:
 
 
 async def ensure_offer_discount_columns() -> None:
-    """
-    Add new discount columns to the existing offers table.
-
-    CREATE ALL only creates new tables. It does not add new columns to an
-    existing table, so these safe PostgreSQL commands run during startup.
-    """
+    """Add discount fields to the existing offers table safely."""
 
     if not db_manager.async_session_maker:
         raise RuntimeError("Database session is not initialized")
@@ -79,7 +74,6 @@ async def ensure_offer_discount_columns() -> None:
             for statement in statements:
                 await session.execute(text(statement))
 
-            # Existing records ko safe default values do.
             await session.execute(
                 text(
                     """
@@ -110,6 +104,83 @@ async def ensure_offer_discount_columns() -> None:
         raise
 
 
+async def ensure_order_discount_columns() -> None:
+    """Add discount fields to the existing orders table safely."""
+
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+
+    statements = [
+        """
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS subtotal_amount DOUBLE PRECISION
+        NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS promo_code VARCHAR(50)
+        DEFAULT ''
+        """,
+        """
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20)
+        DEFAULT ''
+        """,
+        """
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS discount_percent DOUBLE PRECISION
+        NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS discount_amount DOUBLE PRECISION
+        NOT NULL DEFAULT 0
+        """,
+    ]
+
+    try:
+        async with db_manager.async_session_maker() as session:
+            for statement in statements:
+                await session.execute(text(statement))
+
+            # Purane orders ko safe values do. Purane order me subtotal ka best
+            # fallback final total hai, kyun ke unme discount save nahi hota tha.
+            await session.execute(
+                text(
+                    """
+                    UPDATE orders
+                    SET
+                        subtotal_amount = CASE
+                            WHEN COALESCE(subtotal_amount, 0) = 0
+                            THEN COALESCE(total_amount, 0)
+                            ELSE subtotal_amount
+                        END,
+                        promo_code = COALESCE(promo_code, ''),
+                        discount_type = COALESCE(discount_type, ''),
+                        discount_percent = COALESCE(discount_percent, 0),
+                        discount_amount = COALESCE(discount_amount, 0)
+                    """
+                )
+            )
+
+            await session.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_orders_promo_code
+                    ON orders (promo_code)
+                    """
+                )
+            )
+
+            await session.commit()
+
+        logger.info("Order discount database columns checked successfully")
+
+    except Exception:
+        logger.exception("Failed to prepare order discount database columns")
+        raise
+
+
 async def initialize_database():
     """Initialize database, create tables and prepare required columns."""
 
@@ -134,8 +205,8 @@ async def initialize_database():
 
         logger.info("🔧 Table creation completed")
 
-        # Existing offers table me naye discount columns automatically add karo.
         await ensure_offer_discount_columns()
+        await ensure_order_discount_columns()
 
         logger.info("Database initialized successfully")
         logger.debug(
