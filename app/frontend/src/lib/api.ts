@@ -10,26 +10,11 @@ async function request({ url, method = 'GET', data }: RequestOptions) {
   const base = getAPIBaseURL().replace(/\/$/, '');
   const target = url.startsWith('http') ? url : `${base}${url}`;
   const upper = method.toUpperCase();
-  const token =
-  sessionStorage.getItem('vita_customer_token') ||
-  localStorage.getItem('vita_customer_token') ||
-  localStorage.getItem('token') ||
-  localStorage.getItem('access_token') ||
-  localStorage.getItem('authToken');
-
-const headers: Record<string, string> = {
-  'Content-Type': 'application/json',
-};
-
-if (token) {
-  headers['Authorization'] = `Bearer ${token}`;
-}
-
-const init: RequestInit = {
-  method: upper,
-  headers,
-  credentials: 'include',
-};
+  const init: RequestInit = {
+    method: upper,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  };
   if (data !== undefined && upper !== 'GET' && upper !== 'HEAD') {
     init.body = JSON.stringify(data);
   }
@@ -153,10 +138,21 @@ export interface Order {
   customer_name: string;
   customer_phone: string;
   estimated_time: string;
+  pickup_time?: string;
   order_notes: string;
   payment_method: string;
   status: string;
   total_amount: number;
+  subtotal_amount?: number;
+  promo_code?: string;
+  discount_type?: 'percentage' | 'fixed' | '';
+  discount_percent?: number;
+  discount_amount?: number;
+  service_fee?: number;
+  small_order_fee?: number;
+  delivery_charge?: number;
+  tip_amount?: number;
+  tip_type?: string;
   items_json: string;
   created_at: string;
   updated_at: string;
@@ -200,7 +196,11 @@ export interface Offer {
   id: number;
   title: string;
   description: string;
+  discount_type: 'percentage' | 'fixed';
   discount_percent: number;
+  fixed_discount_amount: number;
+  minimum_order_amount: number;
+  maximum_discount_amount: number;
   promo_code: string;
   banner_image_url: string;
   is_active: boolean;
@@ -208,6 +208,9 @@ export interface Offer {
   end_date: string;
   first_order_only: boolean;
   usage_limit_per_customer: number;
+  total_usage_limit: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Notification {
