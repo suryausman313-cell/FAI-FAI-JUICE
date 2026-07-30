@@ -52,46 +52,47 @@ export default function Index() {
   const [loading, setLoading] = useState(!cached);
 
   const loadData = useCallback(async () => {
-    try {
-      const [settingsRes, itemsRes, catRes, offersRes] = await Promise.all([
-        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
-        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 8 }),
-        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
-        client.entities.offers.query({ query: { is_active: true }, limit: 10 }),
-      ]);
-      const settingsData = settingsRes?.data?.items?.[0] || null;
-      const items = itemsRes?.data?.items || [];
-      const cats = catRes?.data?.items || [];
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-      const offersList = (offersRes?.data?.items || []).filter((offer: any) => {
-        if (!offer.is_active) return false;
-        if (offer.start_date) {
-          const start = new Date(`${offer.start_date}T00:00:00`);
-          if (!Number.isNaN(start.getTime()) && now < start) return false;
-        }
-        if (offer.end_date) {
-          const end = new Date(`${offer.end_date}T23:59:59`);
-          if (!Number.isNaN(end.getTime()) && now > end) return false;
-        }
-        return true;
-      });
+    const [settingsResult, itemsResult, categoriesResult, offersResult] = await Promise.allSettled([
+      client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
+      client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 8 }),
+      client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
+      client.entities.offers.query({ query: { is_active: true }, limit: 10 }),
+    ]);
 
-      setSettings(settingsData);
-      setFeaturedItems(items);
-      setCategories(cats);
-      setOffers(offersList);
+    const settingsData = settingsResult.status === 'fulfilled'
+      ? settingsResult.value?.data?.items?.[0] || null
+      : settings;
+    const items = itemsResult.status === 'fulfilled'
+      ? itemsResult.value?.data?.items || []
+      : featuredItems;
+    const cats = categoriesResult.status === 'fulfilled'
+      ? categoriesResult.value?.data?.items || []
+      : categories;
+    const offersList = offersResult.status === 'fulfilled'
+      ? offersResult.value?.data?.items || []
+      : offers;
 
-      // Cache for next visit
+    if (settingsResult.status === 'fulfilled') setSettings(settingsData);
+    if (itemsResult.status === 'fulfilled') setFeaturedItems(items);
+    if (categoriesResult.status === 'fulfilled') setCategories(cats);
+    if (offersResult.status === 'fulfilled') setOffers(offersList);
+
+    if (settingsData || items.length > 0 || cats.length > 0 || offersList.length > 0) {
       setCachedData({ settings: settingsData, featuredItems: items, categories: cats, offers: offersList });
-
-      // Auto-schedule check
-      if (settingsData) checkAutoSchedule(settingsData);
-    } catch (e) {
-      console.error('Failed to load data:', e);
-    } finally {
-      setLoading(false);
     }
+
+    if (settingsData) checkAutoSchedule(settingsData);
+
+    if ([settingsResult, itemsResult, categoriesResult, offersResult].some(result => result.status === 'rejected')) {
+      console.error('Some home data could not load', {
+        settingsResult,
+        itemsResult,
+        categoriesResult,
+        offersResult,
+      });
+    }
+
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -250,19 +251,10 @@ export default function Index() {
                 >
                   <h3 className="text-white font-bold text-sm">{offer.title}</h3>
                   <p className="text-gray-400 text-xs mt-1">{offer.description}</p>
-                  {(offer as any).discount_type === 'fixed' && Number((offer as any).fixed_discount_amount || 0) > 0 ? (
+                  {offer.discount_percent > 0 && (
                     <Badge className="bg-red-600 text-white mt-2 text-xs">
-                      AED {Number((offer as any).fixed_discount_amount).toFixed(2)} OFF
+                      {offer.discount_percent}% OFF
                     </Badge>
-                  ) : Number(offer.discount_percent || 0) > 0 ? (
-                    <Badge className="bg-red-600 text-white mt-2 text-xs">
-                      {Number(offer.discount_percent)}% OFF
-                    </Badge>
-                  ) : null}
-                  {Number((offer as any).minimum_order_amount || 0) > 0 && (
-                    <p className="text-gray-500 text-[10px] mt-1">
-                      Minimum order: AED {Number((offer as any).minimum_order_amount).toFixed(2)}
-                    </p>
                   )}
                   {offer.promo_code && (
                     <p className="text-orange-400 text-xs mt-1 font-mono">Code: {offer.promo_code}</p>
