@@ -1,7 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, KeyRound, ShieldCheck } from 'lucide-react';
+import {
+  ArrowLeft,
+  Home,
+  KeyRound,
+  LogOut,
+  MessageCircle,
+  Phone,
+  ShieldCheck,
+  ShoppingBag,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -9,13 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
 
-type ScreenMode =
-  | 'login'
-  | 'signup'
-  | 'signupOtp'
-  | 'forgotPhone'
-  | 'forgotOtp'
-  | 'changePin';
+type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
 
 interface CustomerData {
   id?: number | string;
@@ -34,6 +37,7 @@ interface AuthResponse {
   message?: string;
   exists?: boolean;
   secure_pin_active?: boolean;
+  can_signup?: boolean;
   [key: string]: unknown;
 }
 
@@ -41,6 +45,10 @@ const DEVICE_ACCOUNT_KEY = 'vita_customer_registered_on_device';
 const DEVICE_PHONE_KEY = 'vita_customer_registered_phone';
 const TOKEN_KEY = 'vita_customer_token';
 const CUSTOMER_KEY = 'vita_customer';
+
+const RESTAURANT_PHONE_DISPLAY = '+971 54 294 0112';
+const RESTAURANT_PHONE_TEL = '+971542940112';
+const RESTAURANT_WHATSAPP = '971542940112';
 
 function normalizePhone(value: string): string {
   const raw = value.trim();
@@ -96,6 +104,27 @@ function hasKnownAccountOnDevice(): boolean {
   );
 }
 
+function getStoredCustomer(): CustomerData | null {
+  const raw = localStorage.getItem(CUSTOMER_KEY) || sessionStorage.getItem(CUSTOMER_KEY);
+  if (!raw) return null;
+
+  try {
+    const value = JSON.parse(raw) as CustomerData;
+    return value && typeof value === 'object' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearCustomerSession(): void {
+  const keys = [TOKEN_KEY, CUSTOMER_KEY, 'customer_token', 'customer_auth_token'];
+  keys.forEach((key) => {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  });
+  window.dispatchEvent(new Event('customer-auth-changed'));
+}
+
 function rememberAccount(phone: string): void {
   localStorage.setItem(DEVICE_ACCOUNT_KEY, '1');
   localStorage.setItem(DEVICE_PHONE_KEY, phone);
@@ -106,16 +135,19 @@ function saveCustomerSession(
   data: AuthResponse,
   fallbackPhone: string,
   fallbackName = '',
-): void {
+): CustomerData {
   const token = String(data.access_token || data.token || '').trim();
   const customer = data.customer || data.user || {
     name: fallbackName,
     phone: fallbackPhone,
+    customer_phone: fallbackPhone,
   };
 
   if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
-    sessionStorage.setItem(TOKEN_KEY, token);
+    [TOKEN_KEY, 'customer_token', 'customer_auth_token'].forEach((key) => {
+      localStorage.setItem(key, token);
+      sessionStorage.setItem(key, token);
+    });
   }
 
   const customerJson = JSON.stringify(customer);
@@ -132,6 +164,7 @@ function saveCustomerSession(
   }
 
   window.dispatchEvent(new Event('customer-auth-changed'));
+  return customer;
 }
 
 async function postCustomerAuth<T>(
@@ -182,7 +215,10 @@ export default function CustomerAuth() {
   );
   const [mode, setMode] = useState<ScreenMode>('login');
   const [loading, setLoading] = useState(false);
-  const [resendSeconds, setResendSeconds] = useState(0);
+  const [sessionChecking, setSessionChecking] = useState(
+    Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
+  );
+  const [activeCustomer, setActiveCustomer] = useState<CustomerData | null>(null);
 
   const [loginPhone, setLoginPhone] = useState(rememberedPhone);
   const [loginPin, setLoginPin] = useState('');
@@ -193,12 +229,6 @@ export default function CustomerAuth() {
   );
   const [signupPin, setSignupPin] = useState('');
   const [signupConfirmPin, setSignupConfirmPin] = useState('');
-  const [signupOtp, setSignupOtp] = useState('');
-
-  const [forgotPhone, setForgotPhone] = useState(rememberedPhone);
-  const [forgotOtp, setForgotOtp] = useState('');
-  const [forgotNewPin, setForgotNewPin] = useState('');
-  const [forgotConfirmPin, setForgotConfirmPin] = useState('');
 
   const [changePhone, setChangePhone] = useState(rememberedPhone);
   const [currentPin, setCurrentPin] = useState('');
@@ -206,16 +236,47 @@ export default function CustomerAuth() {
   const [changeConfirmPin, setChangeConfirmPin] = useState('');
 
   useEffect(() => {
-    if (resendSeconds <= 0) return;
-    const timer = window.setInterval(() => {
-      setResendSeconds((value) => Math.max(0, value - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [resendSeconds]);
+    const token =
+      localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
+
+    if (!token) {
+      setActiveCustomer(null);
+      setSessionChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    axios
+      .get<AuthResponse>(`${getAPIBaseURL()}/api/v1/customer-auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 30000,
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const result = response.data;
+        const customer = saveCustomerSession(result, rememberedPhone);
+        setActiveCustomer(customer || getStoredCustomer());
+        setRegisteredOnThisDevice(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        clearCustomerSession();
+        setActiveCustomer(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionChecking(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rememberedPhone]);
 
   useEffect(() => {
-    if (!isValidPhone(rememberedPhone)) return;
-    void checkAccountStatus(rememberedPhone);
+    if (isValidPhone(rememberedPhone)) {
+      void checkAccountStatus(rememberedPhone);
+    }
     // Run only once for the remembered number.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -230,16 +291,15 @@ export default function CustomerAuth() {
         { phone },
       );
 
-      if (result.exists) {
+      if (result.secure_pin_active || result.exists) {
         rememberAccount(phone);
         setRegisteredOnThisDevice(true);
         setLoginPhone(phone);
-        setForgotPhone(phone);
         setChangePhone(phone);
         if (mode === 'signup') setMode('login');
       }
     } catch {
-      // Status check is only for UI convenience. Login/signup still work normally.
+      // This check only controls the Login/Sign Up tabs.
     }
   }
 
@@ -256,6 +316,7 @@ export default function CustomerAuth() {
     event.preventDefault();
     const phone = validatePhoneOrShow(loginPhone);
     if (!phone) return;
+
     if (!isValidPin(loginPin)) {
       toast.error('PIN must be exactly 4 digits.');
       return;
@@ -267,22 +328,31 @@ export default function CustomerAuth() {
         '/api/v1/customer-auth/login',
         { phone, customer_phone: phone, pin: loginPin },
       );
-      saveCustomerSession(result, phone);
+      const customer = saveCustomerSession(result, phone);
       setRegisteredOnThisDevice(true);
+      setActiveCustomer(customer);
+      setLoginPin('');
       toast.success('Login successful');
-      navigate('/');
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Invalid mobile number or PIN.'));
+      const message = getErrorMessage(error, 'Login failed');
+      toast.error(message);
+
+      if (message.toLowerCase().includes('sign up once')) {
+        setRegisteredOnThisDevice(false);
+        setSignupPhone(phone);
+        setMode('signup');
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  async function sendSignupOtp(event?: FormEvent) {
-    event?.preventDefault();
+  async function handleSignup(event: FormEvent) {
+    event.preventDefault();
     const name = signupName.trim();
     const phone = validatePhoneOrShow(signupPhone);
     if (!phone) return;
+
     if (name.length < 2) {
       toast.error('Please enter your full name.');
       return;
@@ -292,118 +362,37 @@ export default function CustomerAuth() {
       return;
     }
     if (signupPin !== signupConfirmPin) {
-      toast.error('PIN confirmation does not match.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await postCustomerAuth('/api/v1/customer-auth/send-otp', {
-        phone,
-        purpose: 'signup',
-      });
-      setSignupPhone(phone);
-      setSignupOtp('');
-      setMode('signupOtp');
-      setResendSeconds(30);
-      toast.success('OTP sent to your mobile');
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Could not send OTP.'));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function verifySignupOtp(event: FormEvent) {
-    event.preventDefault();
-    if (signupOtp.replace(/\D/g, '').length < 4) {
-      toast.error('Enter the OTP sent to your mobile.');
+      toast.error('PIN and Confirm PIN do not match.');
       return;
     }
 
     setLoading(true);
     try {
       const result = await postCustomerAuth<AuthResponse>(
-        '/api/v1/customer-auth/signup-verify',
+        '/api/v1/customer-auth/signup',
         {
-          name: signupName.trim(),
-          customer_name: signupName.trim(),
-          phone: normalizePhone(signupPhone),
-          customer_phone: normalizePhone(signupPhone),
+          name,
+          customer_name: name,
+          phone,
+          customer_phone: phone,
           pin: signupPin,
-          code: signupOtp,
         },
       );
-      saveCustomerSession(result, normalizePhone(signupPhone), signupName.trim());
+      const customer = saveCustomerSession(result, phone, name);
       setRegisteredOnThisDevice(true);
-      toast.success('Mobile verified and account created');
-      navigate('/');
+      setActiveCustomer(customer);
+      setSignupPin('');
+      setSignupConfirmPin('');
+      toast.success('Account created successfully');
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Incorrect or expired OTP.'));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function sendForgotOtp(event?: FormEvent) {
-    event?.preventDefault();
-    const phone = validatePhoneOrShow(forgotPhone);
-    if (!phone) return;
-
-    setLoading(true);
-    try {
-      await postCustomerAuth('/api/v1/customer-auth/send-otp', {
-        phone,
-        purpose: 'forgot_pin',
-      });
-      setForgotPhone(phone);
-      setForgotOtp('');
-      setMode('forgotOtp');
-      setResendSeconds(30);
-      toast.success('OTP sent to your registered mobile');
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Could not send OTP.'));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function resetForgotPin(event: FormEvent) {
-    event.preventDefault();
-    if (forgotOtp.replace(/\D/g, '').length < 4) {
-      toast.error('Enter the OTP sent to your mobile.');
-      return;
-    }
-    if (!isValidPin(forgotNewPin)) {
-      toast.error('New PIN must be exactly 4 digits.');
-      return;
-    }
-    if (forgotNewPin !== forgotConfirmPin) {
-      toast.error('New PIN confirmation does not match.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await postCustomerAuth('/api/v1/customer-auth/forgot-pin-reset', {
-        phone: normalizePhone(forgotPhone),
-        customer_phone: normalizePhone(forgotPhone),
-        code: forgotOtp,
-        new_pin: forgotNewPin,
-      });
-
-      const phone = normalizePhone(forgotPhone);
-      rememberAccount(phone);
-      setRegisteredOnThisDevice(true);
-      setLoginPhone(phone);
-      setLoginPin('');
-      setForgotOtp('');
-      setForgotNewPin('');
-      setForgotConfirmPin('');
-      setMode('login');
-      toast.success('PIN reset successfully. Login with your new PIN.');
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Could not reset PIN.'));
+      const message = getErrorMessage(error, 'Could not create account');
+      toast.error(message);
+      if (message.toLowerCase().includes('already exists')) {
+        rememberAccount(phone);
+        setRegisteredOnThisDevice(true);
+        setLoginPhone(phone);
+        setMode('login');
+      }
     } finally {
       setLoading(false);
     }
@@ -413,6 +402,7 @@ export default function CustomerAuth() {
     event.preventDefault();
     const phone = validatePhoneOrShow(changePhone);
     if (!phone) return;
+
     if (!isValidPin(currentPin)) {
       toast.error('Current PIN must be exactly 4 digits.');
       return;
@@ -426,69 +416,148 @@ export default function CustomerAuth() {
       return;
     }
     if (changeNewPin !== changeConfirmPin) {
-      toast.error('New PIN confirmation does not match.');
+      toast.error('New PIN and Confirm PIN do not match.');
       return;
     }
 
     setLoading(true);
     try {
-      await postCustomerAuth('/api/v1/customer-auth/change-pin', {
+      await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/change-pin', {
         phone,
         customer_phone: phone,
         current_pin: currentPin,
         old_pin: currentPin,
         new_pin: changeNewPin,
       });
-      rememberAccount(phone);
-      setRegisteredOnThisDevice(true);
-      setLoginPhone(phone);
-      setLoginPin('');
       setCurrentPin('');
       setChangeNewPin('');
       setChangeConfirmPin('');
       setMode('login');
-      toast.success('PIN changed successfully. Login with your new PIN.');
+      toast.success('PIN changed successfully');
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Current PIN is incorrect.'));
+      toast.error(getErrorMessage(error, 'Could not change PIN'));
     } finally {
       setLoading(false);
     }
   }
 
+  function handleLogout() {
+    clearCustomerSession();
+    setActiveCustomer(null);
+    setMode('login');
+    setLoginPin('');
+    toast.success('Logged out');
+  }
+
+  function openWhatsApp() {
+    const phone = normalizePhone(loginPhone);
+    const message = encodeURIComponent(
+      `Hello Vita Napoli, I forgot my customer PIN. My registered mobile number is ${
+        isValidPhone(phone) ? phone : '________'
+      }. Please help me reset it.`,
+    );
+    window.open(`https://wa.me/${RESTAURANT_WHATSAPP}?text=${message}`, '_blank', 'noopener,noreferrer');
+  }
+
   const cardClass =
-    'space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6';
+    'space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6 shadow-2xl';
   const normalInputClass =
-    'mt-2 h-14 border-slate-700 bg-slate-900 text-white';
+    'mt-2 h-14 border-slate-700 bg-slate-900 text-white placeholder:text-slate-500';
+
+  const activeName = String(
+    activeCustomer?.name || activeCustomer?.customer_name || 'Customer',
+  );
+  const activePhone = String(
+    activeCustomer?.phone || activeCustomer?.customer_phone || rememberedPhone,
+  );
 
   return (
-    <div className="min-h-screen bg-black px-4 py-8 text-white">
-      <div className="mx-auto w-full max-w-md">
+    <div className="min-h-screen bg-black text-white">
+      <div className="mx-auto w-full max-w-md px-4 pb-16 pt-8">
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="mb-8 flex items-center gap-2 text-sm text-gray-400 transition hover:text-white"
+          className="mb-8 flex items-center gap-2 text-sm text-gray-400 hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
-        <div className="mb-9 text-center">
-          <h1 className="text-4xl font-black tracking-tight">
-            <span className="text-white">Vita</span>{' '}
-            <span className="text-red-600">Napoli</span>
+        <div className="mb-8 text-center">
+          <h1 className="text-4xl font-extrabold">
+            Vita <span className="text-red-600">Napoli</span>
           </h1>
           <p className="mt-2 text-gray-500">Customer Account</p>
         </div>
 
-        {(mode === 'login' || mode === 'signup') && !registeredOnThisDevice && (
-          <div className="mb-7 grid grid-cols-2 rounded-xl bg-slate-900 p-1">
+        {sessionChecking && (
+          <div className={cardClass}>
+            <p className="text-center text-gray-400">Checking customer session…</p>
+          </div>
+        )}
+
+        {!sessionChecking && activeCustomer && mode !== 'changePin' && (
+          <div className={cardClass}>
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-600/15">
+                <ShieldCheck className="h-9 w-9 text-green-500" />
+              </div>
+              <h2 className="text-2xl font-bold">Account logged in</h2>
+              <p className="mt-2 text-lg text-white">{activeName}</p>
+              <p className="text-sm text-gray-400">{activePhone}</p>
+            </div>
+
+            <Button
+              type="button"
+              onClick={() => navigate('/')}
+              className="h-12 w-full bg-red-600 hover:bg-red-700"
+            >
+              <Home className="mr-2 h-4 w-4" />
+              Open Customer App
+            </Button>
+
+            <Button
+              type="button"
+              onClick={() => navigate('/my-orders')}
+              variant="outline"
+              className="h-12 w-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800"
+            >
+              <ShoppingBag className="mr-2 h-4 w-4" />
+              My Orders
+            </Button>
+
+            <Button
+              type="button"
+              onClick={() => {
+                setChangePhone(activePhone);
+                setMode('changePin');
+              }}
+              variant="outline"
+              className="h-12 w-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800"
+            >
+              <KeyRound className="mr-2 h-4 w-4" />
+              Change PIN
+            </Button>
+
+            <Button
+              type="button"
+              onClick={handleLogout}
+              variant="ghost"
+              className="h-12 w-full text-red-400 hover:bg-red-600/10 hover:text-red-300"
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Logout
+            </Button>
+          </div>
+        )}
+
+        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && !registeredOnThisDevice && (
+          <div className="mb-7 grid grid-cols-2 rounded-xl border border-slate-800 bg-slate-950 p-1">
             <button
               type="button"
               onClick={() => setMode('login')}
-              className={`rounded-lg px-4 py-3 font-semibold transition ${
-                mode === 'login'
-                  ? 'bg-red-600 text-white'
-                  : 'text-gray-400 hover:text-white'
+              className={`rounded-lg px-4 py-4 font-semibold ${
+                mode === 'login' ? 'bg-red-600 text-white' : 'text-gray-400'
               }`}
             >
               Login
@@ -496,10 +565,8 @@ export default function CustomerAuth() {
             <button
               type="button"
               onClick={() => setMode('signup')}
-              className={`rounded-lg px-4 py-3 font-semibold transition ${
-                mode === 'signup'
-                  ? 'bg-red-600 text-white'
-                  : 'text-gray-400 hover:text-white'
+              className={`rounded-lg px-4 py-4 font-semibold ${
+                mode === 'signup' ? 'bg-red-600 text-white' : 'text-gray-400'
               }`}
             >
               Sign Up
@@ -507,7 +574,7 @@ export default function CustomerAuth() {
           </div>
         )}
 
-        {mode === 'login' && (
+        {!sessionChecking && !activeCustomer && mode === 'login' && (
           <form onSubmit={handleLogin} className={cardClass}>
             <div>
               <Label htmlFor="login-phone">Mobile Number</Label>
@@ -541,40 +608,51 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? 'Please wait…' : 'Login'}
+              {loading ? 'Logging in…' : 'Login'}
             </Button>
 
-            <div className="grid grid-cols-2 gap-3 border-t border-slate-800 pt-4">
+            <button
+              type="button"
+              onClick={() => setMode('forgotPin')}
+              className="w-full text-sm text-red-400 hover:text-red-300"
+            >
+              Forgot PIN?
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setChangePhone(loginPhone);
+                setMode('changePin');
+              }}
+              className="w-full text-sm text-gray-400 hover:text-white"
+            >
+              Change PIN
+            </button>
+
+            {registeredOnThisDevice && (
               <button
                 type="button"
                 onClick={() => {
-                  setForgotPhone(loginPhone);
-                  setMode('forgotPhone');
+                  localStorage.removeItem(DEVICE_ACCOUNT_KEY);
+                  setRegisteredOnThisDevice(false);
+                  setSignupPhone(loginPhone);
+                  setMode('signup');
                 }}
-                className="rounded-lg border border-red-900/60 px-3 py-3 text-sm font-medium text-red-400 hover:bg-red-950/30"
+                className="w-full text-xs text-gray-600 hover:text-gray-400"
               >
-                Forgot PIN?
+                This is a different/new mobile number
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setChangePhone(loginPhone);
-                  setMode('changePin');
-                }}
-                className="rounded-lg border border-slate-700 px-3 py-3 text-sm font-medium text-gray-300 hover:bg-slate-900"
-              >
-                Change PIN
-              </button>
-            </div>
+            )}
           </form>
         )}
 
-        {mode === 'signup' && !registeredOnThisDevice && (
-          <form onSubmit={sendSignupOtp} className={cardClass}>
-            <div className="flex items-start gap-3 rounded-xl border border-blue-900/50 bg-blue-950/20 p-3">
-              <ShieldCheck className="mt-0.5 h-5 w-5 text-blue-400" />
-              <p className="text-sm text-blue-200">
-                We will send an OTP to verify your mobile before creating the account.
+        {!sessionChecking && !activeCustomer && mode === 'signup' && !registeredOnThisDevice && (
+          <form onSubmit={handleSignup} className={cardClass}>
+            <div>
+              <h2 className="text-xl font-bold">Create Customer Account</h2>
+              <p className="mt-2 text-sm text-gray-400">
+                Enter your mobile number and create a private 4-digit PIN.
               </p>
             </div>
 
@@ -629,92 +707,40 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? 'Sending OTP…' : 'Send OTP'}
+              {loading ? 'Creating account…' : 'Create Account'}
             </Button>
           </form>
         )}
 
-        {mode === 'signupOtp' && (
-          <form onSubmit={verifySignupOtp} className={cardClass}>
-            <div>
-              <h2 className="text-xl font-bold">Verify Mobile Number</h2>
-              <p className="mt-2 text-sm text-gray-400">
-                Enter the OTP sent to {normalizePhone(signupPhone)}.
-              </p>
-            </div>
-
-            <div>
-              <Label htmlFor="signup-otp">OTP Code</Label>
-              <Input
-                id="signup-otp"
-                inputMode="numeric"
-                maxLength={10}
-                value={signupOtp}
-                onChange={(event) =>
-                  setSignupOtp(event.target.value.replace(/\D/g, '').slice(0, 10))
-                }
-                placeholder="Enter OTP"
-                className={`${normalInputClass} text-center text-xl tracking-[0.35em]`}
-                autoComplete="one-time-code"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
-            >
-              {loading ? 'Verifying…' : 'Verify & Create Account'}
-            </Button>
-
-            <button
-              type="button"
-              disabled={loading || resendSeconds > 0}
-              onClick={() => void sendSignupOtp()}
-              className="w-full text-sm text-red-400 disabled:text-gray-600"
-            >
-              {resendSeconds > 0 ? `Resend OTP in ${resendSeconds}s` : 'Resend OTP'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMode('signup')}
-              className="w-full text-sm text-gray-400 hover:text-white"
-            >
-              Change mobile number
-            </button>
-          </form>
-        )}
-
-        {mode === 'forgotPhone' && (
-          <form onSubmit={sendForgotOtp} className={cardClass}>
+        {!sessionChecking && !activeCustomer && mode === 'forgotPin' && (
+          <div className={cardClass}>
             <div>
               <h2 className="text-xl font-bold">Forgot PIN</h2>
-              <p className="mt-2 text-sm text-gray-400">
-                No current PIN is needed. We will verify your registered mobile by OTP.
+              <p className="mt-2 text-sm leading-6 text-gray-400">
+                OTP has been removed. For security, contact Vita Napoli and ask the shop to reset your PIN.
               </p>
             </div>
 
-            <div>
-              <Label htmlFor="forgot-phone">Registered Mobile Number</Label>
-              <Input
-                id="forgot-phone"
-                inputMode="tel"
-                value={forgotPhone}
-                onChange={(event) => setForgotPhone(event.target.value)}
-                placeholder="+971501234567"
-                className={normalInputClass}
-                autoComplete="tel"
-              />
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
+              Tell the restaurant your registered mobile number. Do not share any old PIN.
             </div>
 
             <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
+              type="button"
+              onClick={openWhatsApp}
+              className="h-13 w-full bg-green-600 hover:bg-green-700"
             >
-              {loading ? 'Sending OTP…' : 'Send OTP'}
+              <MessageCircle className="mr-2 h-5 w-5" />
+              WhatsApp Restaurant
             </Button>
+
+            <a
+              href={`tel:${RESTAURANT_PHONE_TEL}`}
+              className="flex h-13 w-full items-center justify-center rounded-md border border-slate-700 bg-slate-900 font-medium text-white hover:bg-slate-800"
+            >
+              <Phone className="mr-2 h-5 w-5" />
+              Call {RESTAURANT_PHONE_DISPLAY}
+            </a>
 
             <button
               type="button"
@@ -723,79 +749,15 @@ export default function CustomerAuth() {
             >
               Back to Login
             </button>
-          </form>
+          </div>
         )}
 
-        {mode === 'forgotOtp' && (
-          <form onSubmit={resetForgotPin} className={cardClass}>
-            <div>
-              <h2 className="text-xl font-bold">Create New PIN</h2>
-              <p className="mt-2 text-sm text-gray-400">
-                Enter the OTP sent to {normalizePhone(forgotPhone)} and choose a new PIN.
-              </p>
-            </div>
-
-            <div>
-              <Label htmlFor="forgot-otp">OTP Code</Label>
-              <Input
-                id="forgot-otp"
-                inputMode="numeric"
-                maxLength={10}
-                value={forgotOtp}
-                onChange={(event) =>
-                  setForgotOtp(event.target.value.replace(/\D/g, '').slice(0, 10))
-                }
-                placeholder="Enter OTP"
-                className={`${normalInputClass} text-center text-xl tracking-[0.35em]`}
-                autoComplete="one-time-code"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="forgot-new-pin">New 4-Digit PIN</Label>
-              <PinInput
-                id="forgot-new-pin"
-                value={forgotNewPin}
-                onChange={setForgotNewPin}
-                autoComplete="new-password"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="forgot-confirm-pin">Confirm New PIN</Label>
-              <PinInput
-                id="forgot-confirm-pin"
-                value={forgotConfirmPin}
-                onChange={setForgotConfirmPin}
-                autoComplete="new-password"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
-            >
-              {loading ? 'Saving…' : 'Verify OTP & Reset PIN'}
-            </Button>
-
-            <button
-              type="button"
-              disabled={loading || resendSeconds > 0}
-              onClick={() => void sendForgotOtp()}
-              className="w-full text-sm text-red-400 disabled:text-gray-600"
-            >
-              {resendSeconds > 0 ? `Resend OTP in ${resendSeconds}s` : 'Resend OTP'}
-            </button>
-          </form>
-        )}
-
-        {mode === 'changePin' && (
+        {!sessionChecking && mode === 'changePin' && (
           <form onSubmit={handleChangePin} className={cardClass}>
             <div>
               <h2 className="text-xl font-bold">Change PIN</h2>
               <p className="mt-2 text-sm text-gray-400">
-                Use this only when you remember your current PIN.
+                Use this option when you remember your current PIN.
               </p>
             </div>
 
@@ -862,7 +824,7 @@ export default function CustomerAuth() {
 
         <div className="mt-8 flex items-center justify-center gap-2 text-xs text-gray-700">
           <KeyRound className="h-3.5 w-3.5" />
-          Never share your PIN or OTP with anyone.
+          Never share your PIN with anyone.
         </div>
       </div>
     </div>
