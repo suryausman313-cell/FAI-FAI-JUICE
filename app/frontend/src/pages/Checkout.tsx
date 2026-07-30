@@ -11,6 +11,7 @@ import CustomerLayout from '@/components/CustomerLayout';
 import { client, CartItem, Offer } from '@/lib/api';
 import { getCart, getCartTotal, clearCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
+import { getGuestSessionId } from '@/lib/guest-session';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -36,8 +37,6 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
-  const [authChecked, setAuthChecked] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Field-level validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -104,7 +103,6 @@ export default function Checkout() {
 
   useEffect(() => {
     setCart(getCart());
-    checkAuth();
     loadDeliverySettings();
   }, []);
 
@@ -287,19 +285,6 @@ export default function Checkout() {
     return R * c;
   }
 
-  async function checkAuth() {
-    try {
-      const res = await client.auth.me();
-      if (res?.data) {
-        setIsLoggedIn(true);
-      }
-    } catch {
-      setIsLoggedIn(false);
-    } finally {
-      setAuthChecked(true);
-    }
-  }
-
   async function loadDeliverySettings() {
     try {
       // Fetch from backend entity (accessible to all users)
@@ -409,114 +394,77 @@ export default function Checkout() {
   }
 
   async function validatePromoCode() {
-    const normalizedCode = promoCode.trim().toUpperCase();
-
-    if (!normalizedCode) {
+    if (!promoCode.trim()) {
       toast.error('Please enter a promo code');
       return;
     }
-
     setValidatingPromo(true);
-
     try {
-      const res = await client.entities.offers.query({
-        query: { is_active: true },
-        limit: 200,
-      });
-      const offers = (res?.data?.items || []) as Offer[];
+      const res = await client.entities.offers.query({ query: { is_active: true }, limit: 50 });
+      const offers = res?.data?.items || [];
       const matchedOffer = offers.find(
-        (offer: any) =>
-          String(offer.promo_code || '').trim().toUpperCase() === normalizedCode,
-      ) as any;
-
-      if (!matchedOffer) {
-        throw new Error('Invalid promo code');
-      }
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      if (matchedOffer.start_date) {
-        const startDate = new Date(`${matchedOffer.start_date}T00:00:00`);
-        if (!Number.isNaN(startDate.getTime()) && today < startDate) {
-          throw new Error('This offer has not started yet');
-        }
-      }
-
-      if (matchedOffer.end_date) {
-        const endDate = new Date(`${matchedOffer.end_date}T23:59:59`);
-        if (!Number.isNaN(endDate.getTime()) && today > endDate) {
-          throw new Error('This promo code has expired');
-        }
-      }
-
-      const minimumOrder = Number(matchedOffer.minimum_order_amount || 0);
-      if (subtotal < minimumOrder) {
-        throw new Error(
-          `Minimum order for this offer is AED ${minimumOrder.toFixed(2)}`,
-        );
-      }
-
-      let previousOrders: any[] = [];
-      try {
-        const ordersRes = await client.apiCall.invoke({
-          url: '/api/v1/orders/my-orders',
-          method: 'GET',
-        });
-        previousOrders = ordersRes?.data?.items || ordersRes?.data || [];
-      } catch {
-        // Backend validates again while placing the order.
-      }
-
-      const validPreviousOrders = previousOrders.filter(
-        (order: any) =>
-          order.status !== 'cancelled' && order.status !== 'expired',
+        (o: any) => o.promo_code && o.promo_code.toLowerCase() === promoCode.trim().toLowerCase()
       );
-
-      if (matchedOffer.first_order_only && validPreviousOrders.length > 0) {
-        throw new Error('This offer is valid for first orders only');
-      }
-
-      const usageLimit = Number(matchedOffer.usage_limit_per_customer ?? 1);
-      if (usageLimit > 0) {
-        const usageCount = validPreviousOrders.filter((order: any) => {
-          const savedCode = String(order.promo_code || '').toUpperCase();
-          const notes = String(order.order_notes || '').toUpperCase();
-          return savedCode === normalizedCode || notes.includes(`PROMO: ${normalizedCode}`);
-        }).length;
-
-        if (usageCount >= usageLimit) {
-          throw new Error('Promo usage limit reached');
+      if (matchedOffer && matchedOffer.discount_percent > 0) {
+        // Get user's previous orders for usage validation
+        let previousOrders: any[] = [];
+        try {
+          const ordersRes = await client.apiCall.invoke({
+            url: `/api/v1/orders/my-orders?session_id=${encodeURIComponent(getGuestSessionId())}`,
+            method: 'GET',
+          });
+          previousOrders = ordersRes?.data?.items || ordersRes?.data || [];
+        } catch {
+          // If we can't check orders (not logged in), allow it - will be validated on backend
         }
+
+        // Check if this is a "first order only" offer
+        if (matchedOffer.first_order_only) {
+          const completedOrders = previousOrders.filter(
+            (o: any) => o.status !== 'cancelled' && o.status !== 'expired'
+          );
+          if (completedOrders.length > 0) {
+            toast.error('This offer is valid for first orders only');
+            setPromoApplied(false);
+            setPromoDiscount(0);
+            setPromoOffer(null);
+            setValidatingPromo(false);
+            return;
+          }
+        }
+
+        // Check usage limit per customer (by promo code in order notes)
+        const usageLimit = matchedOffer.usage_limit_per_customer ?? 1; // default 1 time
+        if (usageLimit > 0 && previousOrders.length > 0) {
+          // Count how many times this promo was used by this customer
+          const promoCodeUpper = matchedOffer.promo_code.toUpperCase();
+          const usageCount = previousOrders.filter((o: any) => {
+            const notes = (o.order_notes || '').toUpperCase();
+            return notes.includes(`PROMO: ${promoCodeUpper}`) && o.status !== 'cancelled' && o.status !== 'expired';
+          }).length;
+
+          if (usageCount >= usageLimit) {
+            toast.error(`This offer has already been used${usageLimit === 1 ? '' : ` ${usageLimit} times`}. Limit reached.`);
+            setPromoApplied(false);
+            setPromoDiscount(0);
+            setPromoOffer(null);
+            setValidatingPromo(false);
+            return;
+          }
+        }
+
+        setPromoApplied(true);
+        setPromoDiscount(matchedOffer.discount_percent);
+        setPromoOffer(matchedOffer);
+        toast.success(`🎉 Promo code applied! ${matchedOffer.discount_percent}% off`);
+      } else {
+        toast.error('Invalid or expired promo code');
+        setPromoApplied(false);
+        setPromoDiscount(0);
+        setPromoOffer(null);
       }
-
-      const discountType =
-        matchedOffer.discount_type === 'fixed' ? 'fixed' : 'percentage';
-      const percent = Number(matchedOffer.discount_percent || 0);
-      const fixedAmount = Number(matchedOffer.fixed_discount_amount || 0);
-
-      if (discountType === 'percentage' && (percent <= 0 || percent > 100)) {
-        throw new Error('This offer has an invalid percentage discount');
-      }
-      if (discountType === 'fixed' && fixedAmount <= 0) {
-        throw new Error('This offer has an invalid fixed discount');
-      }
-
-      setPromoApplied(true);
-      setPromoDiscount(discountType === 'percentage' ? percent : fixedAmount);
-      setPromoOffer(matchedOffer);
-      setPromoCode(normalizedCode);
-
-      toast.success(
-        discountType === 'fixed'
-          ? `🎉 AED ${fixedAmount.toFixed(2)} discount applied!`
-          : `🎉 ${percent}% discount applied!`,
-      );
-    } catch (error) {
-      setPromoApplied(false);
-      setPromoDiscount(0);
-      setPromoOffer(null);
-      toast.error(error instanceof Error ? error.message : 'Invalid promo code');
+    } catch {
+      toast.error('Failed to validate promo code');
     } finally {
       setValidatingPromo(false);
     }
@@ -531,22 +479,7 @@ export default function Checkout() {
 
   const subtotal = getCartTotal(cart);
   const deliveryFee = orderType === 'delivery' ? (locationShared ? calculatedDeliveryCharge : deliveryCharge) : 0;
-  const promoDiscountType = (promoOffer as any)?.discount_type === 'fixed' ? 'fixed' : 'percentage';
-  const rawDiscountAmount = promoApplied
-    ? promoDiscountType === 'fixed'
-      ? Number((promoOffer as any)?.fixed_discount_amount || promoDiscount || 0)
-      : (subtotal * Number((promoOffer as any)?.discount_percent || promoDiscount || 0)) / 100
-    : 0;
-  const maximumDiscount = Number((promoOffer as any)?.maximum_discount_amount || 0);
-  const discountAmount = Math.max(
-    0,
-    Math.min(
-      subtotal,
-      maximumDiscount > 0
-        ? Math.min(rawDiscountAmount, maximumDiscount)
-        : rawDiscountAmount,
-    ),
-  );
+  const discountAmount = promoApplied ? (subtotal * promoDiscount) / 100 : 0;
   // Service fee only applies based on admin setting (pickup/delivery/both)
   const shouldApplyServiceFee = serviceFeeEnabled && (
     serviceFeeAppliesTo === 'both' ||
@@ -661,9 +594,6 @@ export default function Checkout() {
     if (cart.length === 0) {
       newErrors.cart = 'Your cart is empty — please add items first';
     }
-    if (!isLoggedIn) {
-      newErrors.auth = 'Please login to place your order';
-    }
 
     return newErrors;
   }
@@ -677,12 +607,6 @@ export default function Checkout() {
     // Block if shop is closed
     if (shopClosed) {
       toast.error(shopClosedMessage || 'Restaurant is currently closed.');
-      return;
-    }
-
-    // Block if not logged in
-    if (!isLoggedIn) {
-      toast.error('Please login to place your order.');
       return;
     }
 
@@ -702,18 +626,12 @@ export default function Checkout() {
         location: 'delivery-map',
         payment: 'payment-section',
         cart: 'order-summary',
-        auth: 'auth-section',
       };
       const firstErrorKey = Object.keys(validationErrors)[0];
       const elementId = errorFieldIds[firstErrorKey];
       if (elementId) {
         const el = document.getElementById(elementId);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-
-      // Handle auth redirect
-      if (validationErrors.auth) {
-        client.auth.toLogin();
       }
       return;
     }
@@ -743,11 +661,7 @@ export default function Checkout() {
         }
       }
       if (promoApplied && promoOffer) {
-        noteParts.push(
-          promoDiscountType === 'fixed'
-            ? `Promo: ${promoOffer.promo_code} (-AED ${discountAmount.toFixed(2)})`
-            : `Promo: ${promoOffer.promo_code} (-${Number((promoOffer as any).discount_percent || promoDiscount)}%)`,
-        );
+        noteParts.push(`Promo: ${promoOffer.promo_code} (-${promoDiscount}%)`);
       }
       noteParts.push(`Order Type: ${orderType === 'delivery' ? 'Delivery' : 'Pickup'}`);
       const fullNotes = noteParts.filter(Boolean).join(' | ');
@@ -756,20 +670,17 @@ export default function Checkout() {
         url: '/api/v1/orders/place',
         method: 'POST',
         data: {
+          session_id: getGuestSessionId(),
           customer_name: name,
           customer_phone: phone,
           order_notes: fullNotes,
-          payment_method: paymentMethod === 'cash' ? 'Cash on Pickup' : 'Card on Pickup',
-          subtotal_amount: subtotal,
-          promo_code: promoApplied ? String(promoOffer?.promo_code || promoCode).toUpperCase() : '',
-          discount_type: promoApplied ? promoDiscountType : '',
-          discount_percent: promoApplied && promoDiscountType === 'percentage'
-            ? Number((promoOffer as any)?.discount_percent || promoDiscount || 0)
-            : 0,
-          discount_amount: discountAmount,
+          payment_method: paymentMethod === 'cash'
+            ? (orderType === 'delivery' ? 'Cash on Delivery' : 'Cash on Pickup')
+            : (orderType === 'delivery' ? 'Card on Delivery' : 'Card on Pickup'),
           total_amount: total,
           service_fee: serviceFee,
           small_order_fee: smallOrderFee,
+          delivery_charge: deliveryFee,
           tip_amount: tipAmount,
           tip_type: tipAmount > 0 ? (orderType === 'delivery' ? 'rider' : 'shop') : '',
           items_json: JSON.stringify(itemsData),
@@ -799,32 +710,10 @@ export default function Checkout() {
     }
   }
 
-  if (!authChecked) {
-    return (
-      <CustomerLayout>
-        <div className="bg-black min-h-screen flex items-center justify-center">
-          <div className="text-gray-400">Loading...</div>
-        </div>
-      </CustomerLayout>
-    );
-  }
-
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-6 max-w-lg mx-auto">
         <h1 className="text-white text-2xl font-bold mb-6">{t('checkout.title')}</h1>
-
-        {!isLoggedIn && (
-          <div id="auth-section" className="mb-6 p-4 rounded-xl bg-red-600/10 border border-red-600/30">
-            <p className="text-red-400 text-sm mb-3">Please login to place your order</p>
-            <Button
-              onClick={() => client.auth.toLogin()}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-            >
-              Login / Sign Up
-            </Button>
-          </div>
-        )}
 
         {/* Shop Closed Banner */}
         {shopClosed && (
@@ -1099,11 +988,7 @@ export default function Checkout() {
                 <Tag className="w-5 h-5 text-green-400" />
                 <div className="flex-1">
                   <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} applied!</p>
-                  <p className="text-green-400/70 text-xs">
-                    {promoDiscountType === 'fixed'
-                      ? `AED ${discountAmount.toFixed(2)} discount`
-                      : `${Number((promoOffer as any)?.discount_percent || promoDiscount)}% discount — saving AED ${discountAmount.toFixed(2)}`}
-                  </p>
+                  <p className="text-green-400/70 text-xs">{promoDiscount}% discount — saving AED {discountAmount.toFixed(2)}</p>
                 </div>
                 <button type="button" onClick={removePromo} className="text-gray-400 text-xs hover:text-red-400 cursor-pointer">
                   Remove
@@ -1265,11 +1150,7 @@ export default function Checkout() {
               )}
               {promoApplied && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">
-                    {promoDiscountType === 'fixed'
-                      ? `Discount (${promoOffer?.promo_code || 'Promo'})`
-                      : `Discount (${Number((promoOffer as any)?.discount_percent || promoDiscount)}%)`}
-                  </span>
+                  <span className="text-green-400">Discount ({promoDiscount}%)</span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
               )}
@@ -1293,7 +1174,7 @@ export default function Checkout() {
 
           <Button
             type="submit"
-            disabled={loading || shopClosed || !isLoggedIn || (orderType === 'delivery' && (!!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
+            disabled={loading || shopClosed || (orderType === 'delivery' && (!!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
             className="w-full bg-red-600 hover:bg-red-700 text-white py-6 text-lg font-semibold rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? t('checkout.placing') : `${t('checkout.place_order')} — ${t('common.aed')} ${total.toFixed(2)}`}
