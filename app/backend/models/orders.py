@@ -19,14 +19,21 @@ class Orders(Base):
 
     user_id = Column(String, nullable=False)
 
-    customer_name = Column(
-        String(200),
-        nullable=False,
+    customer_name = Column(String(200), nullable=False)
+    customer_phone = Column(String(50), nullable=False)
+
+    customer_address = Column(
+        String,
+        nullable=True,
+        default="",
+        server_default="",
     )
 
-    customer_phone = Column(
-        String(50),
-        nullable=False,
+    order_type = Column(
+        String(30),
+        nullable=True,
+        default="pickup",
+        server_default="pickup",
     )
 
     pickup_time = Column(
@@ -43,9 +50,13 @@ class Orders(Base):
         server_default="",
     )
 
-    payment_method = Column(
-        String(50),
-        nullable=False,
+    payment_method = Column(String(50), nullable=False)
+
+    payment_status = Column(
+        String(30),
+        nullable=True,
+        default="unpaid",
+        server_default="unpaid",
     )
 
     status = Column(
@@ -55,49 +66,26 @@ class Orders(Base):
         server_default="new",
     )
 
-    # Final total customer ko pay karna hai
-    total_amount = Column(
+    # Food amount before discount.
+    food_subtotal = Column(
         Float,
-        nullable=False,
-    )
-
-    # Items ka total discount se pehle
-    subtotal_amount = Column(
-        Float,
-        nullable=False,
+        nullable=True,
         default=0,
         server_default="0",
     )
 
-    # Applied promo code
-    promo_code = Column(
-        String(50),
-        nullable=True,
-        default="",
-        server_default="",
-        index=True,
-    )
-
-    # Discount type: percentage ya fixed
-    discount_type = Column(
-        String(20),
-        nullable=True,
-        default="",
-        server_default="",
-    )
-
-    # Percentage value, jaise 10%
-    discount_percent = Column(
-        Float,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-
-    # Actual discount AED me
+    # Discount only applies to food/menu sale.
     discount_amount = Column(
         Float,
-        nullable=False,
+        nullable=True,
+        default=0,
+        server_default="0",
+    )
+
+    # Food amount after discount.
+    food_net_total = Column(
+        Float,
+        nullable=True,
         default=0,
         server_default="0",
     )
@@ -123,6 +111,13 @@ class Orders(Base):
         server_default="0",
     )
 
+    tax_amount = Column(
+        Float,
+        nullable=True,
+        default=0,
+        server_default="0",
+    )
+
     tip_amount = Column(
         Float,
         nullable=True,
@@ -130,7 +125,6 @@ class Orders(Base):
         server_default="0",
     )
 
-    # rider ya shop
     tip_type = Column(
         String(20),
         nullable=True,
@@ -138,10 +132,29 @@ class Orders(Base):
         server_default="",
     )
 
-    items_json = Column(
+    # Final amount paid by customer.
+    total_amount = Column(Float, nullable=False)
+
+    cancellation_reason = Column(
         String,
-        nullable=False,
+        nullable=True,
+        default="",
+        server_default="",
     )
+
+    cancelled_by = Column(
+        String(30),
+        nullable=True,
+        default="",
+        server_default="",
+    )
+
+    cancelled_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    items_json = Column(String, nullable=False)
 
     created_at = Column(
         DateTime(timezone=True),
