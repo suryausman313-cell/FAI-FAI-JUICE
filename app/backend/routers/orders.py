@@ -2,30 +2,36 @@
 # @Desc: Customer-facing order placement API
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc
 from typing import Optional
 
 from core.database import get_db
-from dependencies.auth import get_current_user
-from schemas.auth import UserResponse
 from models.orders import Orders
 from models.menu_items import Menu_items
-from models.offers import Offers
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 
 
+def get_guest_user_id(session_id: str) -> str:
+    """Build a stable anonymous order owner ID without requiring customer login."""
+    value = (session_id or "").strip()
+    if len(value) < 8 or len(value) > 120:
+        raise HTTPException(status_code=400, detail="Invalid customer session. Please refresh the app and try again.")
+    if not all(ch.isalnum() or ch in "_-" for ch in value):
+        raise HTTPException(status_code=400, detail="Invalid customer session. Please refresh the app and try again.")
+    return f"guest:{value}"
+
+
 class PlaceOrderRequest(BaseModel):
+    session_id: str
     customer_name: str
     customer_phone: str
     order_notes: Optional[str] = ""
     payment_method: str
     total_amount: float
-    subtotal_amount: Optional[float] = 0
-    promo_code: Optional[str] = ""
     service_fee: Optional[float] = 0
     small_order_fee: Optional[float] = 0
     delivery_charge: Optional[float] = 0
@@ -49,19 +55,13 @@ class PlaceOrderFullRequest(PlaceOrderRequest):
 @router.post("/place")
 async def place_order(
     data: PlaceOrderFullRequest,
-    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Place a new order with duplicate prevention, menu validation, shop-closed check, and zone validation"""
     try:
         from datetime import datetime, timezone, timedelta
 
-        calculated_subtotal = 0.0
-        verified_delivery_charge = 0.0
-        verified_discount_amount = 0.0
-        verified_discount_type = ""
-        verified_discount_percent = 0.0
-        verified_promo_code = ""
+        guest_user_id = get_guest_user_id(data.session_id)
 
         # ===== SHOP OPEN/CLOSED CHECK =====
         from models.restaurant_settings import Restaurant_settings
@@ -166,18 +166,16 @@ async def place_order(
                         )
 
                     # Verify that the matched zone has a valid charge > 0
-                    matched_zone_charge = float(matched_zone.charge or 0)
+                    matched_zone_charge = matched_zone.charge or 0
                     if matched_zone_charge <= 0:
                         logging.warning(
-                            f"Delivery order rejected - zone charge is 0 for user {current_user.id}, "
+                            f"Delivery order rejected - zone charge is 0 for user {guest_user_id}, "
                             f"distance={distance_km:.2f}km"
                         )
                         raise HTTPException(
                             status_code=400,
                             detail="Unable to calculate delivery charge for your location. Please contact us or try again."
                         )
-
-                    verified_delivery_charge = round(matched_zone_charge, 2)
 
         # ===== MENU ITEM VALIDATION - Reject fake orders =====
         try:
@@ -239,7 +237,7 @@ async def place_order(
 
                 if invalid_items:
                     logging.warning(
-                        f"FAKE ORDER REJECTED for user {current_user.id}: "
+                        f"FAKE ORDER REJECTED for user {guest_user_id}: "
                         f"Invalid items: {invalid_items}. "
                         f"Valid menu has {len(valid_menu_map)} items."
                     )
@@ -248,207 +246,50 @@ async def place_order(
                         detail=f"Order contains items not on our menu: {', '.join(invalid_items[:3])}. Please refresh and try again."
                     )
 
-                # ===== SECURE PROMO + TOTAL VALIDATION =====
-                verified_promo_code = (data.promo_code or "").strip().upper()
+                # ===== PRICE VALIDATION - Prevent price manipulation =====
+                # Allow tolerance for fees (service fee, small order fee, delivery, tips)
+                # but reject if total is unreasonably low (someone trying to pay less)
+                max_fees = (data.service_fee or 0) + (data.small_order_fee or 0) + (data.tip_amount or 0)
+                expected_minimum = calculated_subtotal * 0.5  # Allow 50% tolerance for discounts/promos
+                expected_maximum = calculated_subtotal + max_fees + 200  # Allow up to 200 AED extra for delivery + fees
 
-                if verified_promo_code:
-                    offer_result = await db.execute(
-                        select(Offers).where(
-                            func.upper(func.trim(Offers.promo_code)) == verified_promo_code,
-                            Offers.is_active == True,
-                        ).limit(1)
-                    )
-                    offer = offer_result.scalar_one_or_none()
-
-                    if not offer:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Promo code is invalid or inactive",
-                        )
-
-                    today = datetime.now(timezone.utc).date()
-
-                    def offer_date(value):
-                        if not value:
-                            return None
-                        try:
-                            return datetime.fromisoformat(
-                                str(value).strip().replace("Z", "+00:00")
-                            ).date()
-                        except ValueError:
-                            try:
-                                return datetime.strptime(
-                                    str(value).strip(), "%Y-%m-%d"
-                                ).date()
-                            except ValueError:
-                                return None
-
-                    start_date = offer_date(offer.start_date)
-                    end_date = offer_date(offer.end_date)
-
-                    if start_date and today < start_date:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Promo code is not active yet",
-                        )
-
-                    if end_date and today > end_date:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Promo code has expired",
-                        )
-
-                    minimum_order = float(
-                        getattr(offer, "minimum_order_amount", 0) or 0
-                    )
-                    if calculated_subtotal < minimum_order:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                f"Minimum order for this promo is AED "
-                                f"{minimum_order:.2f}"
-                            ),
-                        )
-
-                    if getattr(offer, "first_order_only", False):
-                        previous_result = await db.execute(
-                            select(func.count(Orders.id)).where(
-                                Orders.user_id == current_user.id,
-                                Orders.status != "cancelled",
-                            )
-                        )
-                        if int(previous_result.scalar() or 0) > 0:
-                            raise HTTPException(
-                                status_code=400,
-                                detail="This promo is only for the first order",
-                            )
-
-                    customer_limit = int(
-                        getattr(offer, "usage_limit_per_customer", 0) or 0
-                    )
-                    if customer_limit > 0:
-                        customer_usage_result = await db.execute(
-                            select(func.count(Orders.id)).where(
-                                Orders.user_id == current_user.id,
-                                func.upper(func.trim(Orders.promo_code))
-                                == verified_promo_code,
-                                Orders.status != "cancelled",
-                            )
-                        )
-                        customer_usage = int(
-                            customer_usage_result.scalar() or 0
-                        )
-                        if customer_usage >= customer_limit:
-                            raise HTTPException(
-                                status_code=400,
-                                detail="You have already used this promo code",
-                            )
-
-                    total_limit = int(
-                        getattr(offer, "total_usage_limit", 0) or 0
-                    )
-                    if total_limit > 0:
-                        total_usage_result = await db.execute(
-                            select(func.count(Orders.id)).where(
-                                func.upper(func.trim(Orders.promo_code))
-                                == verified_promo_code,
-                                Orders.status != "cancelled",
-                            )
-                        )
-                        total_usage = int(total_usage_result.scalar() or 0)
-                        if total_usage >= total_limit:
-                            raise HTTPException(
-                                status_code=400,
-                                detail="This promo code usage limit has been reached",
-                            )
-
-                    verified_discount_type = (
-                        getattr(offer, "discount_type", "percentage")
-                        or "percentage"
-                    ).strip().lower()
-
-                    if verified_discount_type == "fixed":
-                        verified_discount_amount = float(
-                            getattr(offer, "fixed_discount_amount", 0) or 0
-                        )
-                    else:
-                        verified_discount_type = "percentage"
-                        verified_discount_percent = float(
-                            getattr(offer, "discount_percent", 0) or 0
-                        )
-                        verified_discount_amount = (
-                            calculated_subtotal
-                            * verified_discount_percent
-                            / 100
-                        )
-
-                        maximum_discount = float(
-                            getattr(offer, "maximum_discount_amount", 0) or 0
-                        )
-                        if maximum_discount > 0:
-                            verified_discount_amount = min(
-                                verified_discount_amount,
-                                maximum_discount,
-                            )
-
-                    verified_discount_amount = round(
-                        min(verified_discount_amount, calculated_subtotal),
-                        2,
-                    )
-
-                if (data.tip_amount or 0) < 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Tip amount cannot be negative",
-                    )
-                if (data.tip_amount or 0) > 500:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Tip amount exceeds maximum allowed (AED 500)",
-                    )
-                if data.tip_type and data.tip_type not in (
-                    "rider", "shop", ""
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid tip type",
-                    )
-
-                service_fee = round(max(float(data.service_fee or 0), 0), 2)
-                small_order_fee = round(
-                    max(float(data.small_order_fee or 0), 0), 2
-                )
-                tip_amount = round(max(float(data.tip_amount or 0), 0), 2)
-
-                expected_total = round(
-                    calculated_subtotal
-                    + service_fee
-                    + small_order_fee
-                    + verified_delivery_charge
-                    + tip_amount
-                    - verified_discount_amount,
-                    2,
-                )
-
-                if expected_total < 0:
-                    expected_total = 0
-
-                if abs(round(float(data.total_amount), 2) - expected_total) > 0.05:
+                if data.total_amount < 0:
                     logging.warning(
-                        "ORDER TOTAL MISMATCH user=%s claimed=%s expected=%s",
-                        current_user.id,
-                        data.total_amount,
-                        expected_total,
+                        f"FAKE ORDER REJECTED - negative total for user {guest_user_id}: "
+                        f"total={data.total_amount}"
+                    )
+                    raise HTTPException(status_code=400, detail="Invalid order total")
+
+                if calculated_subtotal > 0 and data.total_amount < expected_minimum:
+                    logging.warning(
+                        f"PRICE MANIPULATION REJECTED for user {guest_user_id}: "
+                        f"claimed_total={data.total_amount}, calculated_subtotal={calculated_subtotal}, "
+                        f"expected_min={expected_minimum}"
                     )
                     raise HTTPException(
                         status_code=400,
-                        detail=(
-                            "Order total changed. Please refresh checkout "
-                            "and apply the promo code again."
-                        ),
+                        detail="Order total doesn't match item prices. Please refresh your cart and try again."
                     )
-                # ===== END SECURE PROMO + TOTAL VALIDATION =====
 
+                if data.total_amount > expected_maximum:
+                    logging.warning(
+                        f"SUSPICIOUS ORDER for user {guest_user_id}: "
+                        f"claimed_total={data.total_amount}, calculated_max={expected_maximum}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Order total seems incorrect. Please refresh your cart and try again."
+                    )
+                # ===== END PRICE VALIDATION =====
+
+                # ===== TIP VALIDATION =====
+                if (data.tip_amount or 0) < 0:
+                    raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
+                if (data.tip_amount or 0) > 500:
+                    raise HTTPException(status_code=400, detail="Tip amount exceeds maximum allowed (AED 500)")
+                if data.tip_type and data.tip_type not in ('rider', 'shop', ''):
+                    raise HTTPException(status_code=400, detail="Invalid tip type")
+                # ===== END TIP VALIDATION =====
 
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid order items format")
@@ -461,13 +302,13 @@ async def place_order(
         five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
         rate_check = await db.execute(
             select(Orders).where(
-                Orders.user_id == current_user.id,
+                Orders.user_id == guest_user_id,
                 Orders.created_at >= five_minutes_ago,
             )
         )
         recent_orders = rate_check.scalars().all()
         if len(recent_orders) >= 5:
-            logging.warning(f"RATE LIMIT: User {current_user.id} attempted to place more than 5 orders in 5 minutes")
+            logging.warning(f"RATE LIMIT: User {guest_user_id} attempted to place more than 5 orders in 5 minutes")
             raise HTTPException(
                 status_code=429,
                 detail="Too many orders placed recently. Please wait a few minutes before ordering again."
@@ -478,9 +319,9 @@ async def place_order(
         sixty_seconds_ago = datetime.now(timezone.utc) - timedelta(seconds=60)
         duplicate_check = await db.execute(
             select(Orders).where(
-                Orders.user_id == current_user.id,
+                Orders.user_id == guest_user_id,
                 Orders.items_json == data.items_json,
-                Orders.total_amount == expected_total,
+                Orders.total_amount == data.total_amount,
                 Orders.created_at >= sixty_seconds_ago,
                 Orders.status != "cancelled",
             ).order_by(desc(Orders.created_at)).limit(1)
@@ -488,7 +329,7 @@ async def place_order(
         existing_order = duplicate_check.scalar_one_or_none()
         if existing_order:
             # Return the existing order instead of creating a duplicate
-            logging.warning(f"Duplicate order prevented for user {current_user.id}, returning existing order {existing_order.id}")
+            logging.warning(f"Duplicate order prevented for user {guest_user_id}, returning existing order {existing_order.id}")
             return {
                 "success": True,
                 "order_id": existing_order.id,
@@ -497,22 +338,17 @@ async def place_order(
             }
 
         order = Orders(
-            user_id=current_user.id,
+            user_id=guest_user_id,
             customer_name=data.customer_name,
             customer_phone=data.customer_phone,
             pickup_time="",
             order_notes=data.order_notes or "",
             payment_method=data.payment_method,
             status="new",
-            total_amount=expected_total,
-            subtotal_amount=round(calculated_subtotal, 2),
-            promo_code=verified_promo_code,
-            discount_type=verified_discount_type,
-            discount_percent=round(verified_discount_percent, 2),
-            discount_amount=verified_discount_amount,
-            service_fee=service_fee,
-            small_order_fee=small_order_fee,
-            delivery_charge=verified_delivery_charge,
+            total_amount=data.total_amount,
+            service_fee=data.service_fee or 0,
+            small_order_fee=data.small_order_fee or 0,
+            delivery_charge=data.delivery_charge or 0,
             tip_amount=data.tip_amount or 0,
             tip_type=data.tip_type or "",
             items_json=data.items_json,
@@ -535,6 +371,7 @@ async def place_order(
 
 
 class CancelOrderRequest(BaseModel):
+    session_id: str
     reason: Optional[str] = ""
 
 
@@ -542,13 +379,13 @@ class CancelOrderRequest(BaseModel):
 async def cancel_order(
     order_id: int,
     data: CancelOrderRequest,
-    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Customer cancels their own order (if allowed by admin settings)"""
+    """Customer cancels their own guest order (if allowed by admin settings)."""
     try:
+        guest_user_id = get_guest_user_id(data.session_id)
         result = await db.execute(
-            select(Orders).where(Orders.id == order_id, Orders.user_id == current_user.id)
+            select(Orders).where(Orders.id == order_id, Orders.user_id == guest_user_id)
         )
         order = result.scalar_one_or_none()
 
@@ -606,17 +443,18 @@ async def cancel_order(
 
 @router.get("/my-orders")
 async def get_my_orders(
-    current_user: UserResponse = Depends(get_current_user),
+    session_id: str = Query(..., min_length=8, max_length=120),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get orders for the current user, including delivery/rider info"""
+    """Get orders for the current guest session, including delivery/rider info."""
     try:
+        guest_user_id = get_guest_user_id(session_id)
         from models.delivery_assignments import Delivery_assignments
         from models.riders import Riders
 
         result = await db.execute(
             select(Orders)
-            .where(Orders.user_id == current_user.id)
+            .where(Orders.user_id == guest_user_id)
             .order_by(desc(Orders.created_at))
             .limit(50)
         )
@@ -633,11 +471,6 @@ async def get_my_orders(
                 "payment_method": order.payment_method,
                 "status": order.status,
                 "total_amount": order.total_amount,
-                "subtotal_amount": order.subtotal_amount or 0,
-                "promo_code": order.promo_code or "",
-                "discount_type": order.discount_type or "",
-                "discount_percent": order.discount_percent or 0,
-                "discount_amount": order.discount_amount or 0,
                 "service_fee": order.service_fee or 0,
                 "small_order_fee": order.small_order_fee or 0,
                 "delivery_charge": order.delivery_charge or 0,
