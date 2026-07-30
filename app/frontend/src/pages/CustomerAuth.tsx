@@ -333,6 +333,7 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setLoginPin('');
       toast.success('Login successful');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Login failed');
       toast.error(message);
@@ -384,6 +385,7 @@ export default function CustomerAuth() {
       setSignupPin('');
       setSignupConfirmPin('');
       toast.success('Account created successfully');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Could not create account');
       toast.error(message);
