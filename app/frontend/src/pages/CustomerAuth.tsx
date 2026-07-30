@@ -281,6 +281,18 @@ export default function CustomerAuth() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Customer already logged in ho to /account screen par na roko.
+  // Installed app agar purane /account start URL se khule tab bhi seedha Home khulega.
+  useEffect(() => {
+    if (!sessionChecking && activeCustomer && mode !== 'changePin') {
+      const timer = window.setTimeout(() => {
+        window.location.replace('/');
+      }, 50);
+
+      return () => window.clearTimeout(timer);
+    }
+  }, [sessionChecking, activeCustomer, mode]);
+
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
 
@@ -333,7 +345,7 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setLoginPin('');
       toast.success('Login successful');
-      navigate('/', { replace: true });
+      window.location.replace('/');
     } catch (error) {
       const message = getErrorMessage(error, 'Login failed');
       toast.error(message);
@@ -385,7 +397,7 @@ export default function CustomerAuth() {
       setSignupPin('');
       setSignupConfirmPin('');
       toast.success('Account created successfully');
-      navigate('/', { replace: true });
+      window.location.replace('/');
     } catch (error) {
       const message = getErrorMessage(error, 'Could not create account');
       toast.error(message);
