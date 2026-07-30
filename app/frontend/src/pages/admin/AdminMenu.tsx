@@ -11,8 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client, Category, MenuItem, Extra, SizeOption, getItemSizes } from '@/lib/api';
-
-const MENU_IMAGES_BUCKET = 'menu-images';
+import { uploadMenuImage } from '@/lib/image-upload';
 
 export default function AdminMenu() {
   const navigate = useNavigate();
@@ -69,38 +68,17 @@ export default function AdminMenu() {
   async function handleImageUpload(file: File) {
     setUploading(true);
     try {
-      const ext = file.name.split('.').pop() || 'jpg';
-      const objectKey = `items/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      
-      // Get upload URL
-      const uploadRes = await client.storage.getUploadUrl({
-        bucket_name: MENU_IMAGES_BUCKET,
-        object_key: objectKey,
-      });
-      const uploadUrl = uploadRes?.data?.upload_url;
-      if (!uploadUrl) throw new Error('Failed to get upload URL');
-
-      // Upload file
-      await fetch(uploadUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type },
-      });
-
-      // Get download URL for preview
-      const downloadRes = await client.storage.getDownloadUrl({
-        bucket_name: MENU_IMAGES_BUCKET,
-        object_key: objectKey,
-      });
-      const downloadUrl = downloadRes?.data?.download_url;
-      
-      setItemForm(prev => ({ ...prev, image_url: downloadUrl || objectKey }));
+      const imageUrl = await uploadMenuImage(file);
+      setItemForm(prev => ({ ...prev, image_url: imageUrl }));
       toast.success('Image uploaded successfully!');
-    } catch (e: any) {
-      console.error('Upload failed:', e);
-      toast.error('Failed to upload image');
+    } catch (error) {
+      console.error('Upload failed:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to upload image');
     } finally {
       setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   }
 
@@ -471,7 +449,7 @@ export default function AdminMenu() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
