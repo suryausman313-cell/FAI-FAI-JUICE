@@ -6,10 +6,9 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional
+from typing import Optional
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
@@ -35,31 +34,20 @@ class PhoneRequest(BaseModel):
     phone: str
 
 
-class SendOtpRequest(BaseModel):
-    phone: str
-    purpose: Literal["signup", "forgot_pin"]
-
-
 class LoginRequest(BaseModel):
     phone: Optional[str] = None
     customer_phone: Optional[str] = None
     pin: str = Field(min_length=4, max_length=4)
 
 
-class SignupVerifyRequest(BaseModel):
+class SignupRequest(BaseModel):
     name: Optional[str] = None
     customer_name: Optional[str] = None
     phone: Optional[str] = None
     customer_phone: Optional[str] = None
     pin: str = Field(min_length=4, max_length=4)
-    code: str = Field(min_length=4, max_length=10)
-
-
-class ForgotPinResetRequest(BaseModel):
-    phone: Optional[str] = None
-    customer_phone: Optional[str] = None
-    code: str = Field(min_length=4, max_length=10)
-    new_pin: str = Field(min_length=4, max_length=4)
+    # Kept optional only so an older frontend cannot crash during deployment.
+    code: Optional[str] = None
 
 
 class ChangePinRequest(BaseModel):
@@ -75,7 +63,6 @@ def utc_now() -> datetime:
 
 
 def normalize_phone(raw_value: str) -> str:
-    """Convert common UAE formats to E.164 and validate other +country formats."""
     raw = (raw_value or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Mobile number is required")
@@ -133,11 +120,7 @@ def verify_pin(pin: str, stored_hash: str, stored_salt: str) -> bool:
 
 
 def get_jwt_secret() -> str:
-    value = (
-        os.getenv("CUSTOMER_JWT_SECRET")
-        or os.getenv("JWT_SECRET_KEY")
-        or ""
-    ).strip()
+    value = (os.getenv("CUSTOMER_JWT_SECRET") or os.getenv("JWT_SECRET_KEY") or "").strip()
     if len(value) < 24:
         raise HTTPException(
             status_code=500,
@@ -147,14 +130,14 @@ def get_jwt_secret() -> str:
 
 
 def create_customer_token(account: Customer_pin_accounts_v2) -> str:
-    expires_at = utc_now() + timedelta(days=TOKEN_DAYS)
+    now = utc_now()
     payload = {
         "sub": str(account.id),
         "phone": account.phone,
         "customer_name": account.customer_name,
         "token_type": "customer",
-        "exp": expires_at,
-        "iat": utc_now(),
+        "iat": now,
+        "exp": now + timedelta(days=TOKEN_DAYS),
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
@@ -187,7 +170,6 @@ async def find_account(db: AsyncSession, phone: str) -> Optional[Customer_pin_ac
 
 
 async def find_legacy_customer(db: AsyncSession, phone: str) -> Optional[Customer_sessions]:
-    """Find an older customer record so old customers can recover using OTP once."""
     tail = phone[-9:]
     result = await db.execute(
         select(Customer_sessions)
@@ -198,11 +180,7 @@ async def find_legacy_customer(db: AsyncSession, phone: str) -> Optional[Custome
     return result.scalar_one_or_none()
 
 
-async def ensure_customer_session(
-    db: AsyncSession,
-    phone: str,
-    name: str,
-) -> None:
+async def ensure_customer_session(db: AsyncSession, phone: str, name: str) -> None:
     existing = await find_legacy_customer(db, phone)
     if existing:
         existing.customer_phone = phone
@@ -220,90 +198,6 @@ async def ensure_customer_session(
             last_active=utc_now(),
         )
     )
-
-
-def twilio_settings() -> tuple[str, str, str, str]:
-    username = (
-        os.getenv("TWILIO_API_KEY")
-        or os.getenv("TWILIO_ACCOUNT_SID")
-        or ""
-    ).strip()
-    password = (
-        os.getenv("TWILIO_API_KEY_SECRET")
-        or os.getenv("TWILIO_AUTH_TOKEN")
-        or ""
-    ).strip()
-    service_sid = os.getenv("TWILIO_VERIFY_SERVICE_SID", "").strip()
-    channel = os.getenv("TWILIO_OTP_CHANNEL", "sms").strip().lower() or "sms"
-
-    if not username or not password or not service_sid:
-        raise HTTPException(
-            status_code=503,
-            detail="OTP service is not configured yet",
-        )
-
-    if channel not in {"sms", "whatsapp", "call"}:
-        channel = "sms"
-
-    return username, password, service_sid, channel
-
-
-async def send_twilio_otp(phone: str) -> None:
-    username, password, service_sid, channel = twilio_settings()
-    url = f"https://verify.twilio.com/v2/Services/{service_sid}/Verifications"
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=25.0,
-            auth=(username, password),
-        ) as client:
-            response = await client.post(
-                url,
-                data={"To": phone, "Channel": channel},
-            )
-    except httpx.RequestError as exc:
-        logger.error("Twilio OTP request failed: %s", exc)
-        raise HTTPException(status_code=503, detail="Could not send OTP. Please try again")
-
-    if response.status_code >= 400:
-        logger.error("Twilio OTP error %s: %s", response.status_code, response.text)
-        detail = "Could not send OTP. Check the mobile number and try again"
-        if response.status_code in {401, 403}:
-            detail = "OTP service credentials are incorrect"
-        raise HTTPException(status_code=503, detail=detail)
-
-
-async def verify_twilio_otp(phone: str, code: str) -> bool:
-    username, password, service_sid, _channel = twilio_settings()
-    url = f"https://verify.twilio.com/v2/Services/{service_sid}/VerificationCheck"
-
-    clean_code = re.sub(r"\D", "", code or "")
-    if not 4 <= len(clean_code) <= 10:
-        raise HTTPException(status_code=400, detail="Enter the OTP sent to your mobile")
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=25.0,
-            auth=(username, password),
-        ) as client:
-            response = await client.post(
-                url,
-                data={"To": phone, "Code": clean_code},
-            )
-    except httpx.RequestError as exc:
-        logger.error("Twilio OTP verification failed: %s", exc)
-        raise HTTPException(status_code=503, detail="Could not verify OTP. Please try again")
-
-    if response.status_code >= 400:
-        logger.warning("Twilio OTP check error %s: %s", response.status_code, response.text)
-        return False
-
-    try:
-        data = response.json()
-    except ValueError:
-        return False
-
-    return data.get("status") == "approved" and data.get("valid", True) is not False
 
 
 def auth_response(account: Customer_pin_accounts_v2) -> dict:
@@ -325,51 +219,15 @@ def auth_response(account: Customer_pin_accounts_v2) -> dict:
     }
 
 
-@router.post("/account-status")
-async def account_status(
-    data: PhoneRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    phone = normalize_phone(data.phone)
-    account = await find_account(db, phone)
-    legacy = None if account else await find_legacy_customer(db, phone)
-    return {
-        "exists": bool(account or legacy),
-        "secure_pin_active": bool(account),
-        "phone": phone,
-    }
+def normalize_locked_until(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
-@router.post("/send-otp")
-async def send_otp(
-    data: SendOtpRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    phone = normalize_phone(data.phone)
-    account = await find_account(db, phone)
-    legacy = None if account else await find_legacy_customer(db, phone)
-
-    if data.purpose == "signup" and (account or legacy):
-        raise HTTPException(
-            status_code=409,
-            detail="An account already exists for this mobile number. Please login or use Forgot PIN",
-        )
-
-    if data.purpose == "forgot_pin" and not (account or legacy):
-        raise HTTPException(
-            status_code=404,
-            detail="No account was found for this mobile number",
-        )
-
-    await send_twilio_otp(phone)
-    return {"message": "OTP sent successfully", "phone": phone}
-
-
-@router.post("/signup-verify", status_code=status.HTTP_201_CREATED)
-async def signup_verify(
-    data: SignupVerifyRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def create_account(data: SignupRequest, db: AsyncSession) -> dict:
     name = (data.name or data.customer_name or "").strip()
     phone = normalize_phone(data.phone or data.customer_phone or "")
     pin = validate_pin(data.pin)
@@ -377,14 +235,19 @@ async def signup_verify(
     if len(name) < 2:
         raise HTTPException(status_code=400, detail="Please enter your full name")
 
-    if await find_account(db, phone) or await find_legacy_customer(db, phone):
+    existing_account = await find_account(db, phone)
+    if existing_account:
         raise HTTPException(
             status_code=409,
-            detail="An account already exists. Please login or use Forgot PIN",
+            detail="An account already exists for this mobile number. Please login",
         )
 
-    if not await verify_twilio_otp(phone, data.code):
-        raise HTTPException(status_code=400, detail="Incorrect or expired OTP")
+    # Old customer/order records are linked instead of being deleted or duplicated.
+    legacy = await find_legacy_customer(db, phone)
+    if legacy and (legacy.customer_name or "").strip():
+        saved_name = (legacy.customer_name or "").strip()
+        if not name:
+            name = saved_name
 
     pin_hash, pin_salt = hash_pin(pin)
     account = Customer_pin_accounts_v2(
@@ -392,7 +255,8 @@ async def signup_verify(
         customer_name=name,
         pin_hash=pin_hash,
         pin_salt=pin_salt,
-        phone_verified=True,
+        # OTP is removed, so do not claim the number was SMS-verified.
+        phone_verified=False,
     )
     db.add(account)
     await ensure_customer_session(db, phone, name)
@@ -408,19 +272,42 @@ async def signup_verify(
     return auth_response(account)
 
 
-@router.post("/signup")
-async def legacy_signup_disabled():
+@router.post("/account-status")
+async def account_status(data: PhoneRequest, db: AsyncSession = Depends(get_db)):
+    phone = normalize_phone(data.phone)
+    account = await find_account(db, phone)
+    legacy = None if account else await find_legacy_customer(db, phone)
+    return {
+        # Only a secure PIN account counts as an existing login account.
+        "exists": bool(account),
+        "secure_pin_active": bool(account),
+        "legacy_customer_found": bool(legacy),
+        "can_signup": not bool(account),
+        "phone": phone,
+    }
+
+
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
+async def signup(data: SignupRequest, db: AsyncSession = Depends(get_db)):
+    return await create_account(data, db)
+
+
+@router.post("/signup-verify", status_code=status.HTTP_201_CREATED)
+async def signup_verify_compatibility(data: SignupRequest, db: AsyncSession = Depends(get_db)):
+    """Temporary compatibility endpoint while the frontend deployment updates."""
+    return await create_account(data, db)
+
+
+@router.post("/send-otp")
+async def otp_removed():
     raise HTTPException(
-        status_code=400,
-        detail="Phone OTP verification is required. Please request an OTP first",
+        status_code=410,
+        detail="OTP has been removed. Create an account directly with mobile number and PIN",
     )
 
 
 @router.post("/login")
-async def login(
-    data: LoginRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     phone = normalize_phone(data.phone or data.customer_phone or "")
     pin = validate_pin(data.pin)
     account = await find_account(db, phone)
@@ -429,16 +316,17 @@ async def login(
         legacy = await find_legacy_customer(db, phone)
         if legacy:
             raise HTTPException(
-                status_code=409,
-                detail="Use Forgot PIN once to activate secure OTP login for this account",
+                status_code=404,
+                detail="No PIN account exists yet. Please use Sign Up once with this mobile number",
             )
         raise HTTPException(status_code=401, detail="Invalid mobile number or PIN")
 
     now = utc_now()
-    if account.locked_until and account.locked_until > now:
+    locked_until = normalize_locked_until(account.locked_until)
+    if locked_until and locked_until > now:
         raise HTTPException(
             status_code=429,
-            detail="Too many wrong attempts. Try again after 15 minutes or use Forgot PIN",
+            detail="Too many wrong attempts. Try again after 15 minutes",
         )
 
     if not verify_pin(pin, account.pin_hash, account.pin_salt):
@@ -460,59 +348,8 @@ async def login(
     return auth_response(account)
 
 
-@router.post("/forgot-pin-reset")
-async def forgot_pin_reset(
-    data: ForgotPinResetRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    phone = normalize_phone(data.phone or data.customer_phone or "")
-    new_pin = validate_pin(data.new_pin, "New PIN")
-    account = await find_account(db, phone)
-    legacy = None if account else await find_legacy_customer(db, phone)
-
-    if not account and not legacy:
-        raise HTTPException(status_code=404, detail="No account was found for this mobile number")
-
-    if not await verify_twilio_otp(phone, data.code):
-        raise HTTPException(status_code=400, detail="Incorrect or expired OTP")
-
-    pin_hash, pin_salt = hash_pin(new_pin)
-
-    if account:
-        account.pin_hash = pin_hash
-        account.pin_salt = pin_salt
-        account.phone_verified = True
-        account.failed_login_attempts = 0
-        account.locked_until = None
-        account.updated_at = utc_now()
-    else:
-        account = Customer_pin_accounts_v2(
-            phone=phone,
-            customer_name=(legacy.customer_name or "Customer") if legacy else "Customer",
-            pin_hash=pin_hash,
-            pin_salt=pin_salt,
-            phone_verified=True,
-        )
-        db.add(account)
-
-    await ensure_customer_session(db, phone, account.customer_name)
-
-    try:
-        await db.commit()
-        await db.refresh(account)
-    except Exception:
-        await db.rollback()
-        logger.exception("Could not reset customer PIN")
-        raise HTTPException(status_code=500, detail="Could not reset PIN")
-
-    return {"message": "PIN reset successfully", **auth_response(account)}
-
-
 @router.post("/change-pin")
-async def change_pin(
-    data: ChangePinRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def change_pin(data: ChangePinRequest, db: AsyncSession = Depends(get_db)):
     phone = normalize_phone(data.phone or data.customer_phone or "")
     current_pin = validate_pin(data.current_pin or data.old_pin or "", "Current PIN")
     new_pin = validate_pin(data.new_pin, "New PIN")
@@ -533,6 +370,14 @@ async def change_pin(
     await db.commit()
 
     return {"message": "PIN changed successfully"}
+
+
+@router.post("/forgot-pin-reset")
+async def forgot_pin_reset_removed():
+    raise HTTPException(
+        status_code=410,
+        detail="For security, contact Vita Napoli to reset a forgotten PIN",
+    )
 
 
 @router.get("/me")
