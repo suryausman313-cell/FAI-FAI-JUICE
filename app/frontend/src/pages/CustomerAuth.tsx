@@ -478,6 +478,22 @@ export default function CustomerAuth() {
   const normalInputClass =
     'mt-2 h-14 border-slate-700 bg-slate-900 text-white placeholder:text-slate-500';
 
+  // A valid saved session must go straight to the Customer Home.
+  // Show only a tiny redirect loader so the old "Account logged in" card never flashes.
+  if (!sessionChecking && activeCustomer && mode !== 'changePin') {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center text-white">
+        <div className="text-center">
+          <div className="text-3xl font-black">
+            <span className="text-white">Vita</span>{' '}
+            <span className="text-red-600">Napoli</span>
+          </div>
+          <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-4" />
+        </div>
+      </div>
+    );
+  }
+
   const activeName = String(
     activeCustomer?.name || activeCustomer?.customer_name || 'Customer',
   );
@@ -486,8 +502,8 @@ export default function CustomerAuth() {
   );
 
   return (
-    <div className="customer-auth-page min-h-[100dvh] bg-black text-white">
-      <div className="customer-auth-container mx-auto w-full max-w-md px-4 pb-16 pt-8">
+    <div className="min-h-screen bg-black text-white">
+      <div className="mx-auto w-full max-w-md px-4 pb-16 pt-8">
         <button
           type="button"
           onClick={() => navigate(-1)}

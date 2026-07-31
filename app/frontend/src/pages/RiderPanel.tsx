@@ -627,7 +627,7 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold flex items-center gap-2">
                     <CalendarDays className="w-4 h-4 text-red-400" /> Finance Period
                   </h3>
-                  <p className="text-gray-500 text-xs mt-1">View orders, delivery earning, shop cash and pending settlement</p>
+                  <p className="text-gray-500 text-xs mt-1">View delivered orders, delivery charges and cash settlement</p>
                 </div>
                 <select
                   value={financePeriod}
@@ -675,7 +675,7 @@ export default function RiderPanel() {
                   {financeLoading && <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />}
                 </div>
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <Card className="bg-gray-900 border-gray-800 p-4">
                     <Package className="w-5 h-5 text-blue-400 mb-2" />
                     <p className="text-2xl font-bold text-white">{financeSummary.totals.delivered_orders}</p>
@@ -684,36 +684,9 @@ export default function RiderPanel() {
                   <Card className="bg-gray-900 border-gray-800 p-4">
                     <MapPin className="w-5 h-5 text-purple-400 mb-2" />
                     <p className="text-xl font-bold text-purple-400">AED {financeSummary.totals.delivery_charges.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">Delivery Charges</p>
-                  </Card>
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <span className="text-xl block mb-2">💝</span>
-                    <p className="text-xl font-bold text-pink-400">AED {financeSummary.totals.rider_tips.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">Rider Tips</p>
-                  </Card>
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <DollarSign className="w-5 h-5 text-green-400 mb-2" />
-                    <p className="text-xl font-bold text-green-400">AED {financeSummary.totals.rider_earnings.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">My Earning</p>
+                    <p className="text-gray-500 text-xs">My Delivery Charges</p>
                   </Card>
                 </div>
-
-                <Card className="bg-gray-900 border-gray-800 p-4">
-                  <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-blue-400" /> Order Money Breakdown
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Customer Total</span><span className="text-white font-medium">AED {financeSummary.totals.customer_total.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Shop Food Sale</span><span className="text-green-400 font-medium">AED {financeSummary.totals.shop_food_sale.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Menu Discount</span><span className="text-red-400 font-medium">- AED {financeSummary.totals.discount_amount.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Developer Fees</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.developer_fees.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Collected</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.cash_collected.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Payable to Shop</span><span className="text-orange-400 font-medium">AED {financeSummary.totals.cash_payable_to_shop.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Orders</span><span className="text-white font-medium">{financeSummary.totals.cash_orders}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Card Orders</span><span className="text-white font-medium">{financeSummary.totals.card_orders}</span></div>
-                  </div>
-                  <p className="text-gray-600 text-xs mt-3">Discount is calculated on menu items only. Delivery charge, service fee, small-order fee and tip are not discounted.</p>
-                </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
@@ -798,15 +771,6 @@ export default function RiderPanel() {
                   )}
                 </Card>
 
-                {stats && (
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <h3 className="text-white font-semibold mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Current Order Status</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-orange-400">{stats.pending_orders}</p><p className="text-orange-400/70 text-xs mt-1">Pending</p></div>
-                      <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-green-400">{stats.completed_orders}</p><p className="text-green-400/70 text-xs mt-1">All-Time Completed</p></div>
-                    </div>
-                  </Card>
-                )}
               </>
             ) : (
               <div className="py-12 text-center text-gray-500">Finance report is not available.</div>
