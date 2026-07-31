@@ -6,6 +6,7 @@ import {
 
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
+
 import {
   QueryClient,
   QueryClientProvider,
@@ -24,14 +25,17 @@ import { CustomerHeartbeatProvider } from '@/components/CustomerHeartbeatProvide
 import { CustomerAuthProvider } from '@/contexts/CustomerAuthContext';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 
-// Customer pages
+// ================= CUSTOMER PAGES =================
+
 const Index = lazy(() => import('./pages/Index'));
 const Menu = lazy(() => import('./pages/Menu'));
 const Cart = lazy(() => import('./pages/Cart'));
 const Checkout = lazy(() => import('./pages/Checkout'));
+
 const OrderConfirmation = lazy(
   () => import('./pages/OrderConfirmation')
 );
+
 const MyOrders = lazy(() => import('./pages/MyOrders'));
 const Contact = lazy(() => import('./pages/Contact'));
 const Deals = lazy(() => import('./pages/Deals'));
@@ -39,83 +43,136 @@ const Feedback = lazy(() => import('./pages/Feedback'));
 const Reviews = lazy(() => import('./pages/Reviews'));
 const CustomerAuth = lazy(() => import('./pages/CustomerAuth'));
 const RiderPanel = lazy(() => import('./pages/RiderPanel'));
+
 const DeliveryTracking = lazy(
   () => import('./pages/DeliveryTracking')
 );
+
 const BlogRoutes = lazy(() => import('./blog-routes'));
 
-// Admin pages
-const AdminLogin = lazy(() => import('./pages/admin/AdminLogin'));
+// ================= ADMIN PAGES =================
+
+const AdminLogin = lazy(
+  () => import('./pages/admin/AdminLogin')
+);
+
 const AdminDashboard = lazy(
   () => import('./pages/admin/AdminDashboard')
 );
-const AdminOrders = lazy(() => import('./pages/admin/AdminOrders'));
-const AdminMenu = lazy(() => import('./pages/admin/AdminMenu'));
+
+const AdminOrders = lazy(
+  () => import('./pages/admin/AdminOrders')
+);
+
+const AdminMenu = lazy(
+  () => import('./pages/admin/AdminMenu')
+);
+
 const AdminCustomers = lazy(
   () => import('./pages/admin/AdminCustomers')
 );
+
 const AdminSettings = lazy(
   () => import('./pages/admin/AdminSettings')
 );
+
 const AdminRestaurantSettings = lazy(
   () => import('./pages/admin/AdminRestaurantSettings')
 );
+
 const AdminHomepageSettings = lazy(
   () => import('./pages/admin/AdminHomepageSettings')
 );
+
 const AdminCheckoutSettings = lazy(
   () => import('./pages/admin/AdminCheckoutSettings')
 );
+
 const AdminOrderSettings = lazy(
   () => import('./pages/admin/AdminOrderSettings')
 );
+
 const AdminDeliverySettings = lazy(
   () => import('./pages/admin/AdminDeliverySettings')
 );
+
 const AdminFeesSettings = lazy(
   () => import('./pages/admin/AdminFeesSettings')
 );
+
 const AdminPromotionSettings = lazy(
   () => import('./pages/admin/AdminPromotionSettings')
 );
+
 const AdminSecuritySettings = lazy(
   () => import('./pages/admin/AdminSecuritySettings')
 );
+
 const AdminDataReset = lazy(
   () => import('./pages/admin/AdminDataReset')
 );
+
 const AdminReceiptSettings = lazy(
   () => import('./pages/admin/AdminReceiptSettings')
 );
+
 const AdminFinance = lazy(
   () => import('./pages/admin/AdminFinance')
 );
-const AdminSales = lazy(() => import('./pages/admin/AdminSales'));
-const AdminOffers = lazy(() => import('./pages/admin/AdminOffers'));
+
+const AdminSales = lazy(
+  () => import('./pages/admin/AdminSales')
+);
+
+const AdminOffers = lazy(
+  () => import('./pages/admin/AdminOffers')
+);
+
 const AdminFeedback = lazy(
   () => import('./pages/admin/AdminFeedback')
 );
-const KitchenShell = lazy(
-  () => import('./pages/admin/KitchenShell')
+
+// KitchenShell temporary remove.
+// Kitchen direct KitchenOrders se khulega.
+const KitchenOrders = lazy(
+  () => import('./pages/admin/KitchenOrders')
 );
+
 const AdminLanguages = lazy(
   () => import('./pages/admin/AdminLanguages')
 );
-const AdminDeals = lazy(() => import('./pages/admin/AdminDeals'));
+
+const AdminDeals = lazy(
+  () => import('./pages/admin/AdminDeals')
+);
+
 const AdminNotifications = lazy(
   () => import('./pages/admin/AdminNotifications')
 );
+
 const AdminActivityLogs = lazy(
   () => import('./pages/admin/AdminActivityLogs')
 );
+
 const AdminAccounts = lazy(
   () => import('./pages/admin/AdminAccounts')
 );
-const AdminRiders = lazy(() => import('./pages/admin/AdminRiders'));
 
-// Old auth pages
-const AuthCallback = lazy(() => import('./pages/AuthCallback'));
-const AuthError = lazy(() => import('./pages/AuthError'));
+const AdminRiders = lazy(
+  () => import('./pages/admin/AdminRiders')
+);
+
+// ================= OLD AUTH PAGES =================
+
+const AuthCallback = lazy(
+  () => import('./pages/AuthCallback')
+);
+
+const AuthError = lazy(
+  () => import('./pages/AuthError')
+);
+
+// ================= REACT QUERY =================
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -128,6 +185,8 @@ const queryClient = new QueryClient({
   },
 });
 
+// ================= PAGE LOADER =================
+
 function PageLoader() {
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -136,11 +195,14 @@ function PageLoader() {
           <span className="text-white">Vita</span>{' '}
           <span className="text-red-600">Napoli</span>
         </div>
+
         <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-3" />
       </div>
     </div>
   );
 }
+
+// ================= CUSTOMER PROTECTION =================
 
 interface ProtectedCustomerRouteProps {
   children: ReactElement;
@@ -151,7 +213,9 @@ function ProtectedCustomerRoute({
 }: ProtectedCustomerRouteProps) {
   const { isLoggedIn, loading } = useCustomerAuth();
 
-  if (loading) return <PageLoader />;
+  if (loading) {
+    return <PageLoader />;
+  }
 
   if (!isLoggedIn) {
     return <Navigate to="/account" replace />;
@@ -160,10 +224,19 @@ function ProtectedCustomerRoute({
   return children;
 }
 
+// ================= ROUTES =================
+
 const AppRoutes = () => (
   <Suspense fallback={<PageLoader />}>
     <Routes>
-      <Route path="/account" element={<CustomerAuth />} />
+      {/* Customer login */}
+
+      <Route
+        path="/account"
+        element={<CustomerAuth />}
+      />
+
+      {/* Customer app */}
 
       <Route
         path="/"
@@ -173,6 +246,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/menu"
         element={
@@ -181,6 +255,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/cart"
         element={
@@ -189,6 +264,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/checkout"
         element={
@@ -197,6 +273,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/order-confirmation"
         element={
@@ -205,6 +282,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/my-orders"
         element={
@@ -213,6 +291,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/contact"
         element={
@@ -221,6 +300,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/deals"
         element={
@@ -229,6 +309,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/feedback"
         element={
@@ -237,6 +318,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/reviews"
         element={
@@ -245,6 +327,7 @@ const AppRoutes = () => (
           </ProtectedCustomerRoute>
         }
       />
+
       <Route
         path="/blog/*"
         element={
@@ -254,102 +337,173 @@ const AppRoutes = () => (
         }
       />
 
-      <Route path="/rider" element={<RiderPanel />} />
+      {/* Rider */}
+
+      <Route
+        path="/rider"
+        element={<RiderPanel />}
+      />
+
       <Route
         path="/track/:orderId"
         element={<DeliveryTracking />}
       />
 
-      <Route path="/admin" element={<AdminLogin />} />
+      {/* Admin */}
+
+      <Route
+        path="/admin"
+        element={<AdminLogin />}
+      />
+
       <Route
         path="/admin/dashboard"
         element={<AdminDashboard />}
       />
-      <Route path="/admin/orders" element={<AdminOrders />} />
-      <Route path="/admin/menu" element={<AdminMenu />} />
+
+      <Route
+        path="/admin/orders"
+        element={<AdminOrders />}
+      />
+
+      <Route
+        path="/admin/menu"
+        element={<AdminMenu />}
+      />
+
       <Route
         path="/admin/customers"
         element={<AdminCustomers />}
       />
+
       <Route
         path="/admin/settings"
         element={<AdminSettings />}
       />
+
       <Route
         path="/admin/settings/restaurant"
         element={<AdminRestaurantSettings />}
       />
+
       <Route
         path="/admin/settings/homepage"
         element={<AdminHomepageSettings />}
       />
+
       <Route
         path="/admin/settings/checkout"
         element={<AdminCheckoutSettings />}
       />
+
       <Route
         path="/admin/settings/orders"
         element={<AdminOrderSettings />}
       />
+
       <Route
         path="/admin/settings/delivery"
         element={<AdminDeliverySettings />}
       />
+
       <Route
         path="/admin/settings/fees"
         element={<AdminFeesSettings />}
       />
+
       <Route
         path="/admin/settings/promotions"
         element={<AdminPromotionSettings />}
       />
+
       <Route
         path="/admin/settings/security"
         element={<AdminSecuritySettings />}
       />
+
       <Route
         path="/admin/settings/data-reset"
         element={<AdminDataReset />}
       />
+
       <Route
         path="/admin/settings/receipt"
         element={<AdminReceiptSettings />}
       />
-      <Route path="/admin/finance" element={<AdminFinance />} />
-      <Route path="/admin/sales" element={<AdminSales />} />
-      <Route path="/admin/offers" element={<AdminOffers />} />
+
+      <Route
+        path="/admin/finance"
+        element={<AdminFinance />}
+      />
+
+      <Route
+        path="/admin/sales"
+        element={<AdminSales />}
+      />
+
+      <Route
+        path="/admin/offers"
+        element={<AdminOffers />}
+      />
+
       <Route
         path="/admin/feedback"
         element={<AdminFeedback />}
       />
+
       <Route
         path="/admin/languages"
         element={<AdminLanguages />}
       />
-      <Route path="/admin/deals" element={<AdminDeals />} />
+
+      <Route
+        path="/admin/deals"
+        element={<AdminDeals />}
+      />
+
       <Route
         path="/admin/notifications"
         element={<AdminNotifications />}
       />
+
       <Route
         path="/admin/activity-logs"
         element={<AdminActivityLogs />}
       />
+
       <Route
         path="/admin/accounts"
         element={<AdminAccounts />}
       />
-      <Route path="/admin/riders" element={<AdminRiders />} />
-      <Route path="/kitchen" element={<KitchenShell />} />
+
+      <Route
+        path="/admin/riders"
+        element={<AdminRiders />}
+      />
+
+      {/* Kitchen direct route */}
+
+      <Route
+        path="/kitchen"
+        element={<KitchenOrders />}
+      />
+
+      {/* Old authentication routes */}
 
       <Route
         path="/auth/callback"
         element={<AuthCallback />}
       />
-      <Route path="/auth/error" element={<AuthError />} />
+
+      <Route
+        path="/auth/error"
+        element={<AuthError />}
+      />
     </Routes>
   </Suspense>
 );
+
+// ================= MAIN APP =================
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -357,6 +511,7 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <LanguagePickerModal />
+
         <BrowserRouter>
           <CustomerAuthProvider>
             <CustomerHeartbeatProvider>
