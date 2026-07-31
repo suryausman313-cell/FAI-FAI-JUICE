@@ -16,6 +16,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import {
+  DEFAULT_RECEIPT_SETTINGS,
+  loadReceiptSettings,
+  printKitchenOrder,
+  ReceiptSettings,
+} from '@/lib/kitchen-print-bridge';
 
 const KITCHEN_PIN_STORAGE_KEY = 'kitchen_pin';
 const UAE_OFFSET_MS = 4 * 60 * 60 * 1000;
@@ -125,61 +131,6 @@ function parseItems(order: Order): any[] {
   }
 }
 
-function printHistoryOrder(order: Order) {
-  const items = parseItems(order);
-  const content = items
-    .map(
-      item =>
-        `<div style="margin:4px 0;font-size:14px;">${Number(
-          item.quantity || 1,
-        )}x ${String(item.name || 'Item')}</div>`,
-    )
-    .join('');
-
-  const printWindow = window.open('', '_blank', 'width=380,height=650');
-
-  if (!printWindow) {
-    toast.error('Allow pop-ups to print');
-    return;
-  }
-
-  printWindow.document.write(`
-    <!doctype html>
-    <html>
-      <head>
-        <title>Order #${order.id}</title>
-        <style>
-          body { font-family: Arial, sans-serif; max-width: 320px; margin: 0 auto; padding: 12px; }
-          .center { text-align: center; }
-          .line { border-top: 1px dashed #000; margin: 10px 0; }
-        </style>
-      </head>
-      <body>
-        <h2 class="center">VITA NAPOLI</h2>
-        <h3 class="center">ORDER #${order.id}</h3>
-        <div>${formatUaeTime(order.created_at)}</div>
-        <div>${order.customer_name || 'Customer'}</div>
-        <div>${order.customer_phone || ''}</div>
-        <div>${orderType(order)} · ${order.payment_method || 'Cash'}</div>
-        <div class="line"></div>
-        ${content}
-        <div class="line"></div>
-        <strong>Total: AED ${formatMoney(order.total_amount)}</strong>
-        <div style="margin-top:8px;">Status: ${statusLabel(
-          normalizedStatus(order.status),
-        )}</div>
-      </body>
-    </html>
-  `);
-
-  printWindow.document.close();
-
-  window.setTimeout(() => {
-    printWindow.print();
-    window.setTimeout(() => printWindow.close(), 500);
-  }, 250);
-}
-
 export default function KitchenHistoryPanel({
   day,
 }: {
@@ -188,6 +139,9 @@ export default function KitchenHistoryPanel({
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>({
+    ...DEFAULT_RECEIPT_SETTINGS,
+  });
 
   const loadOrders = useCallback(async (silent = false) => {
     const pin =
@@ -225,6 +179,7 @@ export default function KitchenHistoryPanel({
   }, []);
 
   useEffect(() => {
+    void loadReceiptSettings().then(setReceiptSettings);
     void loadOrders();
 
     const interval = window.setInterval(() => {
@@ -382,9 +337,18 @@ export default function KitchenHistoryPanel({
 
                     <button
                       type="button"
-                      onClick={() => printHistoryOrder(order)}
+                      onClick={async () => {
+                        const latest = await loadReceiptSettings();
+                        setReceiptSettings(latest);
+                        await printKitchenOrder(
+                          order,
+                          latest,
+                          'copy',
+                          false,
+                        );
+                      }}
                       className="text-gray-400 hover:text-orange-400 p-2"
-                      title="Print order"
+                      title="Reprint order"
                     >
                       <Printer className="w-4 h-4" />
                     </button>
