@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote } from 'lucide-react';
+import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -63,6 +63,68 @@ interface RiderStats {
   completed_orders: number;
 }
 
+
+type FinancePeriod = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' | 'custom';
+
+interface FinanceTotals {
+  delivered_orders: number;
+  customer_total: number;
+  food_subtotal: number;
+  discount_amount: number;
+  shop_food_sale: number;
+  service_fee: number;
+  small_order_fee: number;
+  developer_fees: number;
+  delivery_charges: number;
+  rider_tips: number;
+  shop_tips: number;
+  rider_earnings: number;
+  cash_collected: number;
+  cash_payable_to_shop: number;
+  cash_orders: number;
+  card_orders: number;
+}
+
+interface FinanceSettlementTotals {
+  approved_cash: number;
+  awaiting_approval: number;
+  rejected_cash: number;
+  submissions: number;
+}
+
+interface FinanceCurrentBalance {
+  cash_due_to_shop: number;
+  approved_cash: number;
+  awaiting_approval: number;
+  remaining_to_submit: number;
+  total_pending_cash: number;
+}
+
+interface RiderFinanceSummary {
+  rider: Rider;
+  period: {
+    key: FinancePeriod;
+    label: string;
+    date_from: string | null;
+    date_to: string | null;
+  };
+  totals: FinanceTotals;
+  settlements: FinanceSettlementTotals;
+  current_balance: FinanceCurrentBalance;
+}
+
+interface CashSubmission {
+  id: number;
+  rider_id: number;
+  amount: number;
+  status: 'pending' | 'approved' | 'rejected';
+  rider_note: string;
+  admin_note: string;
+  reviewed_by: string;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+}
+
 export default function RiderPanel() {
   const [rider, setRider] = useState<Rider | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -75,6 +137,15 @@ export default function RiderPanel() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [activeTab, setActiveTab] = useState<'orders' | 'stats'>('orders');
+  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>('today');
+  const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [financeSummary, setFinanceSummary] = useState<RiderFinanceSummary | null>(null);
+  const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [cashAmount, setCashAmount] = useState('');
+  const [cashNote, setCashNote] = useState('');
+  const [submittingCash, setSubmittingCash] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
@@ -88,6 +159,8 @@ export default function RiderPanel() {
         setRider(parsed);
         loadDeliveries(parsed.id);
         loadStats(parsed.id);
+        loadFinance(parsed.id, 'today');
+        loadCashSubmissions(parsed.id);
       } catch { /* ignore */ }
     }
     if ('Notification' in window) {
@@ -106,9 +179,16 @@ export default function RiderPanel() {
     const interval = setInterval(() => {
       loadDeliveries(rider.id);
       loadStats(rider.id);
+      loadFinance(rider.id, financePeriod);
+      loadCashSubmissions(rider.id);
     }, 8000);
     return () => clearInterval(interval);
-  }, [rider]);
+  }, [rider, financePeriod]);
+
+  useEffect(() => {
+    if (!rider || financePeriod === 'custom') return;
+    loadFinance(rider.id, financePeriod);
+  }, [financePeriod, rider]);
 
   // Heartbeat to keep rider online status synced (every 15s)
   useEffect(() => {
@@ -283,6 +363,8 @@ export default function RiderPanel() {
         toast.success(`Welcome, ${riderData.name}!`);
         loadDeliveries(riderData.id);
         loadStats(riderData.id);
+        loadFinance(riderData.id, 'today');
+        loadCashSubmissions(riderData.id);
         if ('Notification' in window && Notification.permission === 'default') {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
@@ -296,6 +378,10 @@ export default function RiderPanel() {
     setRider(null);
     setDeliveries([]);
     setStats(null);
+    setFinanceSummary(null);
+    setCashSubmissions([]);
+    setCashAmount('');
+    setCashNote('');
     localStorage.removeItem('rider_auth');
     prevDeliveryIdsRef.current = [];
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
@@ -320,11 +406,98 @@ export default function RiderPanel() {
     } catch (e) { console.error('Failed to load stats:', e); }
   }
 
+  function getFinanceUrl(riderId: number, period: FinancePeriod) {
+    const params = new URLSearchParams({ period });
+    if (period === 'custom') {
+      params.set('date_from', customFrom);
+      params.set('date_to', customTo);
+    }
+    return `/api/v1/finance/rider/${riderId}/summary?${params.toString()}`;
+  }
+
+  async function loadFinance(riderId: number, period: FinancePeriod = financePeriod) {
+    if (period === 'custom' && (!customFrom || !customTo)) return;
+    setFinanceLoading(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: getFinanceUrl(riderId, period),
+        method: 'GET',
+        data: {},
+      });
+      if (res?.data) setFinanceSummary(res.data);
+    } catch (e: any) {
+      console.error('Failed to load rider finance:', e);
+      toast.error(e?.data?.detail || 'Could not load finance report');
+    } finally {
+      setFinanceLoading(false);
+    }
+  }
+
+  async function loadCashSubmissions(riderId: number) {
+    try {
+      const res = await client.apiCall.invoke({
+        url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
+        method: 'GET',
+        data: {},
+      });
+      setCashSubmissions(res?.data?.items || []);
+    } catch (e) {
+      console.error('Failed to load cash submissions:', e);
+    }
+  }
+
+  async function submitCashToShop() {
+    if (!rider || !financeSummary) return;
+    const amount = Number(cashAmount);
+    const available = financeSummary.current_balance.remaining_to_submit || 0;
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Enter a valid cash amount');
+      return;
+    }
+    if (amount > available + 0.01) {
+      toast.error(`Maximum cash available is AED ${available.toFixed(2)}`);
+      return;
+    }
+
+    setSubmittingCash(true);
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
+        method: 'POST',
+        data: { amount, note: cashNote.trim() },
+      });
+      toast.success('Cash sent to admin for approval');
+      setCashAmount('');
+      setCashNote('');
+      await Promise.all([
+        loadFinance(rider.id, financePeriod),
+        loadCashSubmissions(rider.id),
+      ]);
+    } catch (e: any) {
+      toast.error(e?.data?.detail || 'Cash submission failed');
+    } finally {
+      setSubmittingCash(false);
+    }
+  }
+
+  function formatDateTime(value: string | null) {
+    if (!value) return '-';
+    try {
+      return new Date(value).toLocaleString('en-AE', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+    } catch {
+      return value;
+    }
+  }
+
   async function updateStatus(assignmentId: number, newStatus: string) {
     try {
       await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
-      if (rider) { loadDeliveries(rider.id); loadStats(rider.id); }
+      if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
     } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
   }
 
@@ -386,7 +559,7 @@ export default function RiderPanel() {
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
-      <div className="max-w-lg mx-auto">
+      <div className="w-full max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
@@ -402,7 +575,7 @@ export default function RiderPanel() {
             <Button onClick={toggleNotifications} variant="ghost" size="sm" className={`cursor-pointer ${notificationsEnabled ? 'text-green-400' : 'text-gray-400'}`}>
               {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
             </Button>
-            <Button onClick={() => { if (rider) { loadDeliveries(rider.id); loadStats(rider.id); } }} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
+            <Button onClick={() => { if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); } }} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
               <RefreshCw className="w-4 h-4" />
             </Button>
             <Button onClick={handleLogout} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
@@ -445,131 +618,199 @@ export default function RiderPanel() {
           </div>
         )}
 
-        {/* STATS TAB */}
-        {activeTab === 'stats' && stats && (
+        {/* FINANCE / DASHBOARD TAB */}
+        {activeTab === 'stats' && (
           <div className="space-y-4">
-            {/* Delivery Counts */}
             <Card className="bg-gray-900 border-gray-800 p-4">
-              <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-red-400" /> Delivery Stats
-              </h3>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-gray-800 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-white">{stats.today_deliveries}</p>
-                  <p className="text-gray-500 text-xs mt-1">Today</p>
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <h3 className="text-white font-semibold flex items-center gap-2">
+                    <CalendarDays className="w-4 h-4 text-red-400" /> Finance Period
+                  </h3>
+                  <p className="text-gray-500 text-xs mt-1">View orders, delivery earning, shop cash and pending settlement</p>
                 </div>
-                <div className="bg-gray-800 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-white">{stats.week_deliveries}</p>
-                  <p className="text-gray-500 text-xs mt-1">This Week</p>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-white">{stats.month_deliveries}</p>
-                  <p className="text-gray-500 text-xs mt-1">This Month</p>
-                </div>
+                <select
+                  value={financePeriod}
+                  onChange={(e) => setFinancePeriod(e.target.value as FinancePeriod)}
+                  className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="year">This Year</option>
+                  <option value="all">All Time</option>
+                  <option value="custom">Custom Date</option>
+                </select>
               </div>
+
+              {financePeriod === 'custom' && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                  <div>
+                    <Label className="text-gray-400 text-xs">From</Label>
+                    <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="bg-gray-800 border-gray-700 text-white mt-1" />
+                  </div>
+                  <div>
+                    <Label className="text-gray-400 text-xs">To</Label>
+                    <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="bg-gray-800 border-gray-700 text-white mt-1" />
+                  </div>
+                  <Button
+                    onClick={() => rider && loadFinance(rider.id, 'custom')}
+                    disabled={financeLoading || !customFrom || !customTo}
+                    className="self-end bg-red-600 hover:bg-red-700 text-white"
+                  >
+                    {financeLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Apply
+                  </Button>
+                </div>
+              )}
             </Card>
 
-            {/* Earnings */}
-            <Card className="bg-gray-900 border-gray-800 p-4">
-              <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-green-400" /> Earnings
-              </h3>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-green-400" />
-                    <span className="text-gray-300 text-sm">Total Earnings</span>
-                  </div>
-                  <span className="text-green-400 font-bold">AED {stats.total_earnings.toFixed(2)}</span>
+            {financeLoading && !financeSummary ? (
+              <div className="py-12 text-center text-gray-400">Loading finance report...</div>
+            ) : financeSummary ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-white font-semibold">{financeSummary.period.label}</h3>
+                  {financeLoading && <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />}
                 </div>
-                {/* Delivery Charge Earnings */}
-                <div className="p-3 bg-gray-800 rounded-lg space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-purple-400" />
-                      <span className="text-gray-300 text-sm">Delivery Charges Earned</span>
-                    </div>
-                    <span className="text-purple-400 font-bold">AED {(stats.delivery_charges_earned || 0).toFixed(2)}</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-700">
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500">Today</p>
-                      <p className="text-sm font-medium text-purple-300">AED {(stats.today_delivery_earnings || 0).toFixed(0)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500">Week</p>
-                      <p className="text-sm font-medium text-purple-300">AED {(stats.week_delivery_earnings || 0).toFixed(0)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500">Month</p>
-                      <p className="text-sm font-medium text-purple-300">AED {(stats.month_delivery_earnings || 0).toFixed(0)}</p>
-                    </div>
-                  </div>
+
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <Card className="bg-gray-900 border-gray-800 p-4">
+                    <Package className="w-5 h-5 text-blue-400 mb-2" />
+                    <p className="text-2xl font-bold text-white">{financeSummary.totals.delivered_orders}</p>
+                    <p className="text-gray-500 text-xs">Delivered Orders</p>
+                  </Card>
+                  <Card className="bg-gray-900 border-gray-800 p-4">
+                    <MapPin className="w-5 h-5 text-purple-400 mb-2" />
+                    <p className="text-xl font-bold text-purple-400">AED {financeSummary.totals.delivery_charges.toFixed(2)}</p>
+                    <p className="text-gray-500 text-xs">Delivery Charges</p>
+                  </Card>
+                  <Card className="bg-gray-900 border-gray-800 p-4">
+                    <span className="text-xl block mb-2">💝</span>
+                    <p className="text-xl font-bold text-pink-400">AED {financeSummary.totals.rider_tips.toFixed(2)}</p>
+                    <p className="text-gray-500 text-xs">Rider Tips</p>
+                  </Card>
+                  <Card className="bg-gray-900 border-gray-800 p-4">
+                    <DollarSign className="w-5 h-5 text-green-400 mb-2" />
+                    <p className="text-xl font-bold text-green-400">AED {financeSummary.totals.rider_earnings.toFixed(2)}</p>
+                    <p className="text-gray-500 text-xs">My Earning</p>
+                  </Card>
                 </div>
-                {/* Tips Earned */}
-                {(stats.tips_earned || 0) > 0 && (
-                  <div className="p-3 bg-gray-800 rounded-lg space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">💝</span>
-                        <span className="text-gray-300 text-sm">Tips Earned</span>
-                      </div>
-                      <span className="text-pink-400 font-bold">AED {(stats.tips_earned || 0).toFixed(2)}</span>
+
+                <Card className="bg-gray-900 border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4 text-blue-400" /> Order Money Breakdown
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Customer Total</span><span className="text-white font-medium">AED {financeSummary.totals.customer_total.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Shop Food Sale</span><span className="text-green-400 font-medium">AED {financeSummary.totals.shop_food_sale.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Menu Discount</span><span className="text-red-400 font-medium">- AED {financeSummary.totals.discount_amount.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Developer Fees</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.developer_fees.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Collected</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.cash_collected.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Payable to Shop</span><span className="text-orange-400 font-medium">AED {financeSummary.totals.cash_payable_to_shop.toFixed(2)}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Orders</span><span className="text-white font-medium">{financeSummary.totals.cash_orders}</span></div>
+                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Card Orders</span><span className="text-white font-medium">{financeSummary.totals.card_orders}</span></div>
+                  </div>
+                  <p className="text-gray-600 text-xs mt-3">Discount is calculated on menu items only. Delivery charge, service fee, small-order fee and tip are not discounted.</p>
+                </Card>
+
+                <Card className="bg-gray-900 border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-yellow-400" /> Current Cash Settlement
+                  </h3>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <p className="text-gray-500 text-xs">Cash Due</p>
+                      <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.cash_due_to_shop.toFixed(2)}</p>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-700">
-                      <div className="text-center">
-                        <p className="text-xs text-gray-500">Today</p>
-                        <p className="text-sm font-medium text-pink-300">AED {(stats.today_tips || 0).toFixed(0)}</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs text-gray-500">Week</p>
-                        <p className="text-sm font-medium text-pink-300">AED {(stats.week_tips || 0).toFixed(0)}</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs text-gray-500">Month</p>
-                        <p className="text-sm font-medium text-pink-300">AED {(stats.month_tips || 0).toFixed(0)}</p>
-                      </div>
+                    <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3">
+                      <p className="text-green-400/70 text-xs">Approved / Given</p>
+                      <p className="text-green-400 font-bold mt-1">AED {financeSummary.current_balance.approved_cash.toFixed(2)}</p>
+                    </div>
+                    <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3">
+                      <p className="text-orange-400/70 text-xs">Waiting Admin</p>
+                      <p className="text-orange-400 font-bold mt-1">AED {financeSummary.current_balance.awaiting_approval.toFixed(2)}</p>
+                    </div>
+                    <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-3">
+                      <p className="text-red-400/70 text-xs">Total Pending</p>
+                      <p className="text-red-400 font-bold mt-1">AED {financeSummary.current_balance.total_pending_cash.toFixed(2)}</p>
                     </div>
                   </div>
+
+                  {financeSummary.current_balance.remaining_to_submit > 0 ? (
+                    <div className="border-t border-gray-800 pt-4">
+                      <p className="text-gray-300 text-sm font-medium mb-3">Submit cash to shop</p>
+                      <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-3">
+                        <Input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          max={financeSummary.current_balance.remaining_to_submit}
+                          value={cashAmount}
+                          onChange={(e) => setCashAmount(e.target.value)}
+                          placeholder={`Max ${financeSummary.current_balance.remaining_to_submit.toFixed(2)}`}
+                          className="bg-gray-800 border-gray-700 text-white"
+                        />
+                        <Input
+                          value={cashNote}
+                          onChange={(e) => setCashNote(e.target.value)}
+                          placeholder="Optional note"
+                          maxLength={500}
+                          className="bg-gray-800 border-gray-700 text-white"
+                        />
+                        <Button onClick={submitCashToShop} disabled={submittingCash} className="bg-green-600 hover:bg-green-700 text-white">
+                          {submittingCash ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+                          Submit Cash
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="border-t border-gray-800 pt-4 text-green-400 text-sm flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4" /> No cash waiting to submit.
+                    </div>
+                  )}
+                </Card>
+
+                <Card className="bg-gray-900 border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-3">Cash Submission History</h3>
+                  {cashSubmissions.length === 0 ? (
+                    <p className="text-gray-500 text-sm py-4 text-center">No cash submissions yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {cashSubmissions.slice(0, 20).map((item) => (
+                        <div key={item.id} className="bg-gray-800 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-white font-semibold">AED {item.amount.toFixed(2)}</span>
+                              <Badge className={item.status === 'approved' ? 'bg-green-600/20 text-green-400 border-green-600/30' : item.status === 'rejected' ? 'bg-red-600/20 text-red-400 border-red-600/30' : 'bg-orange-600/20 text-orange-400 border-orange-600/30'}>
+                                {item.status === 'pending' ? 'Waiting Admin' : item.status}
+                              </Badge>
+                            </div>
+                            <p className="text-gray-500 text-xs mt-1">Submitted: {formatDateTime(item.submitted_at)}</p>
+                            {item.rider_note && <p className="text-gray-400 text-xs mt-1">Note: {item.rider_note}</p>}
+                            {item.admin_note && <p className="text-gray-400 text-xs mt-1">Admin: {item.admin_note}</p>}
+                          </div>
+                          {item.reviewed_at && <p className="text-gray-500 text-xs">Reviewed: {formatDateTime(item.reviewed_at)}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+
+                {stats && (
+                  <Card className="bg-gray-900 border-gray-800 p-4">
+                    <h3 className="text-white font-semibold mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Current Order Status</h3>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-orange-400">{stats.pending_orders}</p><p className="text-orange-400/70 text-xs mt-1">Pending</p></div>
+                      <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-green-400">{stats.completed_orders}</p><p className="text-green-400/70 text-xs mt-1">All-Time Completed</p></div>
+                    </div>
+                  </Card>
                 )}
-                <div className="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Banknote className="w-4 h-4 text-yellow-400" />
-                    <span className="text-gray-300 text-sm">Cash Collected</span>
-                  </div>
-                  <span className="text-yellow-400 font-bold">AED {stats.cash_collected.toFixed(2)}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <CreditCard className="w-4 h-4 text-blue-400" />
-                    <span className="text-gray-300 text-sm">Card Orders</span>
-                  </div>
-                  <span className="text-blue-400 font-bold">{stats.card_orders}</span>
-                </div>
-              </div>
-            </Card>
-
-            {/* Order Status */}
-            <Card className="bg-gray-900 border-gray-800 p-4">
-              <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-orange-400" /> Order Status
-              </h3>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-orange-400">{stats.pending_orders}</p>
-                  <p className="text-orange-400/70 text-xs mt-1">Pending</p>
-                </div>
-                <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-green-400">{stats.completed_orders}</p>
-                  <p className="text-green-400/70 text-xs mt-1">Completed</p>
-                </div>
-              </div>
-            </Card>
-
-            {/* Total */}
-            <div className="text-center py-3">
-              <p className="text-gray-500 text-sm">Total All-Time Deliveries: <span className="text-white font-bold">{stats.total_deliveries}</span></p>
-            </div>
+              </>
+            ) : (
+              <div className="py-12 text-center text-gray-500">Finance report is not available.</div>
+            )}
           </div>
         )}
 
