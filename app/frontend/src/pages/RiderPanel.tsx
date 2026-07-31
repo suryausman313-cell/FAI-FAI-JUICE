@@ -200,7 +200,7 @@ export default function RiderPanel() {
   async function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     try {
-      const registration = await navigator.serviceWorker.register('/rider-sw.js', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/rider-sw.js', { scope: '/rider' });
       swRegistrationRef.current = registration;
       const sw = registration.active || registration.waiting || registration.installing;
       if (sw && sw.state !== 'activated') {
