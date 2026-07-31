@@ -12,12 +12,10 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from dependencies.auth import get_current_user
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
 from models.riders import Riders
-from schemas.auth import UserResponse
 
 router = APIRouter(prefix="/api/v1/finance", tags=["finance"])
 logger = logging.getLogger(__name__)
@@ -764,11 +762,8 @@ async def get_admin_finance_summary(
     period: PeriodName = Query(default="today"),
     date_from: Optional[str] = Query(default=None),
     date_to: Optional[str] = Query(default=None),
-    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    del current_user
-
     start, end, label = _resolve_period(
         period,
         date_from,
@@ -869,11 +864,8 @@ async def get_admin_cash_submissions(
     ] = Query(default="pending"),
     rider_id: Optional[int] = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
-    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    del current_user
-
     query = (
         select(Rider_cash_settlements, Riders)
         .join(
@@ -931,7 +923,6 @@ async def get_admin_cash_submissions(
 async def review_cash_submission(
     settlement_id: int,
     data: CashSubmissionReview,
-    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     settlement = (
@@ -957,12 +948,7 @@ async def review_cash_submission(
             ),
         )
 
-    reviewed_by = (
-        data.reviewed_by
-        or getattr(current_user, "email", None)
-        or getattr(current_user, "name", None)
-        or "Admin"
-    )
+    reviewed_by = data.reviewed_by or "Admin"
 
     settlement.status = data.status
     settlement.admin_note = (data.admin_note or "").strip()
