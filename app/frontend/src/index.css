@@ -102,3 +102,77 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+/* ===== Vita Napoli tablet / large-screen layout fix ===== */
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+@media (min-width: 700px) and (max-width: 1200px) {
+  html {
+    font-size: 17px;
+  }
+
+  #root .max-w-md {
+    max-width: min(calc(100vw - 3rem), 42rem) !important;
+  }
+
+  #root .max-w-lg {
+    max-width: min(calc(100vw - 3rem), 46rem) !important;
+  }
+
+  #root .max-w-2xl {
+    max-width: min(calc(100vw - 3rem), 52rem) !important;
+  }
+
+  #root .max-w-4xl,
+  #root .max-w-6xl,
+  #root .max-w-7xl {
+    max-width: calc(100vw - 2rem) !important;
+  }
+
+  .customer-auth-page .customer-auth-container {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+  }
+
+  nav.fixed.bottom-0 .text-\[10px\] {
+    font-size: 0.75rem !important;
+  }
+
+  nav.fixed.bottom-0 svg {
+    width: 1.45rem;
+    height: 1.45rem;
+  }
+}
+
+@media (min-width: 1201px) {
+  #root .max-w-md {
+    max-width: 42rem !important;
+  }
+
+  #root .max-w-lg {
+    max-width: 48rem !important;
+  }
+
+  .customer-auth-page .customer-auth-container {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+  }
+}
