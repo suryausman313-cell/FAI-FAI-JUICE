@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import axios from 'axios';
 import { RefreshCw, Bell, Clock, Check, X, ChefHat, Volume2, VolumeX, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 import {
   DEFAULT_RECEIPT_SETTINGS,
   loadReceiptSettings,
@@ -14,6 +16,31 @@ import {
   printKitchenOrder,
   ReceiptSettings,
 } from '@/lib/kitchen-print-bridge';
+
+const KITCHEN_PIN_STORAGE_KEY = 'kitchen_pin';
+
+type KitchenMethod = 'GET' | 'PUT';
+
+async function kitchenApiRequest<T>(
+  path: string,
+  method: KitchenMethod,
+  data?: unknown,
+): Promise<T> {
+  const kitchenPin =
+    localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1234';
+
+  const response = await axios.request<T>({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+    method,
+    data,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Kitchen-Pin': kitchenPin,
+    },
+  });
+
+  return response.data;
+}
 
 const TIME_OPTIONS = [
   { value: 10, label: '10 min' },
@@ -236,6 +263,7 @@ export default function KitchenOrders() {
     e.preventDefault();
     if (pin === '1234') {
       localStorage.setItem('kitchen_auth', 'true');
+      localStorage.setItem(KITCHEN_PIN_STORAGE_KEY, pin);
       setAuthenticated(true);
       hasInteractedRef.current = true;
       setShowSoundPrompt(false);
@@ -284,12 +312,11 @@ export default function KitchenOrders() {
   const loadOrders = useCallback(async () => {
     try {
       setRefreshing(true);
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/admin/orders',
-        method: 'GET',
-        data: { sort: '-created_at', limit: 50 },
-      });
-      const allOrders = res.data?.items || [];
+      const res = await kitchenApiRequest<{ items?: Order[] }>(
+        '/api/v1/kitchen/orders?limit=50&skip=0',
+        'GET',
+      );
+      const allOrders = res.items || [];
       const activeOrders = allOrders.filter(
         (o: Order) => ['new', 'accepted', 'preparing', 'ready'].includes(o.status)
       );
@@ -365,8 +392,13 @@ export default function KitchenOrders() {
       prevNewOrderIdsRef.current = currentNewOrderIds;
       setOrders(deduplicatedOrders);
       setLastRefresh(new Date());
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load orders:', e);
+      const detail =
+        e?.response?.data?.detail ||
+        e?.message ||
+        'Kitchen could not load orders';
+      toast.error(detail);
     } finally {
       setRefreshing(false);
     }
@@ -377,11 +409,11 @@ export default function KitchenOrders() {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'accepted', estimated_minutes: minutes },
-      });
+      await kitchenApiRequest(
+        `/api/v1/kitchen/orders/${orderId}/status`,
+        'PUT',
+        { status: 'accepted', estimated_minutes: minutes },
+      );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
       );
@@ -426,11 +458,11 @@ export default function KitchenOrders() {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: newStatus },
-      });
+      await kitchenApiRequest(
+        `/api/v1/kitchen/orders/${orderId}/status`,
+        'PUT',
+        { status: newStatus },
+      );
 
       if (newStatus === 'completed' || newStatus === 'cancelled') {
         // Remove from active list immediately
@@ -454,11 +486,15 @@ export default function KitchenOrders() {
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
       const cancelReason = reason || (rejectReason === 'Other' ? customRejectReason : rejectReason);
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/status`,
-        method: 'PUT',
-        data: { status: 'cancelled', cancel_reason: cancelReason || 'Rejected by kitchen' },
-      });
+      await kitchenApiRequest(
+        `/api/v1/kitchen/orders/${orderId}/status`,
+        'PUT',
+        {
+          status: 'cancelled',
+          cancel_reason:
+            cancelReason || 'Rejected by kitchen',
+        },
+      );
       setOrders(prev => prev.filter(o => o.id !== orderId));
 
       prevNewOrderIdsRef.current.delete(orderId);
