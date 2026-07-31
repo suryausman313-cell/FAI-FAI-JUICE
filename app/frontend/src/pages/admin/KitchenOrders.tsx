@@ -1,42 +1,19 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import axios from 'axios';
-import { RefreshCw, Bell, Clock, Check, X, ChefHat, Volume2, VolumeX, Printer, Settings, Wifi, WifiOff } from 'lucide-react';
+import { RefreshCw, Bell, Clock, Check, X, ChefHat, Volume2, VolumeX, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
-import { getAPIBaseURL } from '@/lib/config';
-
-
-const KITCHEN_PIN_STORAGE_KEY = 'kitchen_pin';
-
-type KitchenRequestMethod = 'GET' | 'PUT';
-
-async function kitchenApiRequest<T>(
-  url: string,
-  method: KitchenRequestMethod,
-  data?: unknown
-): Promise<T> {
-  const pin = localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1234';
-  const baseURL = getAPIBaseURL().replace(/\/$/, '');
-
-  const response = await axios.request<T>({
-    url: `${baseURL}${url}`,
-    method,
-    data,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Kitchen-Pin': pin,
-    },
-  });
-
-  return response.data;
-}
+import {
+  DEFAULT_RECEIPT_SETTINGS,
+  loadReceiptSettings,
+  nativePrinterAvailable,
+  printKitchenOrder,
+  ReceiptSettings,
+} from '@/lib/kitchen-print-bridge';
 
 const TIME_OPTIONS = [
   { value: 10, label: '10 min' },
@@ -144,336 +121,6 @@ class KitchenAlarm {
 
 const kitchenAlarm = new KitchenAlarm();
 
-// ===== KITCHEN PRINTER SYSTEM =====
-interface PrinterConfig {
-  type: 'browser' | 'network' | 'usb';
-  name: string;
-  ip: string;
-  port: number;
-  connected: boolean;
-  autoPrint: boolean;
-  paperWidth: '58mm' | '80mm';
-}
-
-const DEFAULT_PRINTER_CONFIG: PrinterConfig = {
-  type: 'browser',
-  name: 'Browser Print',
-  ip: '',
-  port: 9100,
-  connected: true,
-  autoPrint: false,
-  paperWidth: '80mm',
-};
-
-function getPrinterConfig(): PrinterConfig {
-  try {
-    const saved = localStorage.getItem('kitchen_printer');
-    if (saved) return JSON.parse(saved);
-  } catch { /* */ }
-  return DEFAULT_PRINTER_CONFIG;
-}
-
-function savePrinterConfig(config: PrinterConfig) {
-  localStorage.setItem('kitchen_printer', JSON.stringify(config));
-}
-
-function generateReceiptHtml(order: Order, paperWidth: string): string {
-  let items: any[] = [];
-  try { items = JSON.parse(order.items_json); } catch { /* */ }
-  const now = new Date().toLocaleString('en-AE', { timeZone: 'Asia/Dubai' });
-  const maxWidth = paperWidth === '58mm' ? '220px' : '300px';
-
-  const itemsHtml = items.map(item => {
-    const extrasLine = item.extras && item.extras.length > 0
-      ? `<div style="font-size:11px;color:#555;margin-left:12px;">+ ${item.extras.join(', ')}</div>`
-      : '';
-    return `<div style="margin-bottom:6px;"><div style="font-weight:bold;font-size:15px;">${item.quantity}x ${item.name}</div><div style="font-size:12px;color:#333;margin-left:8px;">Size: ${item.size}</div>${extrasLine}</div>`;
-  }).join('');
-
-  const notesHtml = order.order_notes
-    ? `<div style="margin-top:8px;padding:6px;border:1px solid #000;font-style:italic;font-size:12px;">Note: ${order.order_notes}</div>`
-    : '';
-
-  return `<!DOCTYPE html><html><head><title>Order #${order.id}</title><style>@page{margin:2mm;}body{font-family:'Courier New',monospace;font-size:14px;width:100%;max-width:${maxWidth};margin:0 auto;padding:4px;}</style></head><body><div style="text-align:center;border-bottom:2px dashed #000;padding-bottom:8px;margin-bottom:8px;"><div style="font-size:20px;font-weight:bold;">VITA NAPOLI</div><div style="font-size:24px;font-weight:bold;margin:4px 0;">ORDER #${order.id}</div><div style="font-size:11px;">${now}</div></div><div style="margin-bottom:8px;font-size:12px;"><div><strong>Customer:</strong> ${order.customer_name}</div><div><strong>Phone:</strong> ${order.customer_phone}</div><div><strong>Payment:</strong> ${order.payment_method || 'Cash'}</div></div><div style="border-top:1px dashed #000;border-bottom:1px dashed #000;padding:8px 0;">${itemsHtml}</div><div style="font-weight:bold;font-size:16px;text-align:right;margin-top:8px;">TOTAL: AED ${order.total_amount?.toFixed(2)}</div>${notesHtml}<div style="text-align:center;margin-top:8px;font-size:10px;color:#666;">--- Kitchen Copy ---</div></body></html>`;
-}
-
-function printOrderReceipt(order: Order, config: PrinterConfig) {
-  if (config.type === 'network' && config.ip && config.port) {
-    sendToNetworkPrinter(order, config);
-  } else {
-    // Browser print fallback
-    const receiptHtml = generateReceiptHtml(order, config.paperWidth);
-    const printWindow = window.open('', '_blank', 'width=350,height=600');
-    if (printWindow) {
-      printWindow.document.write(receiptHtml);
-      printWindow.document.close();
-      setTimeout(() => {
-        printWindow.print();
-        setTimeout(() => printWindow.close(), 1000);
-      }, 300);
-    } else {
-      toast.error('Pop-up blocked! Please allow pop-ups for printing.');
-    }
-  }
-}
-
-async function sendToNetworkPrinter(order: Order, config: PrinterConfig) {
-  try {
-    const response = await fetch(`http://${config.ip}:${config.port}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        orderId: order.id,
-        content: generateReceiptHtml(order, config.paperWidth),
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (response.ok) {
-      toast.success(`Order #${order.id} sent to printer`);
-    } else {
-      throw new Error('Printer not responding');
-    }
-  } catch {
-    toast.error(`Cannot reach printer at ${config.ip}:${config.port}. Using browser print.`);
-    const fallbackConfig = { ...config, type: 'browser' as const };
-    printOrderReceipt(order, fallbackConfig);
-  }
-}
-
-async function testPrinterConnection(config: PrinterConfig): Promise<boolean> {
-  if (config.type === 'browser') return true;
-  if (config.type === 'network' && config.ip && config.port) {
-    try {
-      const response = await fetch(`http://${config.ip}:${config.port}/status`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(3000),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-// ===== COMPONENTS =====
-function OrderTimer({ createdAt }: { createdAt: string }) {
-  const [elapsed, setElapsed] = useState('');
-
-  useEffect(() => {
-    function update() {
-      const diff = Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000);
-      const mins = Math.floor(diff / 60);
-      const secs = diff % 60;
-      setElapsed(`${mins}:${secs.toString().padStart(2, '0')}`);
-    }
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [createdAt]);
-
-  return (
-    <span className="text-orange-400 text-xs font-mono font-bold">{elapsed}</span>
-  );
-}
-
-function PrinterSettingsDialog({
-  open,
-  onOpenChange,
-  config,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  config: PrinterConfig;
-  onSave: (config: PrinterConfig) => void;
-}) {
-  const [localConfig, setLocalConfig] = useState<PrinterConfig>(config);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null);
-
-  useEffect(() => {
-    setLocalConfig(config);
-    setTestResult(null);
-  }, [config, open]);
-
-  async function handleTest() {
-    setTesting(true);
-    setTestResult(null);
-    const result = await testPrinterConnection(localConfig);
-    setTestResult(result ? 'success' : 'failed');
-    setTesting(false);
-    if (result) {
-      toast.success('Printer connected successfully!');
-    } else {
-      toast.error('Could not connect to printer');
-    }
-  }
-
-  function handleSave() {
-    const updatedConfig = {
-      ...localConfig,
-      connected: localConfig.type === 'browser' ? true : testResult === 'success',
-    };
-    savePrinterConfig(updatedConfig);
-    onSave(updatedConfig);
-    onOpenChange(false);
-    toast.success('Printer settings saved');
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-900 border-gray-700 text-white max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Printer className="w-5 h-5 text-orange-400" />
-            Kitchen Printer Settings
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div>
-            <Label className="text-gray-300">Connection Type</Label>
-            <Select
-              value={localConfig.type}
-              onValueChange={(v) => setLocalConfig({ ...localConfig, type: v as PrinterConfig['type'] })}
-            >
-              <SelectTrigger className="bg-gray-800 border-gray-700 text-white mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-gray-900 border-gray-700">
-                <SelectItem value="browser">Browser Print (Default)</SelectItem>
-                <SelectItem value="network">Network Printer (IP/WiFi)</SelectItem>
-                <SelectItem value="usb">USB Printer</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-gray-500 text-xs mt-1">
-              {localConfig.type === 'browser' && 'Uses your browser print dialog. Works with any connected printer.'}
-              {localConfig.type === 'network' && 'Connect to a thermal printer via IP address (ESC/POS compatible).'}
-              {localConfig.type === 'usb' && 'USB thermal printers require a print server app running locally.'}
-            </p>
-          </div>
-
-          {localConfig.type === 'network' && (
-            <>
-              <div>
-                <Label className="text-gray-300">Printer Name</Label>
-                <Input
-                  value={localConfig.name}
-                  onChange={(e) => setLocalConfig({ ...localConfig, name: e.target.value })}
-                  placeholder="Kitchen Printer 1"
-                  className="bg-gray-800 border-gray-700 text-white mt-1"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-gray-300">IP Address</Label>
-                  <Input
-                    value={localConfig.ip}
-                    onChange={(e) => setLocalConfig({ ...localConfig, ip: e.target.value })}
-                    placeholder="192.168.1.100"
-                    className="bg-gray-800 border-gray-700 text-white mt-1"
-                  />
-                </div>
-                <div>
-                  <Label className="text-gray-300">Port</Label>
-                  <Input
-                    type="number"
-                    value={localConfig.port}
-                    onChange={(e) => setLocalConfig({ ...localConfig, port: Number(e.target.value) })}
-                    placeholder="9100"
-                    className="bg-gray-800 border-gray-700 text-white mt-1"
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {localConfig.type === 'usb' && (
-            <div>
-              <Label className="text-gray-300">Printer Name</Label>
-              <Input
-                value={localConfig.name}
-                onChange={(e) => setLocalConfig({ ...localConfig, name: e.target.value })}
-                placeholder="USB Thermal Printer"
-                className="bg-gray-800 border-gray-700 text-white mt-1"
-              />
-              <p className="text-yellow-400 text-xs mt-2">
-                USB printing requires a local print server (e.g., QZ Tray or similar). Browser print will be used as fallback.
-              </p>
-            </div>
-          )}
-
-          <div>
-            <Label className="text-gray-300">Paper Width</Label>
-            <Select
-              value={localConfig.paperWidth}
-              onValueChange={(v) => setLocalConfig({ ...localConfig, paperWidth: v as '58mm' | '80mm' })}
-            >
-              <SelectTrigger className="bg-gray-800 border-gray-700 text-white mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-gray-900 border-gray-700">
-                <SelectItem value="58mm">58mm (Small)</SelectItem>
-                <SelectItem value="80mm">80mm (Standard)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center justify-between bg-gray-800 rounded-lg p-3">
-            <div>
-              <p className="text-white text-sm font-medium">Auto-Print New Orders</p>
-              <p className="text-gray-500 text-xs">Automatically print when a new order arrives</p>
-            </div>
-            <button
-              onClick={() => setLocalConfig({ ...localConfig, autoPrint: !localConfig.autoPrint })}
-              className={`w-12 h-6 rounded-full transition-colors cursor-pointer ${
-                localConfig.autoPrint ? 'bg-green-600' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${
-                localConfig.autoPrint ? 'translate-x-6' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Test Connection */}
-          {localConfig.type === 'network' && (
-            <div className="flex items-center gap-3">
-              <Button
-                onClick={handleTest}
-                disabled={testing || !localConfig.ip}
-                variant="outline"
-                className="border-gray-700 text-gray-300 cursor-pointer"
-              >
-                {testing ? (
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Wifi className="w-4 h-4 mr-2" />
-                )}
-                Test Connection
-              </Button>
-              {testResult === 'success' && (
-                <span className="text-green-400 text-sm flex items-center gap-1">
-                  <Wifi className="w-4 h-4" /> Connected
-                </span>
-              )}
-              {testResult === 'failed' && (
-                <span className="text-red-400 text-sm flex items-center gap-1">
-                  <WifiOff className="w-4 h-4" /> Failed
-                </span>
-              )}
-            </div>
-          )}
-
-          <Button onClick={handleSave} className="w-full bg-orange-600 hover:bg-orange-700 text-white cursor-pointer">
-            Save Printer Settings
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 interface DeliveryAssignment {
   id: number;
   order_id: number;
@@ -502,12 +149,10 @@ export default function KitchenOrders() {
   const [pin, setPin] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showSoundPrompt, setShowSoundPrompt] = useState(false);
-  const [printerConfig, setPrinterConfig] = useState<PrinterConfig>(getPrinterConfig());
-  const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
+  const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>({
+    ...DEFAULT_RECEIPT_SETTINGS,
+  });
   const [deliveryAssignments, setDeliveryAssignments] = useState<DeliveryAssignment[]>([]);
-  const [restaurantStatus, setRestaurantStatus] = useState<'open' | 'busy' | 'closed'>('open');
-  const [settingsId, setSettingsId] = useState<number | null>(null);
-  const [statusUpdating, setStatusUpdating] = useState(false);
   const [rejectingOrder, setRejectingOrder] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [customRejectReason, setCustomRejectReason] = useState('');
@@ -518,9 +163,6 @@ export default function KitchenOrders() {
   useEffect(() => {
     const kitchenAuth = localStorage.getItem('kitchen_auth');
     if (kitchenAuth) {
-      if (!localStorage.getItem(KITCHEN_PIN_STORAGE_KEY)) {
-        localStorage.setItem(KITCHEN_PIN_STORAGE_KEY, '1234');
-      }
       setAuthenticated(true);
       if (!hasInteractedRef.current) {
         setShowSoundPrompt(true);
@@ -536,50 +178,16 @@ export default function KitchenOrders() {
 
   useEffect(() => {
     if (!authenticated) return;
+
+    void loadReceiptSettings().then(setReceiptSettings);
     loadOrders();
     loadDeliveryAssignments();
-    loadRestaurantSettings();
     const interval = setInterval(() => {
       loadOrders();
       loadDeliveryAssignments();
     }, 8000);
     return () => clearInterval(interval);
   }, [authenticated]);
-
-  async function loadRestaurantSettings() {
-    try {
-      const res = await client.entities.restaurant_settings.query({ query: {}, limit: 1 });
-      const settings = res?.data?.items?.[0];
-      if (settings) {
-        setRestaurantStatus(settings.restaurant_status || 'open');
-        setSettingsId(Number(settings.id));
-      }
-    } catch (e) {
-      console.error('Failed to load restaurant settings:', e);
-    }
-  }
-
-  async function updateRestaurantStatus(newStatus: 'open' | 'busy' | 'closed') {
-    if (!settingsId) {
-      toast.error('Restaurant settings not found');
-      return;
-    }
-
-    try {
-      setStatusUpdating(true);
-      await client.entities.restaurant_settings.update({
-        id: String(settingsId),
-        data: { restaurant_status: newStatus },
-      });
-      setRestaurantStatus(newStatus);
-      toast.success(`Restaurant is now ${newStatus.toUpperCase()}`);
-    } catch (e) {
-      console.error('Failed to update restaurant status:', e);
-      toast.error('Failed to update restaurant status');
-    } finally {
-      setStatusUpdating(false);
-    }
-  }
 
   async function loadDeliveryAssignments() {
     try {
@@ -628,7 +236,6 @@ export default function KitchenOrders() {
     e.preventDefault();
     if (pin === '1234') {
       localStorage.setItem('kitchen_auth', 'true');
-      localStorage.setItem(KITCHEN_PIN_STORAGE_KEY, pin);
       setAuthenticated(true);
       hasInteractedRef.current = true;
       setShowSoundPrompt(false);
@@ -650,9 +257,20 @@ export default function KitchenOrders() {
     toast.success('Sound notifications activated!');
   }
 
-  function handlePrintOrder(order: Order) {
-    printOrderReceipt(order, printerConfig);
-    toast.success(`Printing order #${order.id}`);
+  async function handlePrintOrder(order: Order) {
+    const latestSettings = await loadReceiptSettings();
+    setReceiptSettings(latestSettings);
+
+    const printed = await printKitchenOrder(
+      order,
+      latestSettings,
+      'copy',
+      false,
+    );
+
+    if (printed) {
+      toast.success(`Reprint started for order #${order.id}`);
+    }
   }
 
   // Track recently updated order IDs to prevent poll from reverting optimistic updates
@@ -666,107 +284,74 @@ export default function KitchenOrders() {
   const loadOrders = useCallback(async () => {
     try {
       setRefreshing(true);
-
-      const payload = await kitchenApiRequest<{ items?: Order[] } | Order[]>(
-        '/api/v1/admin/kitchen/orders?limit=50&skip=0',
-        'GET'
-      );
-
-      const allOrders = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload?.items)
-          ? payload.items
-          : [];
-
-      const visibleOrders = allOrders.filter((order: Order) =>
-        ['new', 'accepted', 'preparing', 'ready', 'completed'].includes(order.status)
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/admin/orders',
+        method: 'GET',
+        data: { sort: '-created_at', limit: 50 },
+      });
+      const allOrders = res.data?.items || [];
+      const activeOrders = allOrders.filter(
+        (o: Order) => ['new', 'accepted', 'preparing', 'ready'].includes(o.status)
       );
 
       // Filter out stale poll data for recently-updated orders (10s guard)
       const now = Date.now();
       const recentUpdates = recentlyUpdatedRef.current;
-
-      for (const [id, timestamp] of recentUpdates.entries()) {
-        if (now - timestamp > 10000) {
-          recentUpdates.delete(id);
-        }
+      // Clean old entries (older than 10s)
+      for (const [id, ts] of recentUpdates.entries()) {
+        if (now - ts > 10000) recentUpdates.delete(id);
       }
 
+      // Use ref to get current orders (avoids stale closure)
       const currentOrders = ordersRef.current;
 
-      const mergedOrders = visibleOrders.map((polledOrder: Order) => {
+      // Merge: keep local state for recently-updated orders, use poll data for others
+      const mergedOrders = activeOrders.map((polledOrder: Order) => {
         if (recentUpdates.has(polledOrder.id)) {
-          const localOrder = currentOrders.find(
-            (order) => order.id === polledOrder.id
-          );
-
+          // Use local state version instead of polled version
+          const localOrder = currentOrders.find(o => o.id === polledOrder.id);
           return localOrder || polledOrder;
         }
-
         return polledOrder;
       });
 
-      const filteredOrders = mergedOrders.filter((order: Order) => {
-        if (recentUpdates.has(order.id)) {
-          const localOrder = currentOrders.find(
-            (currentOrder) => currentOrder.id === order.id
-          );
-
-          if (
-            localOrder &&
-            !['new', 'accepted', 'preparing', 'ready', 'completed'].includes(localOrder.status)
-          ) {
+      // Also keep locally-removed orders (status changed to completed/cancelled) from reappearing
+      const filteredOrders = mergedOrders.filter((o: Order) => {
+        if (recentUpdates.has(o.id)) {
+          const localOrder = currentOrders.find(lo => lo.id === o.id);
+          // If local state shows it was moved out of active, don't show it
+          if (localOrder && !['new', 'accepted', 'preparing', 'ready'].includes(localOrder.status)) {
             return false;
           }
-
+          // If the order was removed from local state (e.g. completed/cancelled), filter it out
           if (!localOrder) {
             return false;
           }
         }
-
         return true;
       });
 
+      // Deduplicate by order ID (prevent ghost duplicates)
       const seen = new Set<number>();
-      const deduplicatedOrders = filteredOrders.filter((order: Order) => {
-        if (seen.has(order.id)) {
-          return false;
-        }
-
-        seen.add(order.id);
+      const deduplicatedOrders = filteredOrders.filter((o: Order) => {
+        if (seen.has(o.id)) return false;
+        seen.add(o.id);
         return true;
       });
 
       const currentNewOrderIds = new Set(
-        deduplicatedOrders
-          .filter((order: Order) => order.status === 'new')
-          .map((order: Order) => order.id)
+        deduplicatedOrders.filter((o: Order) => o.status === 'new').map((o: Order) => o.id)
       );
+      const prevIds = prevNewOrderIdsRef.current;
+      const brandNewOrders = [...currentNewOrderIds].filter(id => !prevIds.has(id));
 
-      const previousIds = prevNewOrderIdsRef.current;
-      const brandNewOrders = [...currentNewOrderIds].filter(
-        (id) => !previousIds.has(id)
-      );
-
-      if (brandNewOrders.length > 0 && previousIds.size > 0) {
+      if (brandNewOrders.length > 0 && prevIds.size > 0) {
         brandNewOrders.forEach(() => {
           kitchenAlarm.playOnce();
         });
-
-        toast.success(
-          `${brandNewOrders.length} new order${
-            brandNewOrders.length > 1 ? 's' : ''
-          } received!`,
-          { duration: 5000 }
-        );
-
-        if (printerConfig.autoPrint) {
-          deduplicatedOrders
-            .filter((order: Order) => brandNewOrders.includes(order.id))
-            .forEach((order: Order) => {
-              printOrderReceipt(order, printerConfig);
-            });
-        }
+        toast.success(`${brandNewOrders.length} new order${brandNewOrders.length > 1 ? 's' : ''} received!`, {
+          duration: 5000,
+        });
       }
 
       if (currentNewOrderIds.size > 0) {
@@ -780,35 +365,23 @@ export default function KitchenOrders() {
       prevNewOrderIdsRef.current = currentNewOrderIds;
       setOrders(deduplicatedOrders);
       setLastRefresh(new Date());
-    } catch (error: any) {
-      console.error('Failed to load orders:', error);
-
-      const status = error?.response?.status;
-      const detail = error?.response?.data?.detail;
-
-      if (status === 401 || status === 403) {
-        toast.error(detail || 'Invalid kitchen PIN');
-        localStorage.removeItem('kitchen_auth');
-        localStorage.removeItem(KITCHEN_PIN_STORAGE_KEY);
-        setAuthenticated(false);
-      } else {
-        toast.error(detail || 'Failed to load kitchen orders');
-      }
+    } catch (e) {
+      console.error('Failed to load orders:', e);
     } finally {
       setRefreshing(false);
     }
-  }, [printerConfig]);
+  }, []);
 
   async function acceptOrder(orderId: number, minutes: number) {
     try {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await kitchenApiRequest(
-        `/api/v1/admin/kitchen/orders/${orderId}/status`,
-        'PUT',
-        { status: 'accepted', estimated_minutes: minutes }
-      );
+      await client.apiCall.invoke({
+        url: `/api/v1/admin/orders/${orderId}/status`,
+        method: 'PUT',
+        data: { status: 'accepted', estimated_minutes: minutes },
+      });
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
       );
@@ -821,6 +394,26 @@ export default function KitchenOrders() {
       }
 
       toast.success(`Order #${orderId} accepted — ${minutes} min`);
+
+      const acceptedOrder = ordersRef.current.find(
+        order => order.id === orderId,
+      );
+
+      if (
+        acceptedOrder &&
+        receiptSettings.auto_print_on_accept
+      ) {
+        const printed = await printKitchenOrder(
+          acceptedOrder,
+          receiptSettings,
+          'original',
+          true,
+        );
+
+        if (printed) {
+          toast.success(`Order #${orderId} receipt printed`);
+        }
+      }
     } catch (e) {
       console.error('Failed to accept order:', e);
       recentlyUpdatedRef.current.delete(orderId);
@@ -833,13 +426,14 @@ export default function KitchenOrders() {
       // Mark as recently updated to prevent poll from reverting
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
-      await kitchenApiRequest(
-        `/api/v1/admin/kitchen/orders/${orderId}/status`,
-        'PUT',
-        { status: newStatus }
-      );
+      await client.apiCall.invoke({
+        url: `/api/v1/admin/orders/${orderId}/status`,
+        method: 'PUT',
+        data: { status: newStatus },
+      });
 
-      if (newStatus === 'cancelled') {
+      if (newStatus === 'completed' || newStatus === 'cancelled') {
+        // Remove from active list immediately
         setOrders(prev => prev.filter(o => o.id !== orderId));
       } else {
         setOrders(prev =>
@@ -860,14 +454,11 @@ export default function KitchenOrders() {
       recentlyUpdatedRef.current.set(orderId, Date.now());
 
       const cancelReason = reason || (rejectReason === 'Other' ? customRejectReason : rejectReason);
-      await kitchenApiRequest(
-        `/api/v1/admin/kitchen/orders/${orderId}/status`,
-        'PUT',
-        {
-          status: 'cancelled',
-          cancel_reason: cancelReason || 'Rejected by kitchen',
-        }
-      );
+      await client.apiCall.invoke({
+        url: `/api/v1/admin/orders/${orderId}/status`,
+        method: 'PUT',
+        data: { status: 'cancelled', cancel_reason: cancelReason || 'Rejected by kitchen' },
+      });
       setOrders(prev => prev.filter(o => o.id !== orderId));
 
       prevNewOrderIdsRef.current.delete(orderId);
@@ -917,10 +508,6 @@ export default function KitchenOrders() {
   const newOrders = orders.filter(o => o.status === 'new');
   const activeOrders = orders.filter(o => ['accepted', 'preparing'].includes(o.status));
   const readyOrders = orders.filter(o => o.status === 'ready');
-  const completedOrders = orders
-    .filter(o => o.status === 'completed')
-    .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
-    .slice(0, 20);
 
   // Helper to check if order is delivery
   function isDeliveryOrder(order: Order): boolean {
@@ -950,13 +537,21 @@ export default function KitchenOrders() {
           <div className="flex items-center gap-2">
             {/* Printer status & settings button */}
             <button
-              onClick={() => setPrinterDialogOpen(true)}
+              onClick={async () => {
+                const latest = await loadReceiptSettings();
+                setReceiptSettings(latest);
+                toast.info(
+                  nativePrinterAvailable()
+                    ? `Printer app connected · ${latest.printer_ip}:${latest.printer_port}`
+                    : 'Printer settings: Admin → Settings → Receipt & Printer',
+                );
+              }}
               className={`p-2 rounded-lg cursor-pointer transition-colors ${
-                printerConfig.connected
-                  ? 'bg-orange-600/20 text-orange-400 border border-orange-600/30'
-                  : 'bg-gray-800 text-gray-600 border border-gray-700'
+                nativePrinterAvailable()
+                  ? 'bg-green-600/20 text-green-400 border border-green-600/30'
+                  : 'bg-orange-600/20 text-orange-400 border border-orange-600/30'
               }`}
-              title={`Printer: ${printerConfig.name} (${printerConfig.type})`}
+              title="Receipt & printer status"
             >
               <Printer className="w-5 h-5" />
             </button>
@@ -984,69 +579,22 @@ export default function KitchenOrders() {
           </div>
         </div>
 
-        {/* Restaurant Open / Busy / Closed control */}
-        <Card className="bg-gray-900 border-gray-800 p-3 mb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <p className="text-white font-semibold text-sm">Restaurant Status</p>
-              <p className="text-gray-500 text-xs">Customers will immediately see this status</p>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                disabled={statusUpdating}
-                onClick={() => updateRestaurantStatus('open')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
-                  restaurantStatus === 'open'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                🟢 OPEN
-              </button>
-              <button
-                disabled={statusUpdating}
-                onClick={() => updateRestaurantStatus('busy')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
-                  restaurantStatus === 'busy'
-                    ? 'bg-yellow-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                🟡 BUSY
-              </button>
-              <button
-                disabled={statusUpdating}
-                onClick={() => updateRestaurantStatus('closed')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
-                  restaurantStatus === 'closed'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                🔴 CLOSED
-              </button>
-            </div>
-          </div>
-        </Card>
-
-        {/* Printer connection status banner */}
-        {printerConfig.type !== 'browser' && !printerConfig.connected && (
-          <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg px-3 py-2 mb-3 flex items-center justify-between">
-            <span className="text-orange-400 text-xs flex items-center gap-1">
-              <WifiOff className="w-3 h-3" /> Printer disconnected — orders will use browser print
-            </span>
-            <button onClick={() => setPrinterDialogOpen(true)} className="text-orange-400 text-xs underline cursor-pointer">
-              Configure
-            </button>
-          </div>
-        )}
-
-        {printerConfig.autoPrint && (
-          <div className="bg-green-600/10 border border-green-600/30 rounded-lg px-3 py-2 mb-3 flex items-center gap-2">
-            <Printer className="w-3 h-3 text-green-400" />
-            <span className="text-green-400 text-xs">Auto-print enabled — new orders print automatically</span>
-          </div>
-        )}
+        <div className={`rounded-lg px-3 py-2 mb-3 flex items-center gap-2 ${
+          nativePrinterAvailable()
+            ? 'bg-green-600/10 border border-green-600/30'
+            : 'bg-orange-600/10 border border-orange-600/30'
+        }`}>
+          <Printer className={`w-4 h-4 ${
+            nativePrinterAvailable() ? 'text-green-400' : 'text-orange-400'
+          }`} />
+          <span className={`text-xs ${
+            nativePrinterAvailable() ? 'text-green-400' : 'text-orange-400'
+          }`}>
+            {nativePrinterAvailable()
+              ? `Vita Kitchen Print connected · Auto-print on Accept ${receiptSettings.auto_print_on_accept ? 'ON' : 'OFF'}`
+              : 'Browser mode · automatic silent print needs Vita Kitchen Print Android app'}
+          </span>
+        </div>
 
         {/* Sound activation prompt */}
         {showSoundPrompt && (
@@ -1097,13 +645,6 @@ export default function KitchenOrders() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-white font-bold text-lg">#{order.id}</span>
                       <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handlePrintOrder(order)}
-                          className="text-gray-400 hover:text-orange-400 cursor-pointer p-1"
-                          title="Print order"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
                         <OrderTimer createdAt={order.created_at} />
                       </div>
                     </div>
@@ -1208,7 +749,7 @@ export default function KitchenOrders() {
                         <button
                           onClick={() => handlePrintOrder(order)}
                           className="text-gray-400 hover:text-orange-400 cursor-pointer p-1"
-                          title="Print order"
+                          title="Reprint order"
                         >
                           <Printer className="w-4 h-4" />
                         </button>
@@ -1277,7 +818,7 @@ export default function KitchenOrders() {
                           <button
                             onClick={() => handlePrintOrder(order)}
                             className="text-gray-400 hover:text-orange-400 cursor-pointer p-1"
-                            title="Print order"
+                            title="Reprint order"
                           >
                             <Printer className="w-4 h-4" />
                           </button>
@@ -1325,7 +866,7 @@ export default function KitchenOrders() {
                           <button
                             onClick={() => handlePrintOrder(order)}
                             className="text-gray-400 hover:text-orange-400 cursor-pointer p-1"
-                            title="Print order"
+                            title="Reprint order"
                           >
                             <Printer className="w-4 h-4" />
                           </button>
@@ -1367,90 +908,7 @@ export default function KitchenOrders() {
             </div>
           </div>
         </div>
-
-        {/* Completed Orders */}
-        <div className="mt-5">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-green-600" />
-              <h2 className="text-green-400 font-semibold text-sm">
-                COMPLETED ORDERS ({completedOrders.length})
-              </h2>
-            </div>
-            <span className="text-gray-600 text-[10px]">Latest 20 completed orders</span>
-          </div>
-
-          {completedOrders.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {completedOrders.map(order => {
-                let items: any[] = [];
-                try { items = JSON.parse(order.items_json); } catch { /* */ }
-
-                const completedAt = order.updated_at || order.created_at;
-
-                return (
-                  <Card key={order.id} className="bg-gray-900 border-green-600/30 p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <span className="text-white font-bold text-lg">#{order.id}</span>
-                        <p className="text-gray-500 text-[10px]">
-                          {new Date(completedAt).toLocaleString('en-AE', {
-                            timeZone: 'Asia/Dubai',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            day: '2-digit',
-                            month: 'short',
-                          })}
-                        </p>
-                      </div>
-                      <Badge className="bg-green-600 text-white text-[10px]">COMPLETED</Badge>
-                    </div>
-
-                    <p className="text-gray-300 text-sm mb-1">
-                      {order.customer_name} • {order.customer_phone}
-                    </p>
-
-                    <div className="space-y-0.5 mb-2">
-                      {items.map((item: any, idx: number) => (
-                        <div key={idx} className="text-gray-400 text-xs">
-                          {item.quantity}x {item.name}
-                          {item.size ? ` (${item.size})` : ''}
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-800">
-                      <span className="text-green-400 font-bold text-sm">
-                        AED {order.total_amount?.toFixed(2)}
-                      </span>
-                      <button
-                        onClick={() => handlePrintOrder(order)}
-                        className="flex items-center gap-1 text-gray-400 hover:text-orange-400 text-xs cursor-pointer"
-                      >
-                        <Printer className="w-3 h-3" />
-                        Print
-                      </button>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl py-10 text-center">
-              <Check className="w-8 h-8 text-gray-700 mx-auto mb-2" />
-              <p className="text-gray-600 text-sm">No completed orders yet</p>
-            </div>
-          )}
-        </div>
       </div>
-
-      {/* Printer Settings Dialog */}
-      <PrinterSettingsDialog
-        open={printerDialogOpen}
-        onOpenChange={setPrinterDialogOpen}
-        config={printerConfig}
-        onSave={setPrinterConfig}
-      />
 
       {/* Reject Order with Reason Dialog */}
       <Dialog open={rejectingOrder !== null} onOpenChange={(open) => { if (!open) setRejectingOrder(null); }}>
