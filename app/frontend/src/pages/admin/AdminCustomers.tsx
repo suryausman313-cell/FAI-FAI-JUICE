@@ -95,8 +95,6 @@ export default function AdminCustomers() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] =
     useState<FilterStatus>('all');
-  const [totalCustomers, setTotalCustomers] = useState(0);
-  const [onlineCount, setOnlineCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
   const [resetCustomer, setResetCustomer] =
@@ -116,6 +114,115 @@ export default function AdminCustomers() {
 
     return map;
   }, [pinAccounts]);
+
+
+  // Customer signup is stored in customer_pin_accounts_v2.
+  // The old customer endpoint mostly returns visitors/orders, so merge both
+  // sources here. This makes a newly signed-up customer visible immediately,
+  // even before placing an order.
+  const allCustomers = useMemo(() => {
+    const map = new Map<string, Customer>();
+
+    customers.forEach(customer => {
+      const key =
+        phoneKey(customer.customer_phone) ||
+        String(customer.user_id || '');
+
+      if (!key) return;
+
+      map.set(key, {
+        ...customer,
+        total_orders: Number(customer.total_orders || 0),
+        total_spent: Number(customer.total_spent || 0),
+        is_online: Boolean(customer.is_online),
+      });
+    });
+
+    pinAccounts.forEach(account => {
+      const key = phoneKey(account.phone);
+      if (!key) return;
+
+      const existing = map.get(key);
+
+      if (existing) {
+        map.set(key, {
+          ...existing,
+          customer_name:
+            account.customer_name ||
+            existing.customer_name ||
+            'Customer',
+          customer_phone:
+            account.phone || existing.customer_phone,
+          is_guest: false,
+          last_active:
+            existing.last_active ||
+            account.last_login_at ||
+            account.updated_at ||
+            null,
+        });
+        return;
+      }
+
+      map.set(key, {
+        user_id: `pin:${account.id}`,
+        customer_name: account.customer_name || 'Customer',
+        customer_phone: account.phone,
+        total_orders: 0,
+        total_spent: 0,
+        last_order_date: null,
+        is_online: false,
+        last_active:
+          account.last_login_at || account.updated_at || null,
+        first_seen: account.updated_at || null,
+        is_guest: false,
+      });
+    });
+
+    return Array.from(map.values()).sort((first, second) => {
+      const firstDate = new Date(
+        first.last_active ||
+          first.last_order_date ||
+          first.first_seen ||
+          0
+      ).getTime();
+
+      const secondDate = new Date(
+        second.last_active ||
+          second.last_order_date ||
+          second.first_seen ||
+          0
+      ).getTime();
+
+      return secondDate - firstDate;
+    });
+  }, [customers, pinAccounts]);
+
+  const visibleCustomers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return allCustomers.filter(customer => {
+      const matchesSearch =
+        !query ||
+        String(customer.customer_name || '')
+          .toLowerCase()
+          .includes(query) ||
+        String(customer.customer_phone || '')
+          .toLowerCase()
+          .includes(query);
+
+      const matchesStatus =
+        filterStatus === 'all' ||
+        (filterStatus === 'online' && customer.is_online) ||
+        (filterStatus === 'offline' && !customer.is_online);
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [allCustomers, filterStatus, search]);
+
+  const mergedTotalCustomers = allCustomers.length;
+  const mergedOnlineCount = allCustomers.filter(
+    customer => customer.is_online
+  ).length;
 
   const loadPinAccounts = useCallback(async () => {
     try {
@@ -137,13 +244,8 @@ export default function AdminCustomers() {
 
       try {
         const params: Record<string, string | number> = {
-          limit: 100,
+          limit: 500,
         };
-
-        if (search) params.search = search;
-        if (filterStatus !== 'all') {
-          params.filter_status = filterStatus;
-        }
 
         const res = await client.apiCall.invoke({
           url: '/api/v1/admin/customers-enhanced',
@@ -152,16 +254,13 @@ export default function AdminCustomers() {
         });
 
         setCustomers(res.data?.items || []);
-        setTotalCustomers(res.data?.total_customers || 0);
-        setOnlineCount(res.data?.online_count || 0);
       } catch (error) {
         console.error('Failed to load customers:', error);
 
         try {
           const params: Record<string, string | number> = {
-            limit: 100,
+            limit: 500,
           };
-          if (search) params.search = search;
 
           const res = await client.apiCall.invoke({
             url: '/api/v1/admin/customers',
@@ -171,10 +270,6 @@ export default function AdminCustomers() {
 
           const items = res.data?.items || [];
           setCustomers(items);
-          setTotalCustomers(items.length);
-          setOnlineCount(
-            items.filter((item: Customer) => item.is_online).length
-          );
         } catch (fallbackError) {
           console.error(
             'Failed to load fallback customers:',
@@ -185,7 +280,7 @@ export default function AdminCustomers() {
         setRefreshing(false);
       }
     },
-    [filterStatus, search]
+    []
   );
 
   useEffect(() => {
@@ -217,10 +312,6 @@ export default function AdminCustomers() {
 
     void checkAuthAndLoad();
   }, [loadCustomers, loadPinAccounts, navigate]);
-
-  useEffect(() => {
-    if (!loading) void loadCustomers();
-  }, [filterStatus, search]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -391,7 +482,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <Users className="w-5 h-5 text-blue-400 mx-auto mb-1" />
             <p className="text-2xl font-bold text-white">
-              {totalCustomers}
+              {mergedTotalCustomers}
             </p>
             <p className="text-xs text-gray-400">Total</p>
           </Card>
@@ -399,7 +490,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <Wifi className="w-5 h-5 text-green-400 mx-auto mb-1" />
             <p className="text-2xl font-bold text-green-400">
-              {onlineCount}
+              {mergedOnlineCount}
             </p>
             <p className="text-xs text-gray-400">Online Now</p>
           </Card>
@@ -407,7 +498,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <WifiOff className="w-5 h-5 text-gray-500 mx-auto mb-1" />
             <p className="text-2xl font-bold text-gray-400">
-              {Math.max(totalCustomers - onlineCount, 0)}
+              {Math.max(mergedTotalCustomers - mergedOnlineCount, 0)}
             </p>
             <p className="text-xs text-gray-400">Offline</p>
           </Card>
@@ -473,7 +564,7 @@ export default function AdminCustomers() {
         </div>
 
         <div className="space-y-3">
-          {customers.map((customer, index) => {
+          {visibleCustomers.map((customer, index) => {
             const pinAccount = pinAccountMap.get(
               phoneKey(customer.customer_phone)
             );
@@ -628,7 +719,7 @@ export default function AdminCustomers() {
             );
           })}
 
-          {customers.length === 0 && (
+          {visibleCustomers.length === 0 && (
             <div className="text-center py-16">
               <Users className="w-12 h-12 text-gray-700 mx-auto mb-3" />
               <p className="text-gray-500">
