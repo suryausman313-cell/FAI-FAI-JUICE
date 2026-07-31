@@ -486,8 +486,8 @@ export default function CustomerAuth() {
   );
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="mx-auto w-full max-w-md px-4 pb-16 pt-8">
+    <div className="customer-auth-page min-h-[100dvh] bg-black text-white">
+      <div className="customer-auth-container mx-auto w-full max-w-md px-4 pb-16 pt-8">
         <button
           type="button"
           onClick={() => navigate(-1)}
