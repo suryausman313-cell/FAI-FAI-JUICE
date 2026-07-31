@@ -153,7 +153,7 @@ export default function KitchenHistoryPanel({
     try {
       const response = await axios.get<{
         items?: Order[];
-      }>(`${baseURL}/api/v1/admin/kitchen/orders?limit=200&skip=0`, {
+      }>(`${baseURL}/api/v1/kitchen/orders?limit=200&skip=0`, {
         headers: {
           'X-Kitchen-Pin': pin,
         },
