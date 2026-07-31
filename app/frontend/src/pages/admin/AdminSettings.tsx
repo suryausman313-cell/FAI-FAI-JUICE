@@ -11,6 +11,7 @@ import {
   KeyRound,
   MapPin,
   Percent,
+  Printer,
   ReceiptText,
   Settings2,
   ShoppingCart,
@@ -78,6 +79,13 @@ const sections = [
     description: 'English, Arabic and Urdu controls',
     icon: Globe2,
     color: 'text-sky-400',
+  },
+  {
+    path: '/admin/settings/receipt',
+    title: 'Receipt & Printer',
+    description: 'Logo, receipt text, printer IP and auto-print on Accept',
+    icon: Printer,
+    color: 'text-orange-400',
   },
   {
     path: '/admin/settings/security',
