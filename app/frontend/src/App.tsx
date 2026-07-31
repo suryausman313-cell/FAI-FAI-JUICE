@@ -84,6 +84,9 @@ const AdminSecuritySettings = lazy(
 const AdminDataReset = lazy(
   () => import('./pages/admin/AdminDataReset')
 );
+const AdminReceiptSettings = lazy(
+  () => import('./pages/admin/AdminReceiptSettings')
+);
 const AdminFinance = lazy(
   () => import('./pages/admin/AdminFinance')
 );
@@ -307,6 +310,10 @@ const AppRoutes = () => (
       <Route
         path="/admin/settings/data-reset"
         element={<AdminDataReset />}
+      />
+      <Route
+        path="/admin/settings/receipt"
+        element={<AdminReceiptSettings />}
       />
       <Route path="/admin/finance" element={<AdminFinance />} />
       <Route path="/admin/sales" element={<AdminSales />} />
