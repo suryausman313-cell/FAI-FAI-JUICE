@@ -92,8 +92,8 @@ const AdminOffers = lazy(() => import('./pages/admin/AdminOffers'));
 const AdminFeedback = lazy(
   () => import('./pages/admin/AdminFeedback')
 );
-const KitchenOrders = lazy(
-  () => import('./pages/admin/KitchenOrders')
+const KitchenShell = lazy(
+  () => import('./pages/admin/KitchenShell')
 );
 const AdminLanguages = lazy(
   () => import('./pages/admin/AdminLanguages')
@@ -333,7 +333,7 @@ const AppRoutes = () => (
         element={<AdminAccounts />}
       />
       <Route path="/admin/riders" element={<AdminRiders />} />
-      <Route path="/kitchen" element={<KitchenOrders />} />
+      <Route path="/kitchen" element={<KitchenShell />} />
 
       <Route
         path="/auth/callback"
