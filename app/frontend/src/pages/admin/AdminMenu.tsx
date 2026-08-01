@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Image as ImageIcon, Upload, Loader2, Star } from 'lucide-react';
+import { ArrowLeft, Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Image as ImageIcon, Upload, Loader2, Star, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client, Category, MenuItem, Extra, SizeOption, getItemSizes } from '@/lib/api';
-import { uploadMenuImage } from '@/lib/image-upload';
+import { getItemPriceBreakdown, isItemDiscountActive } from '@/lib/discounts';
+
+const MENU_IMAGES_BUCKET = 'menu-images';
 
 export default function AdminMenu() {
   const navigate = useNavigate();
@@ -29,7 +31,19 @@ export default function AdminMenu() {
   const [editingExtra, setEditingExtra] = useState<Extra | null>(null);
 
   // Form states
-  const [itemForm, setItemForm] = useState({ name: '', description: '', category_id: 0, image_url: '', has_extras: true, is_popular: false });
+  const [itemForm, setItemForm] = useState({
+    name: '',
+    description: '',
+    category_id: 0,
+    image_url: '',
+    has_extras: true,
+    is_popular: false,
+    discount_enabled: false,
+    discount_type: 'percentage' as 'percentage' | 'fixed',
+    discount_value: 0,
+    discount_start_at: '',
+    discount_end_at: '',
+  });
   const [sizeOptions, setSizeOptions] = useState<SizeOption[]>([{ name: 'Medium', price: 0 }, { name: 'Large', price: 0 }]);
   const [categoryForm, setCategoryForm] = useState({ name: '', sort_order: 0 });
   const [extraForm, setExtraForm] = useState({ name: '', price: 0 });
@@ -68,17 +82,38 @@ export default function AdminMenu() {
   async function handleImageUpload(file: File) {
     setUploading(true);
     try {
-      const imageUrl = await uploadMenuImage(file);
-      setItemForm(prev => ({ ...prev, image_url: imageUrl }));
+      const ext = file.name.split('.').pop() || 'jpg';
+      const objectKey = `items/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      
+      // Get upload URL
+      const uploadRes = await client.storage.getUploadUrl({
+        bucket_name: MENU_IMAGES_BUCKET,
+        object_key: objectKey,
+      });
+      const uploadUrl = uploadRes?.data?.upload_url;
+      if (!uploadUrl) throw new Error('Failed to get upload URL');
+
+      // Upload file
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        body: file,
+        headers: { 'Content-Type': file.type },
+      });
+
+      // Get download URL for preview
+      const downloadRes = await client.storage.getDownloadUrl({
+        bucket_name: MENU_IMAGES_BUCKET,
+        object_key: objectKey,
+      });
+      const downloadUrl = downloadRes?.data?.download_url;
+      
+      setItemForm(prev => ({ ...prev, image_url: downloadUrl || objectKey }));
       toast.success('Image uploaded successfully!');
-    } catch (error) {
-      console.error('Upload failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to upload image');
+    } catch (e: any) {
+      console.error('Upload failed:', e);
+      toast.error('Failed to upload image');
     } finally {
       setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   }
 
@@ -127,14 +162,31 @@ export default function AdminMenu() {
         category_id: item.category_id,
         image_url: item.image_url || '',
         has_extras: item.has_extras !== false,
-        is_popular: (item as any).is_popular === true,
+        is_popular: item.is_popular === true,
+        discount_enabled: item.discount_enabled === true,
+        discount_type: item.discount_type === 'fixed' ? 'fixed' : 'percentage',
+        discount_value: Number(item.discount_value || 0),
+        discount_start_at: item.discount_start_at || '',
+        discount_end_at: item.discount_end_at || '',
       });
       // Load sizes from sizes_json or fallback
       const sizes = getItemSizes(item);
       setSizeOptions(sizes);
     } else {
       setEditingItem(null);
-      setItemForm({ name: '', description: '', category_id: categories[0]?.id || 0, image_url: '', has_extras: true, is_popular: false });
+      setItemForm({
+        name: '',
+        description: '',
+        category_id: categories[0]?.id || 0,
+        image_url: '',
+        has_extras: true,
+        is_popular: false,
+        discount_enabled: false,
+        discount_type: 'percentage',
+        discount_value: 0,
+        discount_start_at: '',
+        discount_end_at: '',
+      });
       setSizeOptions([{ name: 'Medium', price: 0 }, { name: 'Large', price: 0 }]);
     }
     setItemDialogOpen(true);
@@ -167,6 +219,25 @@ export default function AdminMenu() {
       return;
     }
 
+    if (itemForm.discount_enabled) {
+      if (itemForm.discount_value <= 0) {
+        toast.error('Discount value must be greater than 0');
+        return;
+      }
+      if (itemForm.discount_type === 'percentage' && itemForm.discount_value > 100) {
+        toast.error('Percentage discount cannot be more than 100%');
+        return;
+      }
+      if (
+        itemForm.discount_start_at &&
+        itemForm.discount_end_at &&
+        new Date(itemForm.discount_start_at).getTime() > new Date(itemForm.discount_end_at).getTime()
+      ) {
+        toast.error('Discount end time must be after start time');
+        return;
+      }
+    }
+
     // Store sizes as JSON and also keep legacy price_medium/price_large for backward compat
     const sizesJson = JSON.stringify(validSizes);
     const priceMedium = validSizes[0]?.price || 0;
@@ -182,6 +253,11 @@ export default function AdminMenu() {
       image_url: itemForm.image_url,
       has_extras: itemForm.has_extras,
       is_popular: itemForm.is_popular,
+      discount_enabled: itemForm.discount_enabled,
+      discount_type: itemForm.discount_type,
+      discount_value: itemForm.discount_enabled ? itemForm.discount_value : 0,
+      discount_start_at: itemForm.discount_enabled ? itemForm.discount_start_at || null : null,
+      discount_end_at: itemForm.discount_enabled ? itemForm.discount_end_at || null : null,
     };
 
     try {
@@ -303,6 +379,19 @@ export default function AdminMenu() {
                         <p className="text-gray-400 text-sm truncate">
                           {categories.find(c => c.id === item.category_id)?.name} • {sizes.map(s => `${s.name}: AED ${s.price}`).join(' / ')}
                         </p>
+                        {isItemDiscountActive(item) && (
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="inline-flex items-center gap-1 text-green-400 text-xs font-semibold">
+                              <Tag className="w-3 h-3" />
+                              {item.discount_type === 'fixed'
+                                ? `AED ${Number(item.discount_value || 0).toFixed(2)} OFF`
+                                : `${Number(item.discount_value || 0)}% OFF`}
+                            </span>
+                            {(item.discount_start_at || item.discount_end_at) && (
+                              <span className="text-gray-600 text-[10px]">Scheduled</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <button onClick={() => togglePopular(item)} className="cursor-pointer" title={item.is_popular ? 'Remove from Popular' : 'Mark as Popular'}>
@@ -334,7 +423,9 @@ export default function AdminMenu() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {menuItems.filter(i => i.is_active).map(item => {
                 const sizes = getItemSizes(item);
-                const lowestPrice = Math.min(...sizes.map(s => s.price));
+                const lowestSize = sizes.reduce((lowest, size) => size.price < lowest.price ? size : lowest, sizes[0]);
+                const lowestPrice = lowestSize?.price || 0;
+                const lowestBreakdown = getItemPriceBreakdown(item, lowestPrice);
                 return (
                   <Card
                     key={item.id}
@@ -354,7 +445,14 @@ export default function AdminMenu() {
                       <div className="flex-1 min-w-0">
                         <h4 className="text-white font-semibold text-sm truncate">{item.name}</h4>
                         <p className="text-gray-500 text-xs">{categories.find(c => c.id === item.category_id)?.name}</p>
-                        <p className="text-red-400 text-xs font-bold mt-0.5">AED {lowestPrice}</p>
+                        {lowestBreakdown.discountActive ? (
+                          <div className="mt-0.5">
+                            <span className="text-gray-500 text-[10px] line-through mr-1">AED {lowestBreakdown.originalPrice.toFixed(2)}</span>
+                            <span className="text-green-400 text-xs font-bold">AED {lowestBreakdown.finalPrice.toFixed(2)}</span>
+                          </div>
+                        ) : (
+                          <p className="text-red-400 text-xs font-bold mt-0.5">AED {lowestPrice}</p>
+                        )}
                       </div>
                       <div className="flex-shrink-0">
                         <Star className={`w-6 h-6 transition-all ${item.is_popular ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600'}`} />
@@ -449,7 +547,7 @@ export default function AdminMenu() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
+                accept="image/*"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -558,6 +656,117 @@ export default function AdminMenu() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Per-item Discount */}
+            <div className="rounded-xl border border-green-700/40 bg-green-950/20 p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-green-300 flex items-center gap-2">
+                    <Tag className="w-4 h-4" /> Item Discount
+                  </Label>
+                  <p className="text-gray-500 text-xs mt-1">
+                    Discount applies only to this item's base price. Extras and fees stay unchanged.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setItemForm({ ...itemForm, discount_enabled: !itemForm.discount_enabled })}
+                  className="cursor-pointer"
+                >
+                  {itemForm.discount_enabled
+                    ? <ToggleRight className="w-7 h-7 text-green-500" />
+                    : <ToggleLeft className="w-7 h-7 text-gray-500" />}
+                </button>
+              </div>
+
+              {itemForm.discount_enabled && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-gray-300">Discount Type</Label>
+                      <Select
+                        value={itemForm.discount_type}
+                        onValueChange={(value) =>
+                          setItemForm({ ...itemForm, discount_type: value as 'percentage' | 'fixed' })
+                        }
+                      >
+                        <SelectTrigger className="bg-gray-800 border-gray-700 text-white mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-gray-700">
+                          <SelectItem value="percentage">Percentage %</SelectItem>
+                          <SelectItem value="fixed">Fixed AED</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-gray-300">
+                        {itemForm.discount_type === 'percentage' ? 'Discount %' : 'Discount AED'}
+                      </Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max={itemForm.discount_type === 'percentage' ? 100 : undefined}
+                        step="0.01"
+                        value={itemForm.discount_value || ''}
+                        onChange={e => setItemForm({ ...itemForm, discount_value: Number(e.target.value) })}
+                        placeholder="0"
+                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-gray-300">Start Date & Time (optional)</Label>
+                      <Input
+                        type="datetime-local"
+                        value={itemForm.discount_start_at}
+                        onChange={e => setItemForm({ ...itemForm, discount_start_at: e.target.value })}
+                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-gray-300">End Date & Time (optional)</Label>
+                      <Input
+                        type="datetime-local"
+                        value={itemForm.discount_end_at}
+                        onChange={e => setItemForm({ ...itemForm, discount_end_at: e.target.value })}
+                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  {itemForm.discount_value > 0 && (
+                    <div className="rounded-lg bg-gray-900 border border-gray-800 p-3">
+                      <p className="text-gray-400 text-xs mb-2">Customer price preview</p>
+                      <div className="space-y-1">
+                        {sizeOptions.filter(size => size.name.trim() && size.price > 0).map((size, index) => {
+                          const previewItem = {
+                            ...(editingItem || {}),
+                            discount_enabled: true,
+                            discount_type: itemForm.discount_type,
+                            discount_value: itemForm.discount_value,
+                            discount_start_at: '',
+                            discount_end_at: '',
+                          } as MenuItem;
+                          const price = getItemPriceBreakdown(previewItem, size.price);
+                          return (
+                            <div key={`${size.name}-${index}`} className="flex items-center justify-between text-sm">
+                              <span className="text-gray-300">{size.name}</span>
+                              <span>
+                                <span className="text-gray-500 line-through mr-2">AED {price.originalPrice.toFixed(2)}</span>
+                                <span className="text-green-400 font-bold">AED {price.finalPrice.toFixed(2)}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button onClick={saveItem} className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer">
