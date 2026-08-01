@@ -1,4 +1,4 @@
-"""One-time protected conversion of the existing Vita Napoli database to Fai Fai Juice."""
+"""One-time conversion from the old pizza app to Fai Fai Juice."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import inspect, select, update
+from sqlalchemy import MetaData, String, Text, delete, func, inspect, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -19,7 +19,10 @@ from models.menu_items import Menu_items
 from models.offers import Offers
 from models.restaurant_settings import Restaurant_settings
 
-router = APIRouter(prefix="/api/v1/fai-fai-conversion", tags=["fai-fai-conversion"])
+router = APIRouter(
+    prefix="/api/v1/fai-fai-conversion",
+    tags=["fai-fai-conversion"],
+)
 
 BRAND_NAME = "Fai Fai Juice"
 PHONE = "+971521091092"
@@ -34,39 +37,73 @@ CATEGORIES = [
     ("Milkshakes", 6),
 ]
 
-# Items with publicly listed fixed prices are activated immediately.
-# "Price on Selection" products are added inactive so Admin can enter exact sizes/prices first.
-STARTER_ITEMS: list[dict[str, Any]] = [
+# Talabat shows exact prices only for some products. Products whose price is
+# "Price on Selection" are installed in Admin as inactive with price 0.
+# Admin can add real sizes/prices and activate them.
+FAI_FAI_MENU: list[dict[str, Any]] = [
+    # Juice - price on selection
+    {"category": "Juice", "name": "Watermelon", "description": "Good source of vitamins A and C, as well as lycopene.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Shining", "description": "A sparkling fruit beverage.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Orange", "description": "A refreshing source of vitamin C.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Fadeetk", "description": "Fresh strawberries, crisp apples and cooling mint.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Melon", "description": "Fresh melon juice.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Hibiscus", "description": "Refreshing hibiscus drink.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Cocktail Juice", "description": "A blend of seasonal fruits.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Orange Passion", "description": "Orange and passion fruit beverage.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Avocado", "description": "Creamy avocado beverage.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Lemon Mint", "description": "Real lemon, fresh mint and a hint of sweetness.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Strawberry Smoothie", "description": "Ripe strawberries blended until smooth.", "price": 0, "active": False},
+    {"category": "Juice", "name": "Juice Bottle 1.5 L", "description": "Assorted juice bottle. Set flavour and price choices in Admin.", "price": 0, "active": False},
+
+    # Party Boxes
     {"category": "Party Boxes", "name": "Hambana Box 20 Pcs", "description": "A box containing 20 pieces of Hambana.", "price": 167.00, "active": True},
-    {"category": "Dessert", "name": "Acai", "description": "Creamy acai bowl topped with banana, granola, berries and honey.", "price": 36.99, "active": True},
-    {"category": "Dessert", "name": "Smoothie Acai", "description": "Acai berries blended with fruits and yogurt or milk.", "price": 37.00, "active": True},
+    {"category": "Party Boxes", "name": "Juices Box", "description": "Single juice box. Set selection options and prices in Admin.", "price": 0, "active": False},
+
+    # Dessert
+    {"category": "Dessert", "name": "Hambana", "description": "Fai Fai Hambana dessert. Set selection prices in Admin.", "price": 0, "active": False},
+    {"category": "Dessert", "name": "Mix Fruit", "description": "A mix of tropical fruits.", "price": 0, "active": False},
     {"category": "Dessert", "name": "Watermelon With Cheese", "description": "Fresh watermelon served with cheese.", "price": 27.00, "active": True},
+    {"category": "Dessert", "name": "Acai", "description": "Acai bowl with banana, granola, mixed berries and honey.", "price": 36.99, "active": True},
+    {"category": "Dessert", "name": "Smoothie Acai", "description": "Acai berries blended with fruit, yogurt or milk.", "price": 37.00, "active": True},
+
+    # Mojito
     {"category": "Mojito", "name": "Strawberry Mojito", "description": "Fresh strawberries, mint, lime and soda.", "price": 20.50, "active": True},
     {"category": "Mojito", "name": "Blue Mojito", "description": "Lime, mint and soda water.", "price": 20.50, "active": True},
     {"category": "Mojito", "name": "Mojito Green Apple", "description": "Lime, mint, soda and green apple.", "price": 20.50, "active": True},
     {"category": "Mojito", "name": "Mojito Passion Fruit", "description": "Lime, mint, soda and passion fruit.", "price": 20.50, "active": True},
+
+    # Ice Cream - price on selection
+    {"category": "Ice Cream", "name": "Caramel Ice Cream", "description": "Sweet and creamy caramel-flavoured ice cream.", "price": 0, "active": False},
+    {"category": "Ice Cream", "name": "Lemon Mint Ice Cream", "description": "Ice cream flavoured with lemon and mint.", "price": 0, "active": False},
+    {"category": "Ice Cream", "name": "Mix Berry Ice Cream", "description": "Ice cream blended with mixed berries.", "price": 0, "active": False},
+    {"category": "Ice Cream", "name": "Strawberry Cheesecake Ice Cream", "description": "Strawberry cheesecake flavoured ice cream.", "price": 0, "active": False},
+
+    # Milkshakes
     {"category": "Milkshakes", "name": "Einstein Milkshake", "description": "Ice cream, milk, chocolate syrup and toppings.", "price": 20.50, "active": True},
     {"category": "Milkshakes", "name": "Nutella Milkshake", "description": "Nutella, ice cream, milk and whipped cream.", "price": 20.50, "active": True},
     {"category": "Milkshakes", "name": "Strawberry Milkshake", "description": "Strawberries, ice cream and milk.", "price": 20.50, "active": True},
     {"category": "Milkshakes", "name": "Chocolate Milkshake", "description": "Cocoa, ice cream and milk.", "price": 20.50, "active": True},
     {"category": "Milkshakes", "name": "Oreo Milkshake", "description": "Oreo cookies, ice cream and milk.", "price": 20.50, "active": True},
     {"category": "Milkshakes", "name": "Kinder Milkshake", "description": "Kinder chocolate, ice cream and milk.", "price": 20.50, "active": True},
-    {"category": "Juice", "name": "Watermelon", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Juice", "name": "Orange", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Juice", "name": "Avocado", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Juice", "name": "Lemon Mint", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Juice", "name": "Cocktail Juice", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Juice", "name": "Juice Bottle 1.5 L", "description": "Set price in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Dessert", "name": "Hambana", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Dessert", "name": "Mix Fruit", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Ice Cream", "name": "Caramel Ice Cream", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Ice Cream", "name": "Lemon Mint Ice Cream", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Ice Cream", "name": "Mix Berry Ice Cream", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
-    {"category": "Ice Cream", "name": "Strawberry Cheesecake Ice Cream", "description": "Set sizes and prices in Admin, then activate.", "price": 0, "active": False},
+]
+
+DB_REPLACEMENTS = [
+    ("VITA NAPOLI PIZZA", "FAI FAI JUICE"),
+    ("Vita Napoli Pizza", "Fai Fai Juice"),
+    ("vita napoli pizza", "fai fai juice"),
+    ("VITA NAPOLI", "FAI FAI JUICE"),
+    ("Vita Napoli", "Fai Fai Juice"),
+    ("vita napoli", "fai fai juice"),
+    ("VitaNapoli", "FaiFai"),
+    ("vitanapoli", "faifai"),
+    ("vita-napoli", "fai-fai-juice"),
+    ("+971 54 294 0112", "+971 52 109 1092"),
+    ("+971542940112", "+971521091092"),
+    ("971542940112", "971521091092"),
 ]
 
 
-def verify_key(key: str) -> None:
+def verify_conversion_key(key: str) -> None:
     expected = os.getenv("FAI_FAI_CONVERSION_KEY", "").strip()
     if len(expected) < 8:
         raise HTTPException(
@@ -89,109 +126,184 @@ async def table_columns(db: AsyncSession, table_name: str) -> set[str]:
     return await connection.run_sync(inspect_columns)
 
 
-async def update_receipt_settings(db: AsyncSession) -> bool:
+async def update_receipt_settings(db: AsyncSession, logo_url: str = "") -> bool:
     columns = await table_columns(db, "receipt_settings")
     if not columns:
         return False
 
-    values: dict[str, Any] = {}
     candidates = {
         "restaurant_name": BRAND_NAME,
         "phone": PHONE,
         "address": ADDRESS,
         "header_text": "Fresh juices, desserts and beverages",
         "footer_text": "Thank you for ordering from Fai Fai Juice!",
-        "logo_url": "",
+        "logo_url": logo_url,
     }
-    for column, value in candidates.items():
-        if column in columns:
-            values[column] = value
-
+    values = {column: value for column, value in candidates.items() if column in columns}
     if not values:
         return False
-
-    from sqlalchemy import MetaData, Table
 
     connection = await db.connection()
 
     def reflect_table(sync_connection):
-        return Table("receipt_settings", MetaData(), autoload_with=sync_connection)
+        metadata = MetaData()
+        metadata.reflect(bind=sync_connection, only=["receipt_settings"])
+        return metadata.tables["receipt_settings"]
 
     table = await connection.run_sync(reflect_table)
     await db.execute(table.update().values(**values))
     return True
 
 
-async def get_or_create_category(
-    db: AsyncSession,
-    name: str,
-    sort_order: int,
-) -> Categories:
-    result = await db.execute(select(Categories).where(Categories.name == name).limit(1))
-    category = result.scalar_one_or_none()
+async def scrub_old_brand_from_database(db: AsyncSession) -> dict[str, int]:
+    connection = await db.connection()
 
-    if category is None:
-        category = Categories(name=name, sort_order=sort_order, is_active=True)
+    def reflect_all(sync_connection):
+        metadata = MetaData()
+        metadata.reflect(bind=sync_connection)
+        return metadata
+
+    metadata = await connection.run_sync(reflect_all)
+    touched_tables = 0
+    touched_columns = 0
+
+    for table in metadata.sorted_tables:
+        table_changed = False
+        for column in table.columns:
+            if not isinstance(column.type, (String, Text)):
+                continue
+
+            expression = column
+            for old, new in DB_REPLACEMENTS:
+                expression = func.replace(expression, old, new)
+
+            conditions = [column.contains(old) for old, _ in DB_REPLACEMENTS]
+            result = await db.execute(
+                table.update()
+                .where(or_(*conditions))
+                .values({column.name: expression})
+            )
+            if getattr(result, "rowcount", 0):
+                table_changed = True
+                touched_columns += 1
+
+        if table_changed:
+            touched_tables += 1
+
+    return {
+        "tables_scrubbed": touched_tables,
+        "text_columns_scrubbed": touched_columns,
+    }
+
+
+async def delete_old_menu_completely(db: AsyncSession) -> None:
+    """Permanently remove old menu/deal/offer data but preserve orders and sales."""
+
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind is not None else ""
+
+    if dialect == "postgresql":
+        # CASCADE also clears dependent menu/deal link tables. Orders are not
+        # linked by menu_item_id; their sold items stay preserved in items_json.
+        await db.execute(
+            text(
+                """
+                TRUNCATE TABLE
+                    deals,
+                    offers,
+                    extras,
+                    menu_items,
+                    categories
+                RESTART IDENTITY CASCADE
+                """
+            )
+        )
+    else:
+        await db.execute(delete(Deals))
+        await db.execute(delete(Offers))
+        await db.execute(delete(Extras))
+        await db.execute(delete(Menu_items))
+        await db.execute(delete(Categories))
+
+    await db.flush()
+
+
+async def seed_fai_fai_menu(db: AsyncSession) -> dict[str, int]:
+    category_map: dict[str, Categories] = {}
+
+    for name, sort_order in CATEGORIES:
+        category = Categories(
+            name=name,
+            sort_order=sort_order,
+            is_active=True,
+        )
         db.add(category)
         await db.flush()
-    else:
-        category.sort_order = sort_order
-        category.is_active = True
+        category_map[name] = category
 
-    return category
+    active_count = 0
+    inactive_count = 0
 
+    for index, item in enumerate(FAI_FAI_MENU, start=1):
+        price = float(item["price"])
+        active = bool(item["active"])
+        sizes = [{"name": "Regular", "price": price}]
 
-async def seed_item(
-    db: AsyncSession,
-    category: Categories,
-    item: dict[str, Any],
-    sort_order: int,
-) -> Menu_items:
-    result = await db.execute(
-        select(Menu_items)
-        .where(Menu_items.name == item["name"])
-        .limit(1)
-    )
-    menu_item = result.scalar_one_or_none()
-    price = float(item["price"])
-    sizes = [{"name": "Regular", "price": price}]
-
-    if menu_item is None:
-        menu_item = Menu_items(name=item["name"], category_id=category.id)
+        menu_item = Menu_items(
+            name=item["name"],
+            category_id=category_map[item["category"]].id,
+        )
+        menu_item.description = item["description"]
+        menu_item.price_medium = price
+        menu_item.price_large = price if price > 0 else None
+        menu_item.sizes_json = json.dumps(sizes)
+        menu_item.image_url = ""
+        menu_item.is_active = active
+        menu_item.has_extras = False
+        menu_item.is_popular = active and index <= 16
+        menu_item.sort_order = index
         db.add(menu_item)
 
-    menu_item.category_id = category.id
-    menu_item.description = item["description"]
-    menu_item.price_medium = price
-    menu_item.price_large = None
-    menu_item.sizes_json = json.dumps(sizes)
-    menu_item.image_url = ""
-    menu_item.is_active = bool(item["active"])
-    menu_item.has_extras = False
-    menu_item.is_popular = bool(item["active"] and sort_order <= 12)
-    menu_item.sort_order = sort_order
-    return menu_item
+        if active:
+            active_count += 1
+        else:
+            inactive_count += 1
+
+    await db.flush()
+    return {
+        "categories_created": len(CATEGORIES),
+        "menu_items_created": len(FAI_FAI_MENU),
+        "active_items": active_count,
+        "price_required_items": inactive_count,
+    }
+
+
+async def replace_menu_with_fai_fai(db: AsyncSession) -> dict[str, int]:
+    await delete_old_menu_completely(db)
+    return await seed_fai_fai_menu(db)
 
 
 async def conversion_summary(db: AsyncSession) -> dict[str, Any]:
     settings_result = await db.execute(
-        select(Restaurant_settings).order_by(Restaurant_settings.id).limit(1)
+        select(Restaurant_settings)
+        .order_by(Restaurant_settings.id)
+        .limit(1)
     )
     settings = settings_result.scalar_one_or_none()
 
-    active_categories = (
-        await db.execute(select(Categories).where(Categories.is_active.is_(True)))
-    ).scalars().all()
-    active_items = (
-        await db.execute(select(Menu_items).where(Menu_items.is_active.is_(True)))
-    ).scalars().all()
+    category_count = len(
+        (await db.execute(select(Categories))).scalars().all()
+    )
+    item_count = len(
+        (await db.execute(select(Menu_items))).scalars().all()
+    )
 
     return {
         "restaurant_name": settings.restaurant_name if settings else None,
         "phone": settings.phone if settings else None,
         "address": settings.address if settings else None,
-        "active_categories": len(active_categories),
-        "active_menu_items": len(active_items),
+        "categories": category_count,
+        "menu_items": item_count,
         "converted": bool(settings and settings.restaurant_name == BRAND_NAME),
     }
 
@@ -201,7 +313,7 @@ async def status(
     key: str = Query(..., min_length=8, max_length=200),
     db: AsyncSession = Depends(get_db),
 ):
-    verify_key(key)
+    verify_conversion_key(key)
     return await conversion_summary(db)
 
 
@@ -209,71 +321,71 @@ async def status(
 async def apply_conversion(
     key: str = Query(..., min_length=8, max_length=200),
     confirm: str = Query(..., description="Must be FAI-FAI"),
-    force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
-    verify_key(key)
+    verify_conversion_key(key)
+
     if confirm.upper() != "FAI-FAI":
         raise HTTPException(status_code=400, detail="confirm must be FAI-FAI")
 
-    settings_result = await db.execute(
-        select(Restaurant_settings).order_by(Restaurant_settings.id).limit(1)
-    )
-    settings = settings_result.scalar_one_or_none()
+    try:
+        settings_result = await db.execute(
+            select(Restaurant_settings)
+            .order_by(Restaurant_settings.id)
+            .limit(1)
+        )
+        settings = settings_result.scalar_one_or_none()
 
-    if settings and settings.restaurant_name == BRAND_NAME and not force:
+        if settings is None:
+            settings = Restaurant_settings(
+                restaurant_name=BRAND_NAME,
+                phone=PHONE,
+                address=ADDRESS,
+                opening_hours="",
+                restaurant_status="closed",
+                logo_url="",
+                blog_enabled=False,
+            )
+            db.add(settings)
+        else:
+            settings.restaurant_name = BRAND_NAME
+            settings.phone = PHONE
+            settings.address = ADDRESS
+            settings.logo_url = ""
+            settings.blog_enabled = False
+            settings.restaurant_status = "closed"
+            settings.busy_message = (
+                "Fai Fai Juice is currently unavailable. "
+                "Please try again shortly."
+            )
+
+        menu_result = await replace_menu_with_fai_fai(db)
+        receipt_updated = await update_receipt_settings(db)
+        scrub_result = await scrub_old_brand_from_database(db)
+
+        await db.commit()
+
         return {
             "success": True,
-            "already_applied": True,
-            "message": "Fai Fai conversion was already applied. Use force=true only if you intentionally want to reset the menu again.",
+            "message": (
+                "Vita Napoli branding and old menu were removed. "
+                "Fai Fai Juice menu was installed. Historical orders "
+                "and sales were preserved."
+            ),
+            "receipt_settings_updated": receipt_updated,
+            **menu_result,
+            **scrub_result,
+            "admin_username": "faifaiadmin",
+            "admin_password": "FaiFai@2026",
+            "kitchen_pin": "1122",
             **(await conversion_summary(db)),
         }
-
-    if settings is None:
-        settings = Restaurant_settings(
-            restaurant_name=BRAND_NAME,
-            phone=PHONE,
-            address=ADDRESS,
-            opening_hours="",
-            restaurant_status="closed",
-            logo_url="",
-            blog_enabled=False,
-        )
-        db.add(settings)
-    else:
-        settings.restaurant_name = BRAND_NAME
-        settings.phone = PHONE
-        settings.address = ADDRESS
-        settings.logo_url = ""
-        settings.blog_enabled = False
-        settings.restaurant_status = "closed"
-        settings.busy_message = "Fai Fai Juice is currently unavailable. Please try again shortly."
-
-    # Preserve all historical orders, customers, finance and rider records.
-    # Only old shop-facing menu/promotions are disabled.
-    await db.execute(update(Menu_items).values(is_active=False, is_popular=False))
-    await db.execute(update(Categories).values(is_active=False))
-    await db.execute(update(Extras).values(is_active=False))
-    await db.execute(update(Offers).values(is_active=False))
-    await db.execute(update(Deals).values(is_active=False))
-
-    category_map: dict[str, Categories] = {}
-    for name, sort_order in CATEGORIES:
-        category_map[name] = await get_or_create_category(db, name, sort_order)
-
-    for index, item in enumerate(STARTER_ITEMS, start=1):
-        await seed_item(db, category_map[item["category"]], item, index)
-
-    await db.flush()
-    receipt_updated = await update_receipt_settings(db)
-    await db.commit()
-
-    return {
-        "success": True,
-        "message": "Existing app converted to Fai Fai Juice. Old orders and finance were preserved. Shop is CLOSED until you verify menu/settings and open it from Admin.",
-        "receipt_settings_updated": receipt_updated,
-        "admin_username": "faifaiadmin",
-        "admin_password": "FaiFai@2026",
-        "kitchen_pin": "1122",
-        **(await conversion_summary(db)),
-    }
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fai Fai conversion failed: {exc}",
+        ) from exc
