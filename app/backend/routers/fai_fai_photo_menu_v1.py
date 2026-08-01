@@ -306,6 +306,17 @@ MENU_CATALOG = [{'category': 'Fresh Juices',
 
 IMAGE_PREFIX = "/menu/fai-fai-v1/"
 
+RAW_GITHUB_IMAGE_BASE = (
+    "https://raw.githubusercontent.com/"
+    "suryausman313-cell/fai-fai-juice/main/"
+    "app/frontend/public/menu/fai-fai-v1"
+)
+
+
+def _public_image_url(local_image_url: str) -> str:
+    filename = str(local_image_url or "").strip().rsplit("/", 1)[-1]
+    return f"{RAW_GITHUB_IMAGE_BASE}/{filename}"
+
 
 def _clean(value: Optional[str]) -> str:
     return (value or "").strip()
@@ -438,12 +449,14 @@ async def _ensure_menu_items_schema(db: AsyncSession) -> list[str]:
 async def health():
     return {
         "success": True,
-        "version": "photo-menu-db-fix-v2",
+        "version": "photo-menu-image-fix-v3",
         "categories": len(CATEGORY_ORDER),
         "items": len(MENU_CATALOG),
         "automatic_startup_import": False,
         "admin_editable_after_import": True,
         "database_schema_fix_included": True,
+        "image_delivery": "raw-github-public-url",
+        "cloudflare_public_folder_not_required": True,
     }
 
 
@@ -461,6 +474,85 @@ async def preview():
             }
             for item in MENU_CATALOG
         ],
+    }
+
+
+@router.get("/fix-images")
+async def fix_photo_menu_images(
+    key: Optional[str] = Query(default=None),
+    confirm: str = Query(default=""),
+    x_fai_fai_admin_key: Optional[str] = Header(
+        default=None,
+        alias="X-Fai-Fai-Admin-Key",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Repair only the photo URLs of the imported Fai Fai menu.
+
+    This endpoint does not change names, categories, prices, sizes,
+    availability, popularity or discounts.
+    """
+
+    _verify_admin_key(key, x_fai_fai_admin_key)
+
+    if confirm != "FAI-FAI-IMAGES":
+        raise HTTPException(
+            status_code=400,
+            detail="Use confirm=FAI-FAI-IMAGES",
+        )
+
+    schema_columns = await _ensure_menu_items_schema(db)
+
+    result = await db.execute(select(Menu_items))
+    existing_items = list(result.scalars().all())
+
+    items_by_name = {}
+    for item in existing_items:
+        items_by_name.setdefault(_normal(item.name), []).append(item)
+
+    updated = 0
+    missing = []
+    repaired = []
+
+    for source in MENU_CATALOG:
+        matches = items_by_name.get(_normal(source["name"]), [])
+
+        if not matches:
+            missing.append(source["name"])
+            continue
+
+        public_url = _public_image_url(source["image_url"])
+
+        for item in matches:
+            item.image_url = public_url
+            updated += 1
+
+        repaired.append(
+            {
+                "name": source["name"],
+                "image_url": public_url,
+            }
+        )
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {
+        "success": True,
+        "version": "photo-menu-image-fix-v3",
+        "message": "All available Fai Fai menu photo URLs were repaired.",
+        "schema_checked": schema_columns,
+        "updated_rows": updated,
+        "catalog_items": len(MENU_CATALOG),
+        "missing_items": missing,
+        "image_source": RAW_GITHUB_IMAGE_BASE,
+        "sample": repaired[:3],
+        "changed_only": "image_url",
+        "admin_edits_preserved": True,
     }
 
 
@@ -609,7 +701,7 @@ async def apply_photo_menu(
                 price_medium=first_price,
                 price_large=last_price,
                 sizes_json=json.dumps(sizes, ensure_ascii=False),
-                image_url=source["image_url"],
+                image_url=_public_image_url(source["image_url"]),
                 is_active=True,
                 has_extras=False,
                 is_popular=bool(source.get("is_popular", False)),
@@ -626,7 +718,7 @@ async def apply_photo_menu(
             item.price_medium = first_price
             item.price_large = last_price
             item.sizes_json = json.dumps(sizes, ensure_ascii=False)
-            item.image_url = source["image_url"]
+            item.image_url = _public_image_url(source["image_url"])
             item.is_active = True
             item.has_extras = False
             item.is_popular = bool(source.get("is_popular", False))
