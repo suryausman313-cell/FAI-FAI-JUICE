@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
+import { getItemPriceBreakdown } from '@/lib/discounts';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
@@ -52,47 +53,33 @@ export default function Index() {
   const [loading, setLoading] = useState(!cached);
 
   const loadData = useCallback(async () => {
-    const [settingsResult, itemsResult, categoriesResult, offersResult] = await Promise.allSettled([
-      client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
-      client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 8 }),
-      client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
-      client.entities.offers.query({ query: { is_active: true }, limit: 10 }),
-    ]);
+    try {
+      const [settingsRes, itemsRes, catRes, offersRes] = await Promise.all([
+        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
+        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 8 }),
+        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
+        client.entities.offers.query({ query: { is_active: true }, limit: 10 }),
+      ]);
+      const settingsData = settingsRes?.data?.items?.[0] || null;
+      const items = itemsRes?.data?.items || [];
+      const cats = catRes?.data?.items || [];
+      const offersList = offersRes?.data?.items || [];
 
-    const settingsData = settingsResult.status === 'fulfilled'
-      ? settingsResult.value?.data?.items?.[0] || null
-      : settings;
-    const items = itemsResult.status === 'fulfilled'
-      ? itemsResult.value?.data?.items || []
-      : featuredItems;
-    const cats = categoriesResult.status === 'fulfilled'
-      ? categoriesResult.value?.data?.items || []
-      : categories;
-    const offersList = offersResult.status === 'fulfilled'
-      ? offersResult.value?.data?.items || []
-      : offers;
+      setSettings(settingsData);
+      setFeaturedItems(items);
+      setCategories(cats);
+      setOffers(offersList);
 
-    if (settingsResult.status === 'fulfilled') setSettings(settingsData);
-    if (itemsResult.status === 'fulfilled') setFeaturedItems(items);
-    if (categoriesResult.status === 'fulfilled') setCategories(cats);
-    if (offersResult.status === 'fulfilled') setOffers(offersList);
-
-    if (settingsData || items.length > 0 || cats.length > 0 || offersList.length > 0) {
+      // Cache for next visit
       setCachedData({ settings: settingsData, featuredItems: items, categories: cats, offers: offersList });
+
+      // Auto-schedule check
+      if (settingsData) checkAutoSchedule(settingsData);
+    } catch (e) {
+      console.error('Failed to load data:', e);
+    } finally {
+      setLoading(false);
     }
-
-    if (settingsData) checkAutoSchedule(settingsData);
-
-    if ([settingsResult, itemsResult, categoriesResult, offersResult].some(result => result.status === 'rejected')) {
-      console.error('Some home data could not load', {
-        settingsResult,
-        itemsResult,
-        categoriesResult,
-        offersResult,
-      });
-    }
-
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -310,7 +297,9 @@ export default function Index() {
           <div className="grid grid-cols-2 gap-3">
             {featuredItems.slice(0, 6).map(item => {
               const sizes = getItemSizes(item);
-              const lowestPrice = Math.min(...sizes.map(s => s.price));
+              const lowestSize = sizes.reduce((lowest, size) => size.price < lowest.price ? size : lowest, sizes[0]);
+              const lowestPrice = lowestSize?.price || 0;
+              const lowestBreakdown = getItemPriceBreakdown(item, lowestPrice);
               return (
                 <Card
                   key={item.id}
@@ -325,6 +314,11 @@ export default function Index() {
                         <span className="text-3xl">🍕</span>
                       </div>
                     )}
+                    {lowestBreakdown.discountActive && item.is_active && (
+                      <Badge className="absolute top-2 left-2 bg-green-600 text-white text-[10px]">
+                        {lowestBreakdown.discountLabel}
+                      </Badge>
+                    )}
                     {!item.is_active && (
                       <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
                         <Badge className="bg-red-600 text-white text-xs">{t('home.out_of_stock')}</Badge>
@@ -333,9 +327,19 @@ export default function Index() {
                   </div>
                   <div className="p-3">
                     <h3 className="text-white text-sm font-semibold truncate">{item.name}</h3>
-                    <p className="text-red-500 text-sm font-bold mt-1">
-                      {t('home.from_aed')} {lowestPrice}
-                    </p>
+                    {lowestBreakdown.discountActive ? (
+                      <div className="mt-1">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className="text-gray-500 text-xs line-through">AED {lowestBreakdown.originalPrice.toFixed(2)}</span>
+                          <span className="text-green-400 text-sm font-bold">AED {lowestBreakdown.finalPrice.toFixed(2)}</span>
+                        </div>
+                        <p className="text-green-500 text-[10px]">{lowestBreakdown.discountLabel} • Save AED {lowestBreakdown.saving.toFixed(2)}</p>
+                      </div>
+                    ) : (
+                      <p className="text-red-500 text-sm font-bold mt-1">
+                        {t('home.from_aed')} {lowestPrice}
+                      </p>
+                    )}
                   </div>
                 </Card>
               );

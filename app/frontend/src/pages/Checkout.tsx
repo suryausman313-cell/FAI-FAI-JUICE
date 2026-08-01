@@ -9,9 +9,9 @@ import { toast } from 'sonner';
 import { MapPin, Car, Tag, Navigation, CheckCircle } from 'lucide-react';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client, CartItem, Offer } from '@/lib/api';
-import { getCart, getCartTotal, clearCart } from '@/lib/cart-store';
+import { getCart, getCartTotal, getCartOriginalTotal, getCartItemDiscountTotal, clearCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
-import { getGuestSessionId } from '@/lib/guest-session';
+import { isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -37,6 +37,8 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Field-level validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -83,6 +85,7 @@ export default function Checkout() {
   const [promoDiscount, setPromoDiscount] = useState(0);
   const [promoOffer, setPromoOffer] = useState<Offer | null>(null);
   const [validatingPromo, setValidatingPromo] = useState(false);
+  const [activePromoOffers, setActivePromoOffers] = useState<Offer[]>([]);
 
   // Shop status
   const [shopClosed, setShopClosed] = useState(false);
@@ -103,7 +106,9 @@ export default function Checkout() {
 
   useEffect(() => {
     setCart(getCart());
+    checkAuth();
     loadDeliverySettings();
+    loadActivePromoOffers();
   }, []);
 
   // Auto-select first available payment method when order type changes
@@ -285,6 +290,19 @@ export default function Checkout() {
     return R * c;
   }
 
+  async function checkAuth() {
+    try {
+      const res = await client.auth.me();
+      if (res?.data) {
+        setIsLoggedIn(true);
+      }
+    } catch {
+      setIsLoggedIn(false);
+    } finally {
+      setAuthChecked(true);
+    }
+  }
+
   async function loadDeliverySettings() {
     try {
       // Fetch from backend entity (accessible to all users)
@@ -393,6 +411,28 @@ export default function Checkout() {
     }
   }
 
+  async function loadActivePromoOffers() {
+    try {
+      const res = await client.entities.offers.query({
+        query: { is_active: true },
+        sort: '-created_at',
+        limit: 100,
+      });
+      const active = (res?.data?.items || []).filter((offer: Offer) =>
+        isPromoOfferCurrentlyActive(offer)
+      );
+      setActivePromoOffers(active);
+
+      // Automatically remove a promo if Admin turned it OFF or it expired.
+      if (promoApplied && promoOffer && !active.some((offer: Offer) => offer.id === promoOffer.id)) {
+        removePromo();
+      }
+    } catch (error) {
+      console.error('Failed to load active promo offers:', error);
+      setActivePromoOffers([]);
+    }
+  }
+
   async function validatePromoCode() {
     if (!promoCode.trim()) {
       toast.error('Please enter a promo code');
@@ -400,17 +440,20 @@ export default function Checkout() {
     }
     setValidatingPromo(true);
     try {
-      const res = await client.entities.offers.query({ query: { is_active: true }, limit: 50 });
-      const offers = res?.data?.items || [];
+      const res = await client.entities.offers.query({ query: { is_active: true }, limit: 100 });
+      const offers = (res?.data?.items || []).filter((offer: Offer) =>
+        isPromoOfferCurrentlyActive(offer)
+      );
+      setActivePromoOffers(offers);
       const matchedOffer = offers.find(
-        (o: any) => o.promo_code && o.promo_code.toLowerCase() === promoCode.trim().toLowerCase()
+        (offer: Offer) => offer.promo_code.trim().toLowerCase() === promoCode.trim().toLowerCase()
       );
       if (matchedOffer && matchedOffer.discount_percent > 0) {
         // Get user's previous orders for usage validation
         let previousOrders: any[] = [];
         try {
           const ordersRes = await client.apiCall.invoke({
-            url: `/api/v1/orders/my-orders?session_id=${encodeURIComponent(getGuestSessionId())}`,
+            url: '/api/v1/orders/my-orders',
             method: 'GET',
           });
           previousOrders = ordersRes?.data?.items || ordersRes?.data || [];
@@ -478,6 +521,8 @@ export default function Checkout() {
   }
 
   const subtotal = getCartTotal(cart);
+  const originalSubtotal = getCartOriginalTotal(cart);
+  const itemDiscountTotal = getCartItemDiscountTotal(cart);
   const deliveryFee = orderType === 'delivery' ? (locationShared ? calculatedDeliveryCharge : deliveryCharge) : 0;
   const discountAmount = promoApplied ? (subtotal * promoDiscount) / 100 : 0;
   // Service fee only applies based on admin setting (pickup/delivery/both)
@@ -594,6 +639,9 @@ export default function Checkout() {
     if (cart.length === 0) {
       newErrors.cart = 'Your cart is empty — please add items first';
     }
+    if (!isLoggedIn) {
+      newErrors.auth = 'Please login to place your order';
+    }
 
     return newErrors;
   }
@@ -607,6 +655,12 @@ export default function Checkout() {
     // Block if shop is closed
     if (shopClosed) {
       toast.error(shopClosedMessage || 'Restaurant is currently closed.');
+      return;
+    }
+
+    // Block if not logged in
+    if (!isLoggedIn) {
+      toast.error('Please login to place your order.');
       return;
     }
 
@@ -626,12 +680,18 @@ export default function Checkout() {
         location: 'delivery-map',
         payment: 'payment-section',
         cart: 'order-summary',
+        auth: 'auth-section',
       };
       const firstErrorKey = Object.keys(validationErrors)[0];
       const elementId = errorFieldIds[firstErrorKey];
       if (elementId) {
         const el = document.getElementById(elementId);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Handle auth redirect
+      if (validationErrors.auth) {
+        client.auth.toLogin();
       }
       return;
     }
@@ -645,6 +705,9 @@ export default function Checkout() {
         quantity: item.quantity,
         extras: item.extras.map(e => e.name),
         price: item.totalPrice,
+        original_price: Number(item.originalTotalPrice ?? item.totalPrice),
+        item_discount_amount: Number(item.itemDiscountAmount || 0),
+        item_discount_label: item.itemDiscountLabel || '',
       }));
 
       // Combine notes with car info or delivery address
@@ -670,17 +733,13 @@ export default function Checkout() {
         url: '/api/v1/orders/place',
         method: 'POST',
         data: {
-          session_id: getGuestSessionId(),
           customer_name: name,
           customer_phone: phone,
           order_notes: fullNotes,
-          payment_method: paymentMethod === 'cash'
-            ? (orderType === 'delivery' ? 'Cash on Delivery' : 'Cash on Pickup')
-            : (orderType === 'delivery' ? 'Card on Delivery' : 'Card on Pickup'),
+          payment_method: paymentMethod === 'cash' ? 'Cash on Pickup' : 'Card on Pickup',
           total_amount: total,
           service_fee: serviceFee,
           small_order_fee: smallOrderFee,
-          delivery_charge: deliveryFee,
           tip_amount: tipAmount,
           tip_type: tipAmount > 0 ? (orderType === 'delivery' ? 'rider' : 'shop') : '',
           items_json: JSON.stringify(itemsData),
@@ -710,10 +769,32 @@ export default function Checkout() {
     }
   }
 
+  if (!authChecked) {
+    return (
+      <CustomerLayout>
+        <div className="bg-black min-h-screen flex items-center justify-center">
+          <div className="text-gray-400">Loading...</div>
+        </div>
+      </CustomerLayout>
+    );
+  }
+
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-6 max-w-lg mx-auto">
         <h1 className="text-white text-2xl font-bold mb-6">{t('checkout.title')}</h1>
+
+        {!isLoggedIn && (
+          <div id="auth-section" className="mb-6 p-4 rounded-xl bg-red-600/10 border border-red-600/30">
+            <p className="text-red-400 text-sm mb-3">Please login to place your order</p>
+            <Button
+              onClick={() => client.auth.toLogin()}
+              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+            >
+              Login / Sign Up
+            </Button>
+          </div>
+        )}
 
         {/* Shop Closed Banner */}
         {shopClosed && (
@@ -980,39 +1061,41 @@ export default function Checkout() {
             </div>
           </div>
 
-          {/* Promo Code */}
-          <div>
-            <Label className="text-gray-300 mb-2 block">{t('checkout.promo_code')}</Label>
-            {promoApplied ? (
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-green-600/10 border border-green-600/30">
-                <Tag className="w-5 h-5 text-green-400" />
-                <div className="flex-1">
-                  <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} applied!</p>
-                  <p className="text-green-400/70 text-xs">{promoDiscount}% discount — saving AED {discountAmount.toFixed(2)}</p>
+          {/* Promo Code — hidden until Admin has a currently active promo-code offer */}
+          {activePromoOffers.length > 0 && (
+            <div>
+              <Label className="text-gray-300 mb-2 block">{t('checkout.promo_code')}</Label>
+              {promoApplied ? (
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-green-600/10 border border-green-600/30">
+                  <Tag className="w-5 h-5 text-green-400" />
+                  <div className="flex-1">
+                    <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} applied!</p>
+                    <p className="text-green-400/70 text-xs">{promoDiscount}% discount — saving AED {discountAmount.toFixed(2)}</p>
+                  </div>
+                  <button type="button" onClick={removePromo} className="text-gray-400 text-xs hover:text-red-400 cursor-pointer">
+                    Remove
+                  </button>
                 </div>
-                <button type="button" onClick={removePromo} className="text-gray-400 text-xs hover:text-red-400 cursor-pointer">
-                  Remove
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <Input
-                  value={promoCode}
-                  onChange={e => setPromoCode(e.target.value)}
-                  placeholder="Enter promo code"
-                  className="bg-gray-900 border-gray-700 text-white flex-1"
-                />
-                <Button
-                  type="button"
-                  onClick={validatePromoCode}
-                  disabled={validatingPromo}
-                  className="bg-gray-800 hover:bg-gray-700 text-white cursor-pointer"
-                >
-                  {validatingPromo ? '...' : t('checkout.apply')}
-                </Button>
-              </div>
-            )}
-          </div>
+              ) : (
+                <div className="flex gap-2">
+                  <Input
+                    value={promoCode}
+                    onChange={e => setPromoCode(e.target.value)}
+                    placeholder="Enter promo code"
+                    className="bg-gray-900 border-gray-700 text-white flex-1"
+                  />
+                  <Button
+                    type="button"
+                    onClick={validatePromoCode}
+                    disabled={validatingPromo}
+                    className="bg-gray-800 hover:bg-gray-700 text-white cursor-pointer"
+                  >
+                    {validatingPromo ? '...' : t('checkout.apply')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Tip Section */}
           <div>
@@ -1116,12 +1199,33 @@ export default function Checkout() {
                     </span>
                   )}
                 </span>
-                <span className="text-gray-300">AED {item.totalPrice.toFixed(2)}</span>
+                <div className="text-right">
+                  {Number(item.itemDiscountAmount || 0) > 0 && (
+                    <span className="text-gray-600 text-xs line-through block">
+                      AED {Number(item.originalTotalPrice ?? item.totalPrice).toFixed(2)}
+                    </span>
+                  )}
+                  <span className={Number(item.itemDiscountAmount || 0) > 0 ? 'text-green-400' : 'text-gray-300'}>
+                    AED {item.totalPrice.toFixed(2)}
+                  </span>
+                </div>
               </div>
             ))}
             <div className="border-t border-gray-700 mt-3 pt-3 space-y-1.5">
+              {itemDiscountTotal > 0 && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Original Food Subtotal</span>
+                    <span className="text-gray-500 line-through">AED {originalSubtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-green-400">Item Discounts</span>
+                    <span className="text-green-400">-AED {itemDiscountTotal.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Subtotal</span>
+                <span className="text-gray-400">Food Subtotal</span>
                 <span className="text-gray-300">AED {subtotal.toFixed(2)}</span>
               </div>
               {orderType === 'delivery' && deliveryFee > 0 && (
@@ -1174,7 +1278,7 @@ export default function Checkout() {
 
           <Button
             type="submit"
-            disabled={loading || shopClosed || (orderType === 'delivery' && (!!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
+            disabled={loading || shopClosed || !isLoggedIn || (orderType === 'delivery' && (!!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
             className="w-full bg-red-600 hover:bg-red-700 text-white py-6 text-lg font-semibold rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? t('checkout.placing') : `${t('checkout.place_order')} — ${t('common.aed')} ${total.toFixed(2)}`}

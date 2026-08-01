@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client, Category, MenuItem, Extra, getItemSizes } from '@/lib/api';
+import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 
@@ -54,7 +55,6 @@ export default function Menu() {
   const [selectedExtras, setSelectedExtras] = useState<Extra[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [loadError, setLoadError] = useState('');
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -71,49 +71,30 @@ export default function Menu() {
   }, []);
 
   async function loadData() {
-    setLoadError('');
+    try {
+      const [catRes, itemRes, extrasRes] = await Promise.all([
+        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 50 }),
+        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
+        client.entities.extras.query({ query: { is_active: true }, limit: 50 }),
+      ]);
+      
+      const cats = catRes?.data?.items || [];
+      const items = itemRes?.data?.items || [];
+      const ext = extrasRes?.data?.items || [];
 
-    const [categoriesResult, itemsResult, extrasResult] = await Promise.allSettled([
-      client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 50 }),
-      client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
-      client.entities.extras.query({ query: { is_active: true }, limit: 50 }),
-    ]);
+      setCategories(cats);
+      setMenuItems(items);
+      setExtras(ext);
+      if (cats.length > 0 && !activeCategory) setActiveCategory(cats[0].id);
 
-    const cats = categoriesResult.status === 'fulfilled'
-      ? categoriesResult.value?.data?.items || []
-      : categories;
-    const items = itemsResult.status === 'fulfilled'
-      ? itemsResult.value?.data?.items || []
-      : menuItems;
-    const ext = extrasResult.status === 'fulfilled'
-      ? extrasResult.value?.data?.items || []
-      : extras;
-
-    if (categoriesResult.status === 'fulfilled') setCategories(cats);
-    if (itemsResult.status === 'fulfilled') setMenuItems(items);
-    if (extrasResult.status === 'fulfilled') setExtras(ext);
-
-    setActiveCategory((current) =>
-      cats.some((category: Category) => Number(category.id) === Number(current))
-        ? current
-        : cats[0]?.id ?? null
-    );
-
-    if (cats.length > 0 || items.length > 0) {
+      // Update cache
       setMenuCache({ categories: cats, menuItems: items, extras: ext });
-    }
-
-    if (categoriesResult.status === 'rejected' || itemsResult.status === 'rejected') {
-      console.error('Failed to load menu data', { categoriesResult, itemsResult });
-      if (cats.length === 0 || items.length === 0) {
-        setLoadError('Menu could not load. Please tap Retry.');
-      }
+    } catch (e) {
+      console.error('Failed to load menu:', e);
     }
   }
 
-  const filteredItems = menuItems.filter(
-    item => Number(item.category_id) === Number(activeCategory)
-  );
+  const filteredItems = menuItems.filter(item => item.category_id === activeCategory);
 
   function openItemDialog(item: MenuItem) {
     setSelectedItem(item);
@@ -137,8 +118,9 @@ export default function Menu() {
     const sizes = getItemSizes(selectedItem);
     const sizeObj = sizes.find(s => s.name === selectedSize) || sizes[0];
     const base = sizeObj?.price || 0;
+    const discountedBase = getItemPriceBreakdown(selectedItem, base).finalPrice;
     const extrasTotal = selectedExtras.reduce((sum, e) => sum + e.price, 0);
-    return (base + extrasTotal) * quantity;
+    return (discountedBase + extrasTotal) * quantity;
   }
 
   function handleAddToCart() {
@@ -199,11 +181,22 @@ export default function Menu() {
                         <p className="text-gray-400 text-sm mt-1 line-clamp-2">{item.description}</p>
                       )}
                       <div className="flex items-center gap-2 mt-3 flex-wrap">
-                        {sizes.map((s, idx) => (
-                          <Badge key={idx} variant="secondary" className="bg-gray-800 text-gray-200">
-                            {sizes.length > 1 ? `${s.name}: ` : ''}AED {s.price}
-                          </Badge>
-                        ))}
+                        {sizes.map((size, idx) => {
+                          const price = getItemPriceBreakdown(item, size.price);
+                          return (
+                            <Badge key={idx} variant="secondary" className="bg-gray-800 text-gray-200">
+                              {sizes.length > 1 ? `${size.name}: ` : ''}
+                              {price.discountActive ? (
+                                <>
+                                  <span className="line-through text-gray-500 mr-1">AED {price.originalPrice.toFixed(2)}</span>
+                                  <span className="text-green-400">AED {price.finalPrice.toFixed(2)}</span>
+                                </>
+                              ) : (
+                                <>AED {price.finalPrice.toFixed(2)}</>
+                              )}
+                            </Badge>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -220,19 +213,8 @@ export default function Menu() {
 
           {categories.length === 0 && (
             <div className="text-center py-16">
-              {loadError ? (
-                <>
-                  <p className="text-red-400 text-sm mb-4">{loadError}</p>
-                  <Button onClick={() => void loadData()} className="bg-red-600 hover:bg-red-700 text-white">
-                    Retry
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto" />
-                  <p className="text-gray-500 text-sm mt-3">{t('common.loading')}</p>
-                </>
-              )}
+              <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-gray-500 text-sm mt-3">{t('common.loading')}</p>
             </div>
           )}
         </div>
@@ -261,6 +243,19 @@ export default function Menu() {
                   <p className="text-gray-400">{selectedItem.description}</p>
                 )}
 
+                {(() => {
+                  const firstSize = sizes[0];
+                  if (!firstSize) return null;
+                  const price = getItemPriceBreakdown(selectedItem, firstSize.price);
+                  if (!price.discountActive) return null;
+                  return (
+                    <div className="rounded-xl bg-green-950/30 border border-green-700/40 p-3">
+                      <p className="text-green-400 font-semibold text-sm">{price.discountLabel}</p>
+                      <p className="text-green-300/70 text-xs mt-1">Item discount applies automatically. Extras are not discounted.</p>
+                    </div>
+                  );
+                })()}
+
                 {/* Size Selection */}
                 {sizes.length > 0 && (
                   <div>
@@ -268,20 +263,31 @@ export default function Menu() {
                       {t('menu.select_size')}
                     </h4>
                     <div className={`grid gap-3 ${sizes.length === 1 ? 'grid-cols-1' : sizes.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                      {sizes.map((s, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => setSelectedSize(s.name)}
-                          className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                            selectedSize === s.name
-                              ? 'border-red-500 bg-red-600/10'
-                              : 'border-gray-700 hover:border-gray-500'
-                          }`}
-                        >
-                          <div className="font-medium">{s.name}</div>
-                          <div className="text-red-400 font-bold">AED {s.price}</div>
-                        </button>
-                      ))}
+                      {sizes.map((size, idx) => {
+                        const price = getItemPriceBreakdown(selectedItem, size.price);
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => setSelectedSize(size.name)}
+                            className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                              selectedSize === size.name
+                                ? 'border-red-500 bg-red-600/10'
+                                : 'border-gray-700 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="font-medium">{size.name}</div>
+                            {price.discountActive ? (
+                              <div className="mt-1">
+                                <div className="text-gray-500 text-xs line-through">AED {price.originalPrice.toFixed(2)}</div>
+                                <div className="text-green-400 font-bold">AED {price.finalPrice.toFixed(2)}</div>
+                                <div className="text-green-500 text-[10px]">Save AED {price.saving.toFixed(2)}</div>
+                              </div>
+                            ) : (
+                              <div className="text-red-400 font-bold">AED {price.finalPrice.toFixed(2)}</div>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
