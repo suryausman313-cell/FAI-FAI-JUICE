@@ -1,4 +1,5 @@
 import { CartItem, MenuItem, Extra, getItemSizes } from './api';
+import { getItemPriceBreakdown } from './discounts';
 
 // Simple cart store using localStorage
 const CART_KEY = 'vita-napoli-cart';
@@ -6,7 +7,20 @@ const CART_KEY = 'vita-napoli-cart';
 export function getCart(): CartItem[] {
   try {
     const stored = localStorage.getItem(CART_KEY);
-    return stored ? JSON.parse(stored) : [];
+    const items: CartItem[] = stored ? JSON.parse(stored) : [];
+
+    // Recalculate every normal item when cart opens so a scheduled discount
+    // starts or expires correctly without requiring the customer to re-add it.
+    const refreshed = items.map(item => {
+      if (item.isDeal) return item;
+      return {
+        ...item,
+        ...calculateCartItemTotals(item.menuItem, item.size, item.extras || [], item.quantity),
+      };
+    });
+
+    if (stored) localStorage.setItem(CART_KEY, JSON.stringify(refreshed));
+    return refreshed;
   } catch {
     return [];
   }
@@ -16,18 +30,38 @@ export function saveCart(items: CartItem[]): void {
   localStorage.setItem(CART_KEY, JSON.stringify(items));
 }
 
+function calculateCartItemTotals(
+  menuItem: MenuItem,
+  size: string,
+  extras: Extra[],
+  quantity: number,
+) {
+  const sizes = getItemSizes(menuItem);
+  const sizeObj = sizes.find(s => s.name === size) || sizes[0];
+  const basePrice = Number(sizeObj?.price || 0);
+  const extrasPrice = extras.reduce((sum, extra) => sum + Number(extra.price || 0), 0);
+  const breakdown = getItemPriceBreakdown(menuItem, basePrice);
+
+  const originalTotalPrice = (basePrice + extrasPrice) * quantity;
+  const totalPrice = (breakdown.finalPrice + extrasPrice) * quantity;
+  const itemDiscountAmount = breakdown.saving * quantity;
+
+  return {
+    totalPrice,
+    originalTotalPrice,
+    itemDiscountAmount,
+    itemDiscountLabel: breakdown.discountLabel,
+  };
+}
+
 export function addToCart(
   menuItem: MenuItem,
   size: string,
   extras: Extra[],
-  quantity: number
+  quantity: number,
 ): CartItem[] {
   const cart = getCart();
-  const sizes = getItemSizes(menuItem);
-  const sizeObj = sizes.find(s => s.name === size) || sizes[0];
-  const basePrice = sizeObj?.price || 0;
-  const extrasPrice = extras.reduce((sum, e) => sum + e.price, 0);
-  const totalPrice = (basePrice + extrasPrice) * quantity;
+  const totals = calculateCartItemTotals(menuItem, size, extras, quantity);
 
   const newItem: CartItem = {
     id: `${menuItem.id}-${size}-${extras.map(e => e.id).join(',')}-${Date.now()}`,
@@ -35,7 +69,7 @@ export function addToCart(
     size,
     extras,
     quantity,
-    totalPrice,
+    ...totals,
   };
 
   cart.push(newItem);
@@ -51,15 +85,26 @@ export function removeFromCart(itemId: string): CartItem[] {
 
 export function updateCartItemQuantity(itemId: string, quantity: number): CartItem[] {
   const cart = getCart().map(item => {
-    if (item.id === itemId) {
-      const sizes = getItemSizes(item.menuItem);
-      const sizeObj = sizes.find(s => s.name === item.size) || sizes[0];
-      const basePrice = sizeObj?.price || 0;
-      const extrasPrice = item.extras.reduce((sum, e) => sum + e.price, 0);
-      return { ...item, quantity, totalPrice: (basePrice + extrasPrice) * quantity };
+    if (item.id !== itemId) return item;
+
+    if (item.isDeal) {
+      const singlePrice = item.quantity > 0 ? item.totalPrice / item.quantity : item.totalPrice;
+      return {
+        ...item,
+        quantity,
+        totalPrice: singlePrice * quantity,
+        originalTotalPrice: singlePrice * quantity,
+        itemDiscountAmount: 0,
+      };
     }
-    return item;
+
+    return {
+      ...item,
+      quantity,
+      ...calculateCartItemTotals(item.menuItem, item.size, item.extras, quantity),
+    };
   });
+
   saveCart(cart);
   return cart;
 }
@@ -69,7 +114,18 @@ export function clearCart(): void {
 }
 
 export function getCartTotal(cart: CartItem[]): number {
-  return cart.reduce((sum, item) => sum + item.totalPrice, 0);
+  return cart.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+}
+
+export function getCartOriginalTotal(cart: CartItem[]): number {
+  return cart.reduce(
+    (sum, item) => sum + Number(item.originalTotalPrice ?? item.totalPrice ?? 0),
+    0,
+  );
+}
+
+export function getCartItemDiscountTotal(cart: CartItem[]): number {
+  return cart.reduce((sum, item) => sum + Number(item.itemDiscountAmount || 0), 0);
 }
 
 export function getCartItemCount(cart: CartItem[]): number {
@@ -102,6 +158,8 @@ export function addDealToCart(deal: DealCartInput): CartItem[] {
     extras: [],
     quantity: 1,
     totalPrice: deal.dealPrice,
+    originalTotalPrice: deal.dealPrice,
+    itemDiscountAmount: 0,
     isDeal: true,
     dealId: deal.dealId,
     dealName: deal.dealName,

@@ -1,85 +1,6 @@
-import { getAPIBaseURL } from './config';
+import { createClient } from '@metagptx/web-sdk';
 
-type RequestOptions = {
-  url: string;
-  method?: string;
-  data?: any;
-};
-
-async function request({ url, method = 'GET', data }: RequestOptions) {
-  const base = getAPIBaseURL().replace(/\/$/, '');
-  const target = url.startsWith('http') ? url : `${base}${url}`;
-  const upper = method.toUpperCase();
-  const init: RequestInit = {
-    method: upper,
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  };
-  if (data !== undefined && upper !== 'GET' && upper !== 'HEAD') {
-    init.body = JSON.stringify(data);
-  }
-  let finalTarget = target;
-  if (data && upper === 'GET') {
-    const u = new URL(target);
-    Object.entries(data).forEach(([k, v]) => {
-      if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
-    });
-    finalTarget = u.toString();
-  }
-  const response = await fetch(finalTarget, init);
-  const text = await response.text();
-  let body: any = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  if (!response.ok) {
-    const message = body?.detail || body?.message || `Request failed (${response.status})`;
-    throw new Error(message);
-  }
-  return { data: body };
-}
-
-function entityApi(entity: string) {
-  const path = `/api/v1/entities/${entity}`;
-  return {
-    query: ({ query, sort, skip = 0, limit = 20, fields }: any = {}) => {
-      const params = new URLSearchParams();
-      if (query && Object.keys(query).length) params.set('query', JSON.stringify(query));
-      if (sort) params.set('sort', sort);
-      params.set('skip', String(skip));
-      params.set('limit', String(limit));
-      if (fields) params.set('fields', fields);
-      return request({ url: `${path}?${params.toString()}` });
-    },
-    create: ({ data }: any) => request({ url: path, method: 'POST', data }),
-    update: ({ id, data }: any) => request({ url: `${path}/${id}`, method: 'PUT', data }),
-    delete: ({ id }: any) => request({ url: `${path}/${id}`, method: 'DELETE' }),
-  };
-}
-
-const entities = new Proxy({}, {
-  get: (_target, prop: string) => entityApi(prop),
-}) as Record<string, ReturnType<typeof entityApi>>;
-
-export const client = {
-  apiCall: { invoke: request },
-  entities,
-  auth: {
-    async me() {
-      try { return await request({ url: '/api/v1/auth/me' }); }
-      catch { return { data: null }; }
-    },
-    login() { window.location.href = '/'; },
-    toLogin() { window.location.href = '/'; },
-    async logout() { return { data: { success: true } }; },
-  },
-  storage: {
-    async getUploadUrl() {
-      throw new Error('Free hosting mode: image upload disabled. Admin mein direct image URL paste karein.');
-    },
-    async getDownloadUrl({ key }: any) {
-      return { data: { download_url: key, url: key } };
-    },
-  },
-};
+export const client = createClient();
 
 // Types
 export interface Category {
@@ -106,6 +27,11 @@ export interface MenuItem {
   is_active: boolean;
   is_popular: boolean;
   has_extras: boolean;
+  discount_enabled?: boolean;
+  discount_type?: 'percentage' | 'fixed';
+  discount_value?: number;
+  discount_start_at?: string;
+  discount_end_at?: string;
   sort_order: number;
 }
 
@@ -138,21 +64,10 @@ export interface Order {
   customer_name: string;
   customer_phone: string;
   estimated_time: string;
-  pickup_time?: string;
   order_notes: string;
   payment_method: string;
   status: string;
   total_amount: number;
-  subtotal_amount?: number;
-  promo_code?: string;
-  discount_type?: 'percentage' | 'fixed' | '';
-  discount_percent?: number;
-  discount_amount?: number;
-  service_fee?: number;
-  small_order_fee?: number;
-  delivery_charge?: number;
-  tip_amount?: number;
-  tip_type?: string;
   items_json: string;
   created_at: string;
   updated_at: string;
@@ -196,11 +111,7 @@ export interface Offer {
   id: number;
   title: string;
   description: string;
-  discount_type: 'percentage' | 'fixed';
   discount_percent: number;
-  fixed_discount_amount: number;
-  minimum_order_amount: number;
-  maximum_discount_amount: number;
   promo_code: string;
   banner_image_url: string;
   is_active: boolean;
@@ -208,9 +119,6 @@ export interface Offer {
   end_date: string;
   first_order_only: boolean;
   usage_limit_per_customer: number;
-  total_usage_limit: number;
-  created_at?: string;
-  updated_at?: string;
 }
 
 export interface Notification {
@@ -231,6 +139,9 @@ export interface CartItem {
   extras: Extra[];
   quantity: number;
   totalPrice: number;
+  originalTotalPrice?: number;
+  itemDiscountAmount?: number;
+  itemDiscountLabel?: string;
   isDeal?: boolean;
   dealId?: number;
   dealName?: string;
