@@ -1,66 +1,82 @@
-import { useState } from 'react';
-import { CalendarDays, ChefHat, Clock3 } from 'lucide-react';
+import { ComponentType, useState } from 'react';
+import {
+  CalendarDays,
+  ClipboardList,
+  History,
+  UtensilsCrossed,
+} from 'lucide-react';
 
-import KitchenOrders from './KitchenOrders';
 import KitchenHistoryPanel from './KitchenHistoryPanel';
+import KitchenMenuPanel from './KitchenMenuPanel';
+import KitchenOrders from './KitchenOrders';
 
-type KitchenTab = 'live' | 'today' | 'yesterday';
+type KitchenTab = 'live' | 'today' | 'yesterday' | 'menu';
+
+const HistoryPanel =
+  KitchenHistoryPanel as ComponentType<Record<string, unknown>>;
+
+const tabs: Array<{
+  key: KitchenTab;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  { key: 'live', label: 'Live Orders', icon: ClipboardList },
+  { key: 'today', label: 'Today', icon: CalendarDays },
+  { key: 'yesterday', label: 'Yesterday', icon: History },
+  { key: 'menu', label: 'Menu', icon: UtensilsCrossed },
+];
 
 export default function KitchenShell() {
-  const [tab, setTab] = useState<KitchenTab>('live');
+  const [activeTab, setActiveTab] = useState<KitchenTab>('live');
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-3 py-3">
-        <div className="max-w-7xl mx-auto">
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => setTab('live')}
-              className={`rounded-xl px-3 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
-                tab === 'live'
-                  ? 'bg-orange-600 text-white'
-                  : 'bg-gray-900 text-gray-400 border border-gray-800'
-              }`}
-            >
-              <ChefHat className="w-4 h-4" />
-              Live Orders
-            </button>
+      <div className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-2 py-2">
+        <div className="max-w-6xl mx-auto grid grid-cols-4 gap-1">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.key;
 
-            <button
-              type="button"
-              onClick={() => setTab('today')}
-              className={`rounded-xl px-3 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
-                tab === 'today'
-                  ? 'bg-green-600 text-white'
-                  : 'bg-gray-900 text-gray-400 border border-gray-800'
-              }`}
-            >
-              <CalendarDays className="w-4 h-4" />
-              Today
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setTab('yesterday')}
-              className={`rounded-xl px-3 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
-                tab === 'yesterday'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-900 text-gray-400 border border-gray-800'
-              }`}
-            >
-              <Clock3 className="w-4 h-4" />
-              Yesterday
-            </button>
-          </div>
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`min-w-0 rounded-lg px-1 py-2.5 flex flex-col sm:flex-row items-center justify-center gap-1 text-[10px] sm:text-xs font-semibold transition-colors ${
+                  active
+                    ? 'bg-yellow-500 text-black'
+                    : 'bg-gray-900 text-gray-400 hover:bg-gray-800 hover:text-white'
+                }`}
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                <span className="truncate">{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {tab === 'live' ? (
-        <KitchenOrders />
-      ) : (
-        <KitchenHistoryPanel day={tab} />
+      {activeTab === 'live' && <KitchenOrders />}
+
+      {activeTab === 'today' && (
+        <HistoryPanel
+          period="today"
+          day="today"
+          mode="today"
+          dateFilter="today"
+        />
       )}
+
+      {activeTab === 'yesterday' && (
+        <HistoryPanel
+          period="yesterday"
+          day="yesterday"
+          mode="yesterday"
+          dateFilter="yesterday"
+        />
+      )}
+
+      {activeTab === 'menu' && <KitchenMenuPanel />}
     </div>
   );
 }
