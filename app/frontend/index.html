@@ -2,166 +2,74 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-
-    <link
-      data-mgx-overview="icon"
-      rel="icon"
-      href="/icon-192.png"
-    />
-
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
-
-    <meta
-      name="apple-mobile-web-app-capable"
-      content="yes"
-    />
-
-    <meta
-      name="mobile-web-app-capable"
-      content="yes"
-    />
-
-    <meta
-      name="apple-mobile-web-app-status-bar-style"
-      content="black-translucent"
-    />
-
-    <meta
-      name="theme-color"
-      content="#dc2626"
-    />
-
-    <link
-      id="app-manifest"
-      rel="manifest"
-      href="/manifest.json"
-    />
-
-    <title data-mgx-overview="title">
-      Vita Napoli Pizza
-    </title>
-
-    <meta
-      data-mgx-overview="description"
-      name="description"
-      content="Order authentic Italian pizza and pasta from Vita Napoli Pizza"
-    />
-
-    <meta
-      name="author"
-      content="Vita Napoli Pizza"
-    />
-
-    <meta
-      data-mgx-overview="og:title"
-      property="og:title"
-      content="Vita Napoli Pizza"
-    />
-
-    <meta
-      data-mgx-overview="og:description"
-      property="og:description"
-      content="Order authentic Italian pizza and pasta online"
-    />
-
-    <meta
-      data-mgx-overview="og:image"
-      property="og:image"
-      content="/icon-512.png"
-    />
-
-    <meta
-      property="og:type"
-      content="website"
-    />
-
-    <meta
-      data-mgx-overview="twitter:title"
-      name="twitter:title"
-      content="Vita Napoli Pizza"
-    />
-
-    <meta
-      data-mgx-overview="twitter:description"
-      name="twitter:description"
-      content="Order authentic Italian pizza and pasta online"
-    />
-
-    <meta
-      data-mgx-overview="twitter:image"
-      name="twitter:image"
-      content="/icon-512.png"
-    />
+    <link data-mgx-overview="icon" rel="icon" href="/icon-customer-192.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#15803d" />
 
     <script>
       (function () {
-        const path = window.location.pathname;
-        const manifestLink =
-          document.getElementById("app-manifest");
-        const titleElement =
-          document.querySelector("title");
-        const descriptionElement =
-          document.querySelector(
-            'meta[name="description"]'
-          );
+        var path = window.location.pathname.toLowerCase();
+        var app = {
+          manifest: '/manifest.json',
+          title: 'Fai Fai Juice',
+          icon: '/icon-customer-192.png',
+          theme: '#15803d'
+        };
 
-        let manifestUrl = "/manifest.json";
-        let appTitle = "Vita Napoli Pizza";
-        let appDescription =
-          "Order authentic Italian pizza and pasta from Vita Napoli Pizza";
-
-        if (path.startsWith("/admin")) {
-          manifestUrl = "/manifest-admin.json";
-          appTitle = "Vita Napoli Admin";
-          appDescription =
-            "Vita Napoli restaurant admin panel";
-        } else if (path.startsWith("/kitchen")) {
-          manifestUrl = "/manifest-kitchen.json";
-          appTitle = "Vita Napoli Kitchen";
-          appDescription =
-            "Vita Napoli kitchen order panel";
-        } else if (path.startsWith("/rider")) {
-          manifestUrl = "/manifest-rider.json";
-          appTitle = "Vita Napoli Rider";
-          appDescription =
-            "Vita Napoli rider delivery panel";
+        if (path === '/admin' || path.indexOf('/admin/') === 0) {
+          app = {
+            manifest: '/manifest-admin.json',
+            title: 'Fai Fai Admin',
+            icon: '/icon-admin-192.png',
+            theme: '#166534'
+          };
+        } else if (path === '/kitchen' || path.indexOf('/kitchen/') === 0) {
+          app = {
+            manifest: '/manifest-kitchen.json',
+            title: 'Fai Fai Kitchen',
+            icon: '/icon-kitchen-192.png',
+            theme: '#ea580c'
+          };
+        } else if (path === '/rider' || path.indexOf('/rider/') === 0) {
+          app = {
+            manifest: '/manifest-rider.json',
+            title: 'Fai Fai Rider',
+            icon: '/icon-rider-192.png',
+            theme: '#0369a1'
+          };
         }
 
-        if (manifestLink) {
-          manifestLink.setAttribute(
-            "href",
-            manifestUrl
-          );
-        }
+        var manifestLink = document.createElement('link');
+        manifestLink.rel = 'manifest';
+        manifestLink.href = app.manifest;
+        document.head.appendChild(manifestLink);
 
-        if (titleElement) {
-          titleElement.textContent = appTitle;
-        }
+        var iconLink = document.querySelector('link[rel="icon"]');
+        if (iconLink) iconLink.setAttribute('href', app.icon);
 
-        if (descriptionElement) {
-          descriptionElement.setAttribute(
-            "content",
-            appDescription
-          );
-        }
+        var themeMeta = document.querySelector('meta[name="theme-color"]');
+        if (themeMeta) themeMeta.setAttribute('content', app.theme);
 
-        document.documentElement.setAttribute(
-          "data-app-manifest",
-          manifestUrl
-        );
+        document.title = app.title;
       })();
     </script>
+
+    <title data-mgx-overview="title">Fai Fai Juice</title>
+    <meta data-mgx-overview="description" name="description" content="Order fresh juices, desserts, mojitos and milkshakes from Fai Fai Juice" />
+    <meta name="author" content="Fai Fai Juice" />
+    <meta data-mgx-overview="og:title" property="og:title" content="Fai Fai Juice" />
+    <meta data-mgx-overview="og:description" property="og:description" content="Fresh juices, desserts and beverages" />
+    <meta data-mgx-overview="og:image" property="og:image" content="/icon-customer-512.png" />
+    <meta property="og:type" content="website" />
+    <meta data-mgx-overview="twitter:title" name="twitter:title" content="Fai Fai Juice" />
+    <meta data-mgx-overview="twitter:description" name="twitter:description" content="Fresh juices, desserts and beverages" />
+    <meta data-mgx-overview="twitter:image" name="twitter:image" content="/icon-customer-512.png" />
   </head>
 
   <body>
     <div id="root"></div>
-
-    <script
-      type="module"
-      src="/src/main.tsx"
-    ></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
