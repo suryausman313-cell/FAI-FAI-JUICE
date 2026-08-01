@@ -49,6 +49,7 @@ interface PinAccount {
   is_locked: boolean;
   locked_until?: string | null;
   last_login_at?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
 }
 
@@ -115,11 +116,9 @@ export default function AdminCustomers() {
     return map;
   }, [pinAccounts]);
 
-
-  // Customer signup is stored in customer_pin_accounts_v2.
-  // The old customer endpoint mostly returns visitors/orders, so merge both
-  // sources here. This makes a newly signed-up customer visible immediately,
-  // even before placing an order.
+  // Signup accounts are stored in customer_pin_accounts_v2.
+  // Merge signup accounts with visitor/order customer data so a customer
+  // appears here immediately, even before placing an order.
   const allCustomers = useMemo(() => {
     const map = new Map<string, Customer>();
 
@@ -159,6 +158,11 @@ export default function AdminCustomers() {
             account.last_login_at ||
             account.updated_at ||
             null,
+          first_seen:
+            existing.first_seen ||
+            account.created_at ||
+            account.updated_at ||
+            null,
         });
         return;
       }
@@ -173,7 +177,8 @@ export default function AdminCustomers() {
         is_online: false,
         last_active:
           account.last_login_at || account.updated_at || null,
-        first_seen: account.updated_at || null,
+        first_seen:
+          account.created_at || account.updated_at || null,
         is_guest: false,
       });
     });
@@ -219,8 +224,8 @@ export default function AdminCustomers() {
     });
   }, [allCustomers, filterStatus, search]);
 
-  const mergedTotalCustomers = allCustomers.length;
-  const mergedOnlineCount = allCustomers.filter(
+  const totalCustomers = allCustomers.length;
+  const onlineCount = allCustomers.filter(
     customer => customer.is_online
   ).length;
 
@@ -235,53 +240,47 @@ export default function AdminCustomers() {
       setPinAccounts(res.data?.items || []);
     } catch (error) {
       console.error('Failed to load customer PIN accounts:', error);
+      toast.error(
+        errorMessage(
+          error,
+          'Could not load registered customer accounts'
+        )
+      );
     }
   }, []);
 
-  const loadCustomers = useCallback(
-    async (silent = false) => {
-      if (!silent) setRefreshing(true);
+  const loadCustomers = useCallback(async (silent = false) => {
+    if (!silent) setRefreshing(true);
+
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/admin/customers-enhanced',
+        method: 'GET',
+        data: { limit: 500 },
+      });
+
+      setCustomers(res.data?.items || []);
+    } catch (error) {
+      console.error('Failed to load enhanced customers:', error);
 
       try {
-        const params: Record<string, string | number> = {
-          limit: 500,
-        };
-
         const res = await client.apiCall.invoke({
-          url: '/api/v1/admin/customers-enhanced',
+          url: '/api/v1/admin/customers',
           method: 'GET',
-          data: params,
+          data: { limit: 500 },
         });
 
         setCustomers(res.data?.items || []);
-      } catch (error) {
-        console.error('Failed to load customers:', error);
-
-        try {
-          const params: Record<string, string | number> = {
-            limit: 500,
-          };
-
-          const res = await client.apiCall.invoke({
-            url: '/api/v1/admin/customers',
-            method: 'GET',
-            data: params,
-          });
-
-          const items = res.data?.items || [];
-          setCustomers(items);
-        } catch (fallbackError) {
-          console.error(
-            'Failed to load fallback customers:',
-            fallbackError
-          );
-        }
-      } finally {
-        setRefreshing(false);
+      } catch (fallbackError) {
+        console.error(
+          'Failed to load fallback customers:',
+          fallbackError
+        );
       }
-    },
-    []
-  );
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     async function checkAuthAndLoad() {
@@ -315,11 +314,14 @@ export default function AdminCustomers() {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void loadCustomers(true);
+      void Promise.all([
+        loadCustomers(true),
+        loadPinAccounts(),
+      ]);
     }, 30000);
 
     return () => window.clearInterval(interval);
-  }, [loadCustomers]);
+  }, [loadCustomers, loadPinAccounts]);
 
   function formatTimeAgo(
     dateStr: string | undefined | null
@@ -346,7 +348,9 @@ export default function AdminCustomers() {
   }
 
   async function refreshAll() {
-    await Promise.all([loadCustomers(), loadPinAccounts()]);
+    setRefreshing(true);
+    await Promise.all([loadCustomers(true), loadPinAccounts()]);
+    setRefreshing(false);
   }
 
   function openResetDialog(customer: Customer) {
@@ -427,7 +431,7 @@ export default function AdminCustomers() {
     }
 
     const message = encodeURIComponent(
-      `Vita Napoli Pizza\n\nHello ${resetResult.customerName}, your temporary 4-digit PIN is: ${resetResult.pin}\n\nPlease login using your registered mobile number and change this PIN after login.\n\nNever share your PIN with anyone.`
+      `Fai Fai Juice\n\nHello ${resetResult.customerName}, your temporary 4-digit PIN is: ${resetResult.pin}\n\nPlease login using your registered mobile number and change this PIN after login.\n\nNever share your PIN with anyone.`
     );
 
     window.open(
@@ -440,7 +444,9 @@ export default function AdminCustomers() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400">Loading...</div>
+        <div className="text-gray-400">
+          Loading customers...
+        </div>
       </div>
     );
   }
@@ -462,7 +468,7 @@ export default function AdminCustomers() {
               Customer Management
             </h1>
             <p className="text-gray-500 text-sm">
-              Customer activity and secure PIN reset
+              Registered customers, activity and secure PIN reset
             </p>
           </div>
 
@@ -482,7 +488,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <Users className="w-5 h-5 text-blue-400 mx-auto mb-1" />
             <p className="text-2xl font-bold text-white">
-              {mergedTotalCustomers}
+              {totalCustomers}
             </p>
             <p className="text-xs text-gray-400">Total</p>
           </Card>
@@ -490,7 +496,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <Wifi className="w-5 h-5 text-green-400 mx-auto mb-1" />
             <p className="text-2xl font-bold text-green-400">
-              {mergedOnlineCount}
+              {onlineCount}
             </p>
             <p className="text-xs text-gray-400">Online Now</p>
           </Card>
@@ -498,7 +504,7 @@ export default function AdminCustomers() {
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <WifiOff className="w-5 h-5 text-gray-500 mx-auto mb-1" />
             <p className="text-2xl font-bold text-gray-400">
-              {Math.max(mergedTotalCustomers - mergedOnlineCount, 0)}
+              {Math.max(totalCustomers - onlineCount, 0)}
             </p>
             <p className="text-xs text-gray-400">Offline</p>
           </Card>
@@ -512,9 +518,9 @@ export default function AdminCustomers() {
                 Safe PIN reset
               </p>
               <p className="text-blue-300/70 text-sm mt-1">
-                Verify the customer name, registered mobile number and
-                last order before resetting. Send the temporary PIN only
-                to the registered WhatsApp number shown on this page.
+                Verify the customer name and registered mobile
+                number before resetting. Send the temporary PIN only
+                to that registered WhatsApp number.
               </p>
             </div>
           </div>
@@ -545,7 +551,7 @@ export default function AdminCustomers() {
               onClick={() => setFilterStatus(status)}
               className={`cursor-pointer capitalize ${
                 filterStatus === status
-                  ? 'bg-red-600 hover:bg-red-700 text-white border-red-600'
+                  ? 'bg-green-600 hover:bg-green-700 text-white border-green-600'
                   : 'border-gray-700 text-gray-400 hover:text-white'
               }`}
             >
@@ -587,7 +593,7 @@ export default function AdminCustomers() {
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-white font-semibold">
-                          {customer.customer_name || 'Guest'}
+                          {customer.customer_name || 'Customer'}
                         </h3>
 
                         <Badge
@@ -599,8 +605,8 @@ export default function AdminCustomers() {
                           }
                         >
                           {customer.is_guest
-                            ? '👤 Guest'
-                            : '✓ Registered'}
+                            ? 'Guest'
+                            : 'Registered'}
                         </Badge>
 
                         <Badge
@@ -682,9 +688,7 @@ export default function AdminCustomers() {
                   <div className="bg-gray-800/50 rounded-lg p-2">
                     <p className="text-white font-medium text-sm">
                       AED{' '}
-                      {Number(customer.total_spent || 0).toFixed(
-                        0
-                      )}
+                      {Number(customer.total_spent || 0).toFixed(0)}
                     </p>
                     <p className="text-xs text-gray-500">
                       Spent
@@ -709,7 +713,7 @@ export default function AdminCustomers() {
 
                 {customer.first_seen && (
                   <p className="text-gray-600 text-xs mt-2">
-                    First visit:{' '}
+                    Registered:{' '}
                     {new Date(
                       customer.first_seen
                     ).toLocaleDateString()}
@@ -728,7 +732,7 @@ export default function AdminCustomers() {
                   : 'No customers found'}
               </p>
               <p className="text-gray-600 text-xs mt-2">
-                Visitors will appear here as they open the app
+                Signed-up customers will appear here automatically.
               </p>
             </div>
           )}
@@ -792,8 +796,7 @@ export default function AdminCustomers() {
                       className="bg-gray-900 border-gray-700 text-white text-center text-2xl tracking-[0.6em]"
                     />
                     <p className="text-gray-500 text-xs">
-                      Verify the customer's identity before pressing
-                      Reset PIN.
+                      Verify the customer's identity before resetting.
                     </p>
                   </div>
 
@@ -845,8 +848,7 @@ export default function AdminCustomers() {
                   </Button>
 
                   <p className="text-yellow-300/80 text-xs text-center">
-                    WhatsApp will open with the registered number.
-                    Check the number before sending.
+                    Check the registered number before sending.
                   </p>
 
                   <Button
