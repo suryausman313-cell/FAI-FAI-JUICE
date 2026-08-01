@@ -1,26 +1,16 @@
 {
   "id": "/admin",
-  "name": "Vita Napoli Admin",
-  "short_name": "VN Admin",
-  "description": "Vita Napoli administration app",
+  "name": "Fai Fai Juice Admin",
+  "short_name": "FF Admin",
+  "description": "Fai Fai Juice administration app",
   "start_url": "/admin",
   "scope": "/admin",
   "display": "standalone",
   "background_color": "#000000",
-  "theme_color": "#991b1b",
+  "theme_color": "#166534",
   "orientation": "portrait",
   "icons": [
-    {
-      "src": "/icon-admin-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-admin-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-admin-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-admin-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }
