@@ -11,7 +11,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -335,15 +335,115 @@ def _verify_admin_key(
         )
 
 
+async def _ensure_menu_items_schema(db: AsyncSession) -> list[str]:
+    """
+    Add columns that the current Menu_items model expects.
+
+    PostgreSQL does not automatically add new columns when a SQLAlchemy model
+    changes. Every statement uses IF NOT EXISTS, so running this more than once
+    is safe and does not delete or overwrite menu/order data.
+    """
+
+    column_statements = [
+        (
+            "discount_enabled",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS discount_enabled BOOLEAN DEFAULT FALSE",
+        ),
+        (
+            "discount_type",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20) "
+            "DEFAULT 'percentage'",
+        ),
+        (
+            "discount_value",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS discount_value DOUBLE PRECISION DEFAULT 0",
+        ),
+        (
+            "discount_start_at",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS discount_start_at VARCHAR(40)",
+        ),
+        (
+            "discount_end_at",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS discount_end_at VARCHAR(40)",
+        ),
+        (
+            "sort_order",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS sort_order INTEGER",
+        ),
+        (
+            "created_at",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ "
+            "DEFAULT CURRENT_TIMESTAMP",
+        ),
+        (
+            "updated_at",
+            "ALTER TABLE menu_items "
+            "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ "
+            "DEFAULT CURRENT_TIMESTAMP",
+        ),
+    ]
+
+    for _column_name, statement in column_statements:
+        await db.execute(text(statement))
+
+    # Backfill old records so Admin discount controls have predictable values.
+    await db.execute(
+        text(
+            "UPDATE menu_items "
+            "SET discount_enabled = FALSE "
+            "WHERE discount_enabled IS NULL"
+        )
+    )
+    await db.execute(
+        text(
+            "UPDATE menu_items "
+            "SET discount_type = 'percentage' "
+            "WHERE discount_type IS NULL OR TRIM(discount_type) = ''"
+        )
+    )
+    await db.execute(
+        text(
+            "UPDATE menu_items "
+            "SET discount_value = 0 "
+            "WHERE discount_value IS NULL"
+        )
+    )
+    await db.execute(
+        text(
+            "UPDATE menu_items "
+            "SET created_at = CURRENT_TIMESTAMP "
+            "WHERE created_at IS NULL"
+        )
+    )
+    await db.execute(
+        text(
+            "UPDATE menu_items "
+            "SET updated_at = CURRENT_TIMESTAMP "
+            "WHERE updated_at IS NULL"
+        )
+    )
+
+    await db.commit()
+    return [name for name, _statement in column_statements]
+
+
 @router.get("/health")
 async def health():
     return {
         "success": True,
-        "version": "photo-menu-v1",
+        "version": "photo-menu-db-fix-v2",
         "categories": len(CATEGORY_ORDER),
         "items": len(MENU_CATALOG),
         "automatic_startup_import": False,
         "admin_editable_after_import": True,
+        "database_schema_fix_included": True,
     }
 
 
@@ -397,6 +497,10 @@ async def apply_photo_menu(
             detail="Use confirm=FAI-FAI-MENU",
         )
 
+    # Fix the live PostgreSQL table before SQLAlchemy selects Menu_items.
+    # This resolves: column menu_items.discount_enabled does not exist.
+    schema_columns = await _ensure_menu_items_schema(db)
+
     category_result = await db.execute(select(Categories))
     existing_categories = list(category_result.scalars().all())
 
@@ -418,6 +522,7 @@ async def apply_photo_menu(
                 "so later Admin edits are preserved. Use force=true only to restore "
                 "the original imported menu."
             ),
+            "schema_checked": schema_columns,
             "photo_items_found": photo_ready_count,
             "expected_items": len(MENU_CATALOG),
         }
@@ -548,6 +653,7 @@ async def apply_photo_menu(
     return {
         "success": True,
         "already_applied": False,
+        "schema_checked": schema_columns,
         "message": "Fai Fai photo menu installed. Admin can now edit every item.",
         "categories": {
             "total": len(CATEGORY_ORDER),
