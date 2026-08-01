@@ -69,10 +69,7 @@ def normalize_phone(raw_value: str) -> str:
 def validate_pin(pin: str) -> str:
     value = (pin or "").strip()
     if not re.fullmatch(r"\d{4}", value):
-        raise HTTPException(
-            status_code=400,
-            detail="New PIN must be exactly 4 digits",
-        )
+        raise HTTPException(status_code=400, detail="New PIN must be exactly 4 digits")
     return value
 
 
@@ -106,7 +103,7 @@ async def find_legacy_customer(
     db: AsyncSession,
     phone: str,
 ) -> Optional[Customer_sessions]:
-    # Match last 9 digits so old UAE local numbers also work.
+    # Match the last 9 digits so older locally formatted UAE numbers still work.
     tail = phone[-9:]
     result = await db.execute(
         select(Customer_sessions)
@@ -137,15 +134,12 @@ async def list_customer_pin_accounts(
                 Customer_pin_accounts_v2.customer_name.ilike(
                     f"%{clean_search}%"
                 ),
-                Customer_pin_accounts_v2.phone.ilike(
-                    f"%{clean_search}%"
-                ),
+                Customer_pin_accounts_v2.phone.ilike(f"%{clean_search}%"),
             )
         )
 
     result = await db.execute(query.limit(limit))
     accounts = result.scalars().all()
-    now = utc_now()
 
     return {
         "items": [
@@ -159,11 +153,7 @@ async def list_customer_pin_accounts(
                 ),
                 "is_locked": bool(
                     account.locked_until
-                    and (
-                        account.locked_until.replace(tzinfo=timezone.utc)
-                        if account.locked_until.tzinfo is None
-                        else account.locked_until
-                    ) > now
+                    and account.locked_until > utc_now()
                 ),
                 "locked_until": (
                     account.locked_until.isoformat()
@@ -254,10 +244,7 @@ async def admin_reset_customer_pin(
     except Exception:
         await db.rollback()
         logger.exception("Admin could not reset customer PIN")
-        raise HTTPException(
-            status_code=500,
-            detail="Could not reset customer PIN",
-        )
+        raise HTTPException(status_code=500, detail="Could not reset customer PIN")
 
     admin_identity = (
         getattr(current_user, "email", None)
