@@ -7,6 +7,11 @@ import {
   ChefHat,
   Clock,
   LogOut,
+  Menu,
+  CalendarDays,
+  History,
+  LayoutGrid,
+  ChevronRight,
   Printer,
   RefreshCw,
   Settings,
@@ -28,6 +33,7 @@ import {
 } from '@/components/ui/dialog';
 import { getAPIBaseURL } from '@/lib/config';
 import { Order } from '@/lib/api';
+import ReadyTimeCountdown, { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
 
 declare global {
   interface Window {
@@ -123,7 +129,7 @@ function extractOrders(payload: any): KitchenOrder[] {
 
   return possible
     .map(normalizeOrder)
-    .filter((order) => order.id > 0 && ACTIVE_STATUSES.has(order.status));
+    .filter((order) => order.id > 0);
 }
 
 function parseItems(itemsJson: unknown): ParsedItem[] {
@@ -269,6 +275,8 @@ export default function KitchenOrders() {
   const [selectedTime, setSelectedTime] = useState(20);
   const [customTime, setCustomTime] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'live' | 'today' | 'yesterday'>('live');
   const [soundEnabled, setSoundEnabled] = useState(
     () => localStorage.getItem('kitchen_sound') !== 'off'
   );
@@ -277,7 +285,7 @@ export default function KitchenOrders() {
     printer_port: 9100,
     paper_width: '80mm',
     auto_print_on_accept: true,
-    restaurant_name: 'Vita Napoli',
+    restaurant_name: 'Fai Fai Juice',
   });
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
@@ -285,7 +293,7 @@ export default function KitchenOrders() {
   const loadInProgressRef = useRef(false);
 
   const kitchenPin = useCallback(
-    () => localStorage.getItem('kitchen_pin') || '1234',
+    () => localStorage.getItem('kitchen_pin') || '1122',
     []
   );
 
@@ -318,10 +326,10 @@ export default function KitchenOrders() {
 
     try {
       const response = await axios.get(
-        `${getAPIBaseURL()}/api/v1/kitchen/orders`,
+        `${getAPIBaseURL()}/api/v1/order-workflow/orders`,
         {
           headers: kitchenHeaders(),
-          params: { limit: 100 },
+          params: { limit: 300 },
           timeout: 15000,
         }
       );
@@ -386,19 +394,32 @@ export default function KitchenOrders() {
     return () => clearInterval(timer);
   }, [authenticated, loadOrders]);
 
-  function handlePinLogin(event: FormEvent) {
+  async function handlePinLogin(event: FormEvent) {
     event.preventDefault();
-    if (pin !== '1234') {
-      toast.error('Invalid Kitchen PIN');
+    if (!pin.trim()) {
+      toast.error('Kitchen PIN enter karein');
       return;
     }
 
-    localStorage.setItem('kitchen_auth', 'true');
-    localStorage.setItem('kitchen_pin', pin);
-    setAuthenticated(true);
-    kitchenAlarm.unlock();
-    if (soundEnabled) kitchenAlarm.playOnce();
-    toast.success('Kitchen opened');
+    try {
+      await axios.get(`${getAPIBaseURL()}/api/v1/order-workflow/orders`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Kitchen-Pin': pin.trim(),
+        },
+        params: { limit: 1 },
+        timeout: 12000,
+      });
+
+      localStorage.setItem('kitchen_auth', 'true');
+      localStorage.setItem('kitchen_pin', pin.trim());
+      setAuthenticated(true);
+      kitchenAlarm.unlock();
+      if (soundEnabled) kitchenAlarm.playOnce();
+      toast.success('Kitchen opened');
+    } catch {
+      toast.error('Invalid Kitchen PIN');
+    }
   }
 
   function logoutKitchen() {
@@ -467,8 +488,8 @@ export default function KitchenOrders() {
     estimatedMinutes?: number
   ) {
     try {
-      await axios.put(
-        `${getAPIBaseURL()}/api/v1/kitchen/orders/${order.id}/status`,
+      const response = await axios.put(
+        `${getAPIBaseURL()}/api/v1/order-workflow/orders/${order.id}/status`,
         {
           status,
           estimated_minutes: estimatedMinutes,
@@ -479,23 +500,24 @@ export default function KitchenOrders() {
         }
       );
 
-      if (status === 'completed' || status === 'cancelled') {
-        setOrders((current) => current.filter((item) => item.id !== order.id));
-      } else {
-        setOrders((current) =>
-          current.map((item) =>
-            item.id === order.id
-              ? {
-                  ...item,
-                  status,
-                  estimated_time: estimatedMinutes
-                    ? `${estimatedMinutes} min`
-                    : item.estimated_time,
-                }
-              : item
-          )
-        );
-      }
+      const serverOrder = response.data?.order
+        ? normalizeOrder(response.data.order)
+        : null;
+
+      setOrders((current) =>
+        current.map((item) =>
+          item.id === order.id
+            ? serverOrder || {
+                ...item,
+                status,
+                updated_at: new Date().toISOString(),
+                estimated_time: estimatedMinutes
+                  ? makeLocalReadyTime(estimatedMinutes)
+                  : item.estimated_time,
+              }
+            : item
+        )
+      );
 
       if (status === 'accepted') {
         previousNewIdsRef.current.delete(order.id);
@@ -513,7 +535,7 @@ export default function KitchenOrders() {
             {
               ...order,
               status: 'accepted',
-              estimated_time: estimatedMinutes ? `${estimatedMinutes} min` : '',
+              estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : '',
             },
             false
           );
@@ -532,21 +554,67 @@ export default function KitchenOrders() {
     }
   }
 
+  function uaeDateKey(value: string | null | undefined): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Dubai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value || '';
+    const month = parts.find((part) => part.type === 'month')?.value || '';
+    const day = parts.find((part) => part.type === 'day')?.value || '';
+    return `${year}-${month}-${day}`;
+  }
+
+  function relativeUaeDateKey(dayOffset: number): string {
+    const uaeNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Dubai' }));
+    uaeNow.setDate(uaeNow.getDate() + dayOffset);
+    return [
+      uaeNow.getFullYear(),
+      String(uaeNow.getMonth() + 1).padStart(2, '0'),
+      String(uaeNow.getDate()).padStart(2, '0'),
+    ].join('-');
+  }
+
+  const activeOrders = useMemo(
+    () => orders.filter((order) => ACTIVE_STATUSES.has(order.status)),
+    [orders]
+  );
+
+  const terminalOrders = useMemo(
+    () => orders.filter((order) => ['completed', 'cancelled'].includes(order.status)),
+    [orders]
+  );
+
+  const todayHistory = useMemo(() => {
+    const key = relativeUaeDateKey(0);
+    return terminalOrders.filter((order) => uaeDateKey(order.updated_at || order.created_at) === key);
+  }, [terminalOrders]);
+
+  const yesterdayHistory = useMemo(() => {
+    const key = relativeUaeDateKey(-1);
+    return terminalOrders.filter((order) => uaeDateKey(order.updated_at || order.created_at) === key);
+  }, [terminalOrders]);
+
   const newOrders = useMemo(
-    () => orders.filter((order) => order.status === 'new'),
+    () => activeOrders.filter((order) => order.status === 'new'),
     [orders]
   );
   const progressOrders = useMemo(
-    () => orders.filter((order) => ['accepted', 'preparing'].includes(order.status)),
-    [orders]
+    () => activeOrders.filter((order) => ['accepted', 'preparing'].includes(order.status)),
+    [activeOrders]
   );
   const readyPickupOrders = useMemo(
-    () => orders.filter((order) => order.status === 'ready' && !isDeliveryOrder(order)),
-    [orders]
+    () => activeOrders.filter((order) => order.status === 'ready' && !isDeliveryOrder(order)),
+    [activeOrders]
   );
   const readyDeliveryOrders = useMemo(
-    () => orders.filter((order) => order.status === 'ready' && isDeliveryOrder(order)),
-    [orders]
+    () => activeOrders.filter((order) => order.status === 'ready' && isDeliveryOrder(order)),
+    [activeOrders]
   );
 
   if (!authenticated) {
@@ -572,7 +640,7 @@ export default function KitchenOrders() {
               Enter Kitchen
             </Button>
           </form>
-          <p className="text-gray-600 text-xs mt-4">Default PIN: 1234</p>
+          <p className="text-gray-600 text-xs mt-4">PIN Render Environment ke KITCHEN_PIN se chalega</p>
         </div>
       </div>
     );
@@ -630,6 +698,17 @@ export default function KitchenOrders() {
           <span className="text-gray-500 text-xs">{order.payment_method || 'Cash'}</span>
           <span className="text-red-400 font-black">AED {money(order.total_amount)}</span>
         </div>
+
+        {order.estimated_time && section !== 'new' && (
+          <div className="mb-3">
+            <ReadyTimeCountdown
+              estimatedTime={order.estimated_time}
+              referenceTime={order.updated_at || order.created_at}
+              status={order.status}
+              compact
+            />
+          </div>
+        )}
 
         {section === 'new' && acceptingOrder !== order.id && (
           <div className="grid grid-cols-2 gap-2">
@@ -739,6 +818,66 @@ export default function KitchenOrders() {
     );
   }
 
+  function HistoryOrdersList({ orders: historyOrders }: { orders: KitchenOrder[] }) {
+    const total = historyOrders
+      .filter((order) => order.status === 'completed')
+      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
+
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <p className="text-gray-500 text-xs uppercase">Orders</p>
+            <p className="text-white text-2xl font-black mt-1">{historyOrders.length}</p>
+          </Card>
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <p className="text-gray-500 text-xs uppercase">Completed Sale</p>
+            <p className="text-green-400 text-xl font-black mt-1">AED {money(total)}</p>
+          </Card>
+        </div>
+
+        {historyOrders.length === 0 ? (
+          <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
+            Is din koi completed/cancelled order nahi hai.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {historyOrders.map((order) => (
+              <Card key={order.id} className="bg-gray-900 border-gray-800 p-3">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-lg font-black">#{order.id}</span>
+                      <Badge className={order.status === 'completed'
+                        ? 'bg-green-600/20 text-green-300 border-green-600/30'
+                        : 'bg-red-600/20 text-red-300 border-red-600/30'}>
+                        {order.status === 'completed' ? 'Completed' : 'Cancelled'}
+                      </Badge>
+                    </div>
+                    <p className="text-gray-500 text-xs mt-1">
+                      {formatUaeTime(order.updated_at || order.created_at)}
+                    </p>
+                  </div>
+                  <span className="text-green-400 font-black">AED {money(order.total_amount)}</span>
+                </div>
+                <p className="text-gray-300 text-sm font-medium mb-2">{order.customer_name}</p>
+                <div className="space-y-1">{renderItems(order)}</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => printReceipt(order, true)}
+                  className="w-full mt-3 border-gray-700"
+                >
+                  <Printer className="w-4 h-4 mr-2" /> Reprint Copy
+                </Button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function Column({
     title,
     count,
@@ -774,8 +913,16 @@ export default function KitchenOrders() {
       <div className="max-w-7xl mx-auto">
         <header className="flex items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className="p-2 rounded-lg bg-gray-900 border border-gray-800 text-gray-300 hover:text-white"
+              aria-label="Open Kitchen menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
             <ChefHat className="w-6 h-6 text-orange-500 shrink-0" />
-            <h1 className="font-bold truncate">Kitchen Orders</h1>
+            <h1 className="font-bold truncate">{viewMode === 'live' ? 'Kitchen Orders' : viewMode === 'today' ? 'Today Orders' : 'Yesterday Orders'}</h1>
             <div className="relative shrink-0">
               <Bell className="w-5 h-5 text-gray-500" />
               {newOrders.length > 0 && (
@@ -846,24 +993,90 @@ export default function KitchenOrders() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <Column title="NEW" count={newOrders.length} dotClass="bg-blue-600" emptyText="No new orders">
-            {newOrders.map((order) => <OrderCard key={order.id} order={order} section="new" />)}
-          </Column>
+        {viewMode === 'live' ? (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <Column title="NEW" count={newOrders.length} dotClass="bg-blue-600" emptyText="No new orders">
+              {newOrders.map((order) => <OrderCard key={order.id} order={order} section="new" />)}
+            </Column>
 
-          <Column title="IN PROGRESS" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="No active orders">
-            {progressOrders.map((order) => <OrderCard key={order.id} order={order} section="progress" />)}
-          </Column>
+            <Column title="IN PROGRESS" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="No active orders">
+              {progressOrders.map((order) => <OrderCard key={order.id} order={order} section="progress" />)}
+            </Column>
 
-          <Column title="READY - PICKUP" count={readyPickupOrders.length} dotClass="bg-purple-600" emptyText="No pickup orders ready">
-            {readyPickupOrders.map((order) => <OrderCard key={order.id} order={order} section="ready" />)}
-          </Column>
+            <Column title="READY - PICKUP" count={readyPickupOrders.length} dotClass="bg-purple-600" emptyText="No pickup orders ready">
+              {readyPickupOrders.map((order) => <OrderCard key={order.id} order={order} section="ready" />)}
+            </Column>
 
-          <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-600" emptyText="No delivery orders ready">
-            {readyDeliveryOrders.map((order) => <OrderCard key={order.id} order={order} section="ready" />)}
-          </Column>
-        </div>
+            <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-600" emptyText="No delivery orders ready">
+              {readyDeliveryOrders.map((order) => <OrderCard key={order.id} order={order} section="ready" />)}
+            </Column>
+          </div>
+        ) : (
+          <HistoryOrdersList orders={viewMode === 'today' ? todayHistory : yesterdayHistory} />
+        )}
       </div>
+
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/70"
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close Kitchen menu"
+          />
+          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-gray-950 border-r border-gray-800 p-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <ChefHat className="w-6 h-6 text-orange-500" />
+                <div>
+                  <p className="text-white font-bold">Fai Fai Kitchen</p>
+                  <p className="text-gray-500 text-xs">Orders & history</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setDrawerOpen(false)} className="p-2 text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {[
+                { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, count: activeOrders.length, total: null },
+                { key: 'today' as const, label: 'Today Orders', icon: CalendarDays, count: todayHistory.length, total: todayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
+                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, count: yesterdayHistory.length, total: yesterdayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => {
+                      setViewMode(item.key);
+                      setDrawerOpen(false);
+                    }}
+                    className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left ${
+                      viewMode === item.key
+                        ? 'bg-orange-600/15 border-orange-600/40'
+                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
+                      <Icon className="w-5 h-5 text-orange-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-semibold text-sm">{item.label}</p>
+                      <p className="text-gray-500 text-xs">
+                        {item.count} order{item.count === 1 ? '' : 's'}
+                        {item.total !== null ? ` · AED ${money(item.total)}` : ''}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-gray-600" />
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent className="bg-gray-950 border-gray-800 text-white max-w-sm">

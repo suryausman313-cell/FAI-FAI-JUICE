@@ -11,17 +11,18 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import ReadyTimeCountdown, { makeLocalReadyTime, readyTimeLabel } from '@/components/ReadyTimeCountdown';
 
 const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
 
 type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-async function adminPanelApiRequest<T>(
+async function adminPanelApiRequest<T = unknown>(
   url: string,
   method: AdminPanelRequestMethod,
-  data?: unknown
+  data?: unknown,
 ): Promise<T> {
-  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1234';
+  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1122';
   const baseURL = getAPIBaseURL().replace(/\/$/, '');
 
   const response = await axios.request<T>({
@@ -36,7 +37,6 @@ async function adminPanelApiRequest<T>(
 
   return response.data;
 }
-
 
 interface RiderInfo {
   id: number;
@@ -99,16 +99,12 @@ export default function AdminOrders() {
       if (filterStatus && filterStatus !== 'all') params.status = filterStatus;
       if (search) params.search = search;
 
-      const query = new URLSearchParams();
-      query.set('limit', String(params.limit));
-      if (params.status) query.set('status', String(params.status));
-      if (params.search) query.set('search', String(params.search));
-
-      const payload = await adminPanelApiRequest<{ items?: Order[] }>(
-        `/api/v1/admin/orders?${query.toString()}`,
-        'GET'
-      );
-      const newOrders = payload?.items || [];
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/admin/orders',
+        method: 'GET',
+        data: params,
+      });
+      const newOrders = res.data?.items || [];
 
       // Clean old entries from recently-updated map (older than 5s)
       const now = Date.now();
@@ -147,7 +143,8 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Admin PIN was rejected. Check that the backend and panel both use PIN 1234.');
+        toast.error('Session expired. Please login again.');
+        navigate('/admin');
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
@@ -254,13 +251,16 @@ export default function AdminOrders() {
   async function acceptOrder(orderId: number, minutes: number) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await adminPanelApiRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+      const payload = await adminPanelApiRequest<{ order?: Order }>(
+        `/api/v1/order-workflow/orders/${orderId}/status`,
         'PUT',
         { status: 'accepted', estimated_minutes: minutes }
       );
+      const fallbackEstimate = makeLocalReadyTime(minutes);
       setOrders(prev =>
-        prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
+        prev.map(o => (o.id === orderId
+          ? { ...o, ...(payload.order || {}), status: 'accepted', estimated_time: payload.order?.estimated_time || fallbackEstimate }
+          : o))
       );
       setAcceptingOrder(null);
       toast.success(`Order #${orderId} accepted — ${minutes} min`);
@@ -275,7 +275,7 @@ export default function AdminOrders() {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
       await adminPanelApiRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+        `/api/v1/order-workflow/orders/${orderId}/status`,
         'PUT',
         { status: newStatus }
       );
@@ -294,7 +294,7 @@ export default function AdminOrders() {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
       await adminPanelApiRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+        `/api/v1/order-workflow/orders/${orderId}/status`,
         'PUT',
         { status: 'cancelled', cancel_reason: reason || '' }
       );
@@ -499,7 +499,7 @@ export default function AdminOrders() {
                       {order.estimated_time && order.status !== 'completed' && order.status !== 'cancelled' && (
                         <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30">
                           <Clock className="w-3 h-3 mr-1" />
-                          {order.estimated_time}
+                          {readyTimeLabel(order.estimated_time)}
                         </Badge>
                       )}
                     </div>
@@ -516,6 +516,17 @@ export default function AdminOrders() {
                     <Printer className="w-4 h-4" />
                   </Button>
                 </div>
+
+                {order.estimated_time && !['new', 'completed', 'cancelled'].includes(order.status) && (
+                  <div className="mb-3">
+                    <ReadyTimeCountdown
+                      estimatedTime={order.estimated_time}
+                      referenceTime={order.updated_at || order.created_at}
+                      status={order.status}
+                      compact
+                    />
+                  </div>
+                )}
 
                 <div className="space-y-1 mb-3">
                   {items.map((item: any, idx: number) => (
