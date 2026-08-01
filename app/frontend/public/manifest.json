@@ -1,27 +1,16 @@
 {
-  "name": "Vita Napoli Pizza",
-  "short_name": "Vita Napoli",
-  "description": "Customer ordering app for Vita Napoli Pizza",
   "id": "/",
+  "name": "Fai Fai Juice",
+  "short_name": "Fai Fai",
+  "description": "Fresh juices, desserts, mojitos and milkshakes.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "background_color": "#07130a",
+  "theme_color": "#15803d",
   "orientation": "portrait",
-  "background_color": "#000000",
-  "theme_color": "#dc2626",
-  "lang": "en",
   "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-customer-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-customer-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }
