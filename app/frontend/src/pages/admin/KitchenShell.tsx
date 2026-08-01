@@ -20,19 +20,36 @@ const tabs: Array<{
   label: string;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  { key: 'live', label: 'Live Orders', icon: ClipboardList },
-  { key: 'today', label: 'Today', icon: CalendarDays },
-  { key: 'yesterday', label: 'Yesterday', icon: History },
-  { key: 'menu', label: 'Menu', icon: UtensilsCrossed }
+  {
+    key: 'live',
+    label: 'Live Orders',
+    icon: ClipboardList,
+  },
+  {
+    key: 'today',
+    label: 'Today',
+    icon: CalendarDays,
+  },
+  {
+    key: 'yesterday',
+    label: 'Yesterday',
+    icon: History,
+  },
+  {
+    key: 'menu',
+    label: 'Menu',
+    icon: UtensilsCrossed,
+  },
 ];
 
 export default function KitchenShell() {
-  const [activeTab, setActiveTab] = useState<KitchenTab>('live');
+  const [activeTab, setActiveTab] =
+    useState<KitchenTab>('live');
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-2 py-2">
-        <div className="max-w-6xl mx-auto grid grid-cols-4 gap-1">
+      <div className="sticky top-0 z-50 border-b border-gray-800 bg-gray-950/95 px-2 py-2 backdrop-blur">
+        <div className="mx-auto grid max-w-6xl grid-cols-4 gap-1">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.key;
@@ -42,21 +59,26 @@ export default function KitchenShell() {
                 key={tab.key}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
-                className={`min-w-0 rounded-lg px-1 py-2.5 flex flex-col sm:flex-row items-center justify-center gap-1 text-[10px] sm:text-xs font-semibold transition-colors ${
+                className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1 py-2.5 text-[10px] font-semibold transition-colors sm:flex-row sm:text-xs ${
                   active
                     ? 'bg-yellow-500 text-black'
                     : 'bg-gray-900 text-gray-400 hover:bg-gray-800 hover:text-white'
                 }`}
               >
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate">{tab.label}</span>
+                <Icon className="h-4 w-4 flex-shrink-0" />
+
+                <span className="truncate">
+                  {tab.label}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {activeTab === 'live' && <KitchenOrders />}
+      {activeTab === 'live' && (
+        <KitchenOrders />
+      )}
 
       {activeTab === 'today' && (
         <HistoryPanel
@@ -76,7 +98,9 @@ export default function KitchenShell() {
         />
       )}
 
-      {activeTab === 'menu' && <KitchenMenuPanel />}
+      {activeTab === 'menu' && (
+        <KitchenMenuPanel />
+      )}
     </div>
   );
 }
