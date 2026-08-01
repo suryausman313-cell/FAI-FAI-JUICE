@@ -23,7 +23,7 @@ const tabs: Array<{
   { key: 'live', label: 'Live Orders', icon: ClipboardList },
   { key: 'today', label: 'Today', icon: CalendarDays },
   { key: 'yesterday', label: 'Yesterday', icon: History },
-  { key: 'menu', label: 'Menu', icon: UtensilsCrossed },
+  { key: 'menu', label: 'Menu', icon: UtensilsCrossed }
 ];
 
 export default function KitchenShell() {
