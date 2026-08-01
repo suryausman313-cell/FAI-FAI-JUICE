@@ -9,6 +9,7 @@ import { client, Order, CartItem } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
+import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
 
 const PICKUP_STEPS = [
   { key: 'new', label: 'Order Placed', icon: Store },
@@ -84,7 +85,7 @@ function getElapsedMinutes(createdAt: string | null | undefined): number {
   }
 }
 
-function OrderProgressTracker({ status, estimatedTime, isDelivery, deliveryStatus }: { status: string; estimatedTime: string; isDelivery: boolean; deliveryStatus: string | null }) {
+function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery, deliveryStatus }: { status: string; estimatedTime: string; referenceTime?: string; isDelivery: boolean; deliveryStatus: string | null }) {
   const steps = isDelivery ? DELIVERY_STEPS : PICKUP_STEPS;
   const currentStep = isDelivery
     ? getDeliveryStepIndex(status, deliveryStatus)
@@ -95,18 +96,12 @@ function OrderProgressTracker({ status, estimatedTime, isDelivery, deliveryStatu
 
   return (
     <div className="py-4">
-      {/* Estimated time banner */}
-      {estimatedTime && status !== 'new' && (
-        <div className="bg-green-600/10 border border-green-600/30 rounded-xl p-3 mb-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-green-600/20 flex items-center justify-center flex-shrink-0">
-            <Clock className="w-5 h-5 text-green-400" />
-          </div>
-          <div>
-            <p className="text-green-400 font-bold text-sm">Estimated ready time</p>
-            <p className="text-green-300 text-lg font-bold">~{estimatedTime}</p>
-          </div>
-        </div>
-      )}
+      {/* Live countdown. Zero does not mean ready until Kitchen marks it Ready. */}
+      <ReadyTimeCountdown
+        estimatedTime={estimatedTime}
+        referenceTime={referenceTime}
+        status={status}
+      />
 
       {/* Progress Steps */}
       <div className="relative">
@@ -218,7 +213,7 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
   // Only show for 'new' (pending) orders
   if (order.status !== 'new') return null;
 
-  const restaurantPhone = '+971542940112'; // Restaurant WhatsApp number
+  const restaurantPhone = '+971521091092'; // Restaurant WhatsApp number
   const whatsappMessage = encodeURIComponent(
     `Hello, maine Order #${order.id} place kiya hai. Abhi tak accept nahi hua. Kya aap check kar sakte hain?`
   );
@@ -529,6 +524,7 @@ export default function MyOrders() {
     );
   }
 
+
   function isDeliveryOrder(order: OrderWithDelivery): boolean {
     if (order.delivery_status !== null && order.delivery_status !== undefined) return true;
     return order.order_notes?.includes('Order Type: Delivery') || false;
@@ -561,7 +557,7 @@ export default function MyOrders() {
 
         {orders.length === 0 ? (
           <div className="text-center py-16">
-            <div className="text-5xl mb-4">🍕</div>
+            <div className="text-5xl mb-4">🥤</div>
             <p className="text-gray-400 text-lg font-medium">No orders yet</p>
             <p className="text-gray-600 text-sm mt-2">Your orders will appear here after you place them</p>
           </div>
@@ -635,6 +631,7 @@ export default function MyOrders() {
                         <OrderProgressTracker
                           status={order.status}
                           estimatedTime={order.estimated_time}
+                          referenceTime={order.updated_at || order.created_at}
                           isDelivery={isDelivery}
                           deliveryStatus={order.delivery_status || null}
                         />
