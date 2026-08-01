@@ -29,6 +29,12 @@ class Menu_itemsData(BaseModel):
     image_url: str = None
     is_active: bool = None
     has_extras: bool = None
+    is_popular: bool = None
+    discount_enabled: bool = None
+    discount_type: str = None
+    discount_value: float = None
+    discount_start_at: str = None
+    discount_end_at: str = None
     sort_order: int = None
 
 
@@ -43,6 +49,12 @@ class Menu_itemsUpdateData(BaseModel):
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     has_extras: Optional[bool] = None
+    is_popular: Optional[bool] = None
+    discount_enabled: Optional[bool] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[float] = None
+    discount_start_at: Optional[str] = None
+    discount_end_at: Optional[str] = None
     sort_order: Optional[int] = None
 
 
@@ -58,6 +70,12 @@ class Menu_itemsResponse(BaseModel):
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     has_extras: Optional[bool] = None
+    is_popular: Optional[bool] = None
+    discount_enabled: Optional[bool] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[float] = None
+    discount_start_at: Optional[str] = None
+    discount_end_at: Optional[str] = None
     sort_order: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
