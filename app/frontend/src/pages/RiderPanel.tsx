@@ -292,7 +292,7 @@ export default function RiderPanel() {
       }
       if (registration.active && rider) {
         const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
+        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBase: 'https://vita-napoli-backend-usman.onrender.com' } });
       }
     } catch (error) { console.error('SW registration failed:', error); }
   }
@@ -323,7 +323,7 @@ export default function RiderPanel() {
         localStorage.setItem('rider_notifications', 'on');
         if (swRegistrationRef.current?.active && rider) {
           const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
+          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBase: 'https://vita-napoli-backend-usman.onrender.com' } });
         }
         toast.success('Notifications on');
       } else { requestNotificationPermission(); }
@@ -508,6 +508,8 @@ export default function RiderPanel() {
   function getStatusColor(status: string) {
     switch (status) {
       case 'assigned': return 'bg-blue-600/20 text-blue-400 border-blue-600/30';
+      case 'accepted': return 'bg-cyan-600/20 text-cyan-400 border-cyan-600/30';
+      case 'rejected': return 'bg-red-600/20 text-red-400 border-red-600/30';
       case 'picked_up': return 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30';
       case 'on_the_way': return 'bg-orange-600/20 text-orange-400 border-orange-600/30';
       case 'delivered': return 'bg-green-600/20 text-green-400 border-green-600/30';
@@ -517,7 +519,7 @@ export default function RiderPanel() {
 
   function getNextStatus(current: string): { label: string; value: string } | null {
     switch (current) {
-      case 'assigned': return { label: '🏪 Picked Up', value: 'picked_up' };
+      case 'accepted': return { label: '🏪 Picked Up', value: 'picked_up' };
       case 'picked_up': return { label: '🚗 On the Way', value: 'on_the_way' };
       case 'on_the_way': return { label: '✅ Delivered', value: 'delivered' };
       default: return null;
@@ -533,8 +535,8 @@ export default function RiderPanel() {
             <div className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Bike className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-white text-2xl font-bold">Rider Panel</h1>
-            <p className="text-gray-400 text-sm mt-1">Vita Napoli Delivery</p>
+            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-xs text-green-400">FINAL V4</span></h1>
+            <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -554,7 +556,7 @@ export default function RiderPanel() {
     );
   }
 
-  const activeDeliveries = deliveries.filter(d => d.status !== 'delivered');
+  const activeDeliveries = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status));
   const completedDeliveries = deliveries.filter(d => d.status === 'delivered');
 
   return (
@@ -839,6 +841,16 @@ export default function RiderPanel() {
                               </div>
                             )}
                           </div>
+                          {delivery.status === 'assigned' && (
+                            <div className="grid grid-cols-2 gap-2 mb-2">
+                              <Button onClick={() => updateStatus(delivery.id, 'accepted')} className="bg-green-600 hover:bg-green-700 text-white" size="sm">
+                                ✅ Accept
+                              </Button>
+                              <Button onClick={() => updateStatus(delivery.id, 'rejected')} className="bg-red-600 hover:bg-red-700 text-white" size="sm">
+                                ❌ Reject
+                              </Button>
+                            </div>
+                          )}
                           <div className="flex gap-2">
                             {delivery.customer_lat && delivery.customer_lng && (
                               <Button onClick={() => openInMaps(delivery.customer_lat!, delivery.customer_lng!)} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer" size="sm">
