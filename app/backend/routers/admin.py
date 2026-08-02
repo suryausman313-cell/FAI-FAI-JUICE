@@ -19,14 +19,15 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 # Kitchen panel uses its own PIN header instead of an admin JWT.
 # On Render, you can set KITCHEN_PIN as an environment variable.
-KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
+KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122").strip()
 
 
 def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
 ) -> bool:
     """Allow only requests that include the correct kitchen PIN header."""
-    if not x_kitchen_pin or x_kitchen_pin != KITCHEN_PIN:
+    supplied_pin = (x_kitchen_pin or "").strip()
+    if not supplied_pin or supplied_pin != KITCHEN_PIN:
         raise HTTPException(status_code=401, detail="Invalid kitchen PIN")
     return True
 
