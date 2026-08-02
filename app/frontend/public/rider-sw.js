@@ -1,8 +1,9 @@
 // Rider Service Worker for background push notifications
-const CACHE_NAME = 'rider-notifications-v1';
+const CACHE_NAME = 'rider-notifications-final-v4';
 let riderId = null;
 let pollingInterval = null;
 let lastKnownDeliveryIds = [];
+let apiBase = '';
 
 // Listen for messages from the main app
 self.addEventListener('message', (event) => {
@@ -10,6 +11,7 @@ self.addEventListener('message', (event) => {
   
   if (type === 'RIDER_LOGIN') {
     riderId = data.riderId;
+    apiBase = String(data.apiBase || '').replace(/\/$/, '');
     lastKnownDeliveryIds = data.currentDeliveryIds || [];
     startPolling();
   }
@@ -75,8 +77,7 @@ async function checkForNewDeliveries() {
   if (!riderId) return;
   
   try {
-    // We need to get the base URL from the service worker scope
-    const baseUrl = self.location.origin;
+    const baseUrl = apiBase || self.location.origin;
     const response = await fetch(`${baseUrl}/api/v1/rider/deliveries/${riderId}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
