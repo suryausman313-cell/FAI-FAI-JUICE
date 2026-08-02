@@ -147,8 +147,8 @@ function numeric(value: unknown): number {
 }
 
 function isCountedOrder(order: ReportOrder): boolean {
-  const status = String(order.status || '').toLowerCase();
-  return !['cancelled', 'canceled', 'deleted', 'refunded'].includes(status);
+  const status = String(order.status || '').toLowerCase().trim();
+  return status === 'completed';
 }
 
 function isCashPayment(method: string | undefined): boolean {

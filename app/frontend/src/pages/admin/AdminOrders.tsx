@@ -33,13 +33,13 @@ function getPanelPin(): string {
     // Use current Kitchen default below.
   }
 
-  return '1122';
+  return '';
 }
 
-function adminHeaders() {
+function adminHeaders(pin = getPanelPin()) {
   return {
     'Content-Type': 'application/json',
-    'X-Kitchen-Pin': getPanelPin(),
+    'X-Kitchen-Pin': pin,
   };
 }
 
@@ -62,12 +62,36 @@ async function adminRequest<T>(
   data?: unknown,
   params?: Record<string, unknown>,
 ): Promise<T> {
+  let pin = getPanelPin();
+  if (!pin) pin = askAndSavePanelPin() || '';
+  if (!pin) {
+    throw Object.assign(new Error('Kitchen PIN required'), {
+      response: { status: 401 },
+    });
+  }
+
   const response = await axios.request<T>({
     url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
     method,
     data,
     params,
-    headers: adminHeaders(),
+    headers: adminHeaders(pin),
+    timeout: 20000,
+  });
+  return response.data;
+}
+
+
+async function riderAdminRequest<T>(
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  data?: unknown,
+): Promise<T> {
+  const response = await axios.request<T>({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+    method,
+    data,
+    headers: { 'Content-Type': 'application/json' },
     timeout: 20000,
   });
   return response.data;
@@ -213,20 +237,21 @@ export default function AdminOrders() {
 
   async function loadRiders() {
     try {
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/rider/admin/locations',
-        method: 'GET',
-      });
-      setRiders(res?.data?.items || []);
+      const payload = await riderAdminRequest<{ items?: RiderInfo[] }>(
+        '/api/v1/rider/admin/locations',
+      );
+      setRiders((payload.items || []).filter((rider) => rider.is_active !== false));
     } catch {
-      // Fallback to basic list
       try {
-        const res = await client.apiCall.invoke({
-          url: '/api/v1/rider/admin/list',
-          method: 'GET',
-        });
-        setRiders(res?.data?.items || []);
-      } catch { /* ignore */ }
+        const payload = await riderAdminRequest<{ items?: RiderInfo[] }>(
+          '/api/v1/rider/admin/list',
+        );
+        setRiders((payload.items || []).filter((rider) => rider.is_active !== false));
+      } catch (error) {
+        console.error('Rider list load failed:', error);
+        toast.error('Rider list load nahi hui');
+        setRiders([]);
+      }
     }
   }
 
@@ -249,10 +274,10 @@ export default function AdminOrders() {
     if (addrMatch) address = addrMatch[1].trim();
 
     try {
-      await client.apiCall.invoke({
-        url: '/api/v1/rider/admin/assign',
-        method: 'POST',
-        data: {
+      await riderAdminRequest(
+        '/api/v1/rider/admin/assign',
+        'POST',
+        {
           order_id: order.id,
           rider_id: parseInt(selectedRider),
           customer_lat: lat,
@@ -261,7 +286,7 @@ export default function AdminOrders() {
           customer_name: order.customer_name,
           customer_phone: order.customer_phone,
         },
-      });
+      );
       toast.success(`Order #${order.id} assigned to rider!`);
       setAssigningOrder(null);
       setSelectedRider('');
