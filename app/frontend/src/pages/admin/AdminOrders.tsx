@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -39,15 +38,54 @@ async function adminRequest<T>(
   data?: unknown,
   params?: Record<string, unknown>,
 ): Promise<T> {
-  const response = await axios.request<T>({
-    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+  const apiBase = getAPIBaseURL().replace(/\/$/, '');
+  const url = new URL(`${apiBase}${path}`);
+
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    });
+  }
+
+  const response = await fetch(url.toString(), {
     method,
-    data,
-    params,
     headers: adminHeaders(),
-    timeout: 20000,
+    body:
+      method === 'GET' || data === undefined
+        ? undefined
+        : JSON.stringify(data),
+    cache: 'no-store',
   });
-  return response.data;
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const error = new Error(
+      payload?.detail ||
+        payload?.message ||
+        `Request failed with status ${response.status}`,
+    ) as Error & {
+      status?: number;
+      data?: unknown;
+      response?: {
+        status: number;
+        data: unknown;
+      };
+    };
+
+    error.status = response.status;
+    error.data = payload;
+    error.response = {
+      status: response.status,
+      data: payload,
+    };
+
+    throw error;
+  }
+
+  return payload as T;
 }
 
 function isDeliveryOrder(order: AdminOrder): boolean {
@@ -88,6 +126,7 @@ const TIME_OPTIONS = [
 ];
 
 export default function AdminOrders() {
+  console.info('AdminOrders build: direct-fetch-1122-v1');
   const navigate = useNavigate();
   const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [loading, setLoading] = useState(true);
