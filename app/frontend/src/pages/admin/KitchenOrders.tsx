@@ -1068,7 +1068,7 @@ export default function KitchenOrders() {
               <div className="flex items-center gap-2">
                 <ChefHat className="w-6 h-6 text-orange-500" />
                 <div>
-                  <p className="text-white font-bold">Fai Fai Kitchen</p>
+                  <p className="text-white font-bold">Fai Fai Kitchen <span className="text-[10px] text-blue-400">FLOW V3</span></p>
                   <p className="text-gray-500 text-xs">Orders & history</p>
                 </div>
               </div>
