@@ -1,4 +1,4 @@
-import type { MenuItem, Offer, SizeOption } from './api';
+import type { MenuItem, Offer } from './api';
 
 export interface ItemPriceBreakdown {
   originalPrice: number;
@@ -9,41 +9,35 @@ export interface ItemPriceBreakdown {
 }
 
 function money(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100) / 100;
 }
 
-function roundMoney(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
+function parseDate(value: unknown): Date | null {
+  const text = String(value || '').trim();
+  if (!text) return null;
 
-function parseBoundary(value: string | null | undefined, endOfDay: boolean): Date | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-
-  // Admin may save either YYYY-MM-DD or datetime-local format.
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? `${raw}T${endOfDay ? '23:59:59' : '00:00:00'}`
-    : raw;
-
-  const parsed = new Date(normalized);
+  const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function isItemDiscountActive(item: MenuItem, now = new Date()): boolean {
+export function isItemDiscountCurrentlyActive(
+  item: Pick<
+    MenuItem,
+    | 'discount_enabled'
+    | 'discount_start_at'
+    | 'discount_end_at'
+  >,
+  now = new Date(),
+): boolean {
   if (item.discount_enabled !== true) return false;
 
-  const value = money(item.discount_value);
-  if (value <= 0) return false;
+  const start = parseDate(item.discount_start_at);
+  const end = parseDate(item.discount_end_at);
 
-  const type = item.discount_type || 'percentage';
-  if (type !== 'percentage' && type !== 'fixed') return false;
-
-  const startsAt = parseBoundary(item.discount_start_at, false);
-  const endsAt = parseBoundary(item.discount_end_at, true);
-
-  if (startsAt && now < startsAt) return false;
-  if (endsAt && now > endsAt) return false;
+  if (start && now.getTime() < start.getTime()) return false;
+  if (end && now.getTime() > end.getTime()) return false;
 
   return true;
 }
@@ -53,9 +47,18 @@ export function getItemPriceBreakdown(
   basePrice: number,
   now = new Date(),
 ): ItemPriceBreakdown {
-  const originalPrice = roundMoney(money(basePrice));
+  const originalPrice = Math.max(money(basePrice), 0);
+  const type =
+    String(item.discount_type || 'percentage').toLowerCase() === 'fixed'
+      ? 'fixed'
+      : 'percentage';
+  const value = Math.max(money(item.discount_value), 0);
 
-  if (!isItemDiscountActive(item, now)) {
+  if (
+    originalPrice <= 0 ||
+    value <= 0 ||
+    !isItemDiscountCurrentlyActive(item, now)
+  ) {
     return {
       originalPrice,
       finalPrice: originalPrice,
@@ -65,53 +68,45 @@ export function getItemPriceBreakdown(
     };
   }
 
-  const value = money(item.discount_value);
-  const type = item.discount_type || 'percentage';
-  let saving = 0;
-  let discountLabel = '';
+  const saving =
+    type === 'fixed'
+      ? Math.min(value, originalPrice)
+      : Math.min((originalPrice * Math.min(value, 100)) / 100, originalPrice);
 
-  if (type === 'fixed') {
-    saving = Math.min(originalPrice, value);
-    discountLabel = `AED ${roundMoney(saving).toFixed(2)} OFF`;
-  } else {
-    const percentage = Math.min(100, value);
-    saving = originalPrice * (percentage / 100);
-    discountLabel = `${roundMoney(percentage).toFixed(percentage % 1 === 0 ? 0 : 1)}% OFF`;
-  }
-
-  saving = roundMoney(Math.min(originalPrice, Math.max(0, saving)));
-  const finalPrice = roundMoney(Math.max(0, originalPrice - saving));
+  const roundedSaving = money(saving);
+  const finalPrice = money(Math.max(originalPrice - roundedSaving, 0));
 
   return {
     originalPrice,
     finalPrice,
-    saving,
-    discountActive: saving > 0,
-    discountLabel: saving > 0 ? discountLabel : '',
+    saving: roundedSaving,
+    discountActive: roundedSaving > 0,
+    discountLabel:
+      type === 'fixed'
+        ? `AED ${roundedSaving.toFixed(2)} OFF`
+        : `${Math.min(value, 100).toFixed(value % 1 === 0 ? 0 : 2)}% OFF`,
   };
 }
 
-export function getDiscountedSizes(
-  item: MenuItem,
-  sizes: SizeOption[],
+export function isPromoOfferCurrentlyActive(
+  offer: Offer,
   now = new Date(),
-): Array<SizeOption & ItemPriceBreakdown> {
-  return sizes.map(size => ({
-    ...size,
-    ...getItemPriceBreakdown(item, size.price, now),
-  }));
-}
-
-export function isPromoOfferCurrentlyActive(offer: Offer, now = new Date()): boolean {
+): boolean {
   if (offer.is_active !== true) return false;
-  if (!String(offer.promo_code || '').trim()) return false;
-  if (money(offer.discount_percent) <= 0) return false;
 
-  const startsAt = parseBoundary(offer.start_date, false);
-  const endsAt = parseBoundary(offer.end_date, true);
+  const start = parseDate(offer.start_date);
+  const end = parseDate(offer.end_date);
 
-  if (startsAt && now < startsAt) return false;
-  if (endsAt && now > endsAt) return false;
+  if (start && now.getTime() < start.getTime()) return false;
+
+  if (end) {
+    // Date-only offer end dates remain active until the end of that day.
+    const raw = String(offer.end_date || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      end.setHours(23, 59, 59, 999);
+    }
+    if (now.getTime() > end.getTime()) return false;
+  }
 
   return true;
 }
