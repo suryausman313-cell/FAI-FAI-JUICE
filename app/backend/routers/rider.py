@@ -161,33 +161,78 @@ async def update_delivery_status(
     data: DeliveryStatusUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update delivery status"""
+    """
+    Update rider delivery progress.
+
+    Order flow:
+    - assigned: order remains Ready in Kitchen
+    - picked_up / on_the_way: order becomes out_for_delivery and leaves Live Kitchen
+    - delivered: order becomes completed
+    """
+    new_status = str(data.status or "").lower().strip()
     valid_statuses = ["assigned", "picked_up", "on_the_way", "delivered"]
-    if data.status not in valid_statuses:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {valid_statuses}",
+        )
 
     try:
         result = await db.execute(
-            select(Delivery_assignments).where(Delivery_assignments.id == assignment_id)
+            select(Delivery_assignments).where(
+                Delivery_assignments.id == assignment_id
+            )
         )
         assignment = result.scalar_one_or_none()
 
         if not assignment:
             raise HTTPException(status_code=404, detail="Assignment not found")
 
-        assignment.status = data.status
+        current_assignment_status = str(
+            assignment.status or "assigned"
+        ).lower().strip()
 
-        # Also update the order status
-        if data.status == "delivered":
-            order_result = await db.execute(
-                select(Orders).where(Orders.id == assignment.order_id)
+        if current_assignment_status == "delivered" and new_status != "delivered":
+            raise HTTPException(
+                status_code=400,
+                detail="Delivered order ka status dobara change nahi ho sakta.",
             )
-            order = order_result.scalar_one_or_none()
-            if order:
-                order.status = "completed"
+
+        order_result = await db.execute(
+            select(Orders).where(Orders.id == assignment.order_id)
+        )
+        order = order_result.scalar_one_or_none()
+
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        current_order_status = str(order.status or "new").lower().strip()
+        if current_order_status == "cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="Cancelled order deliver nahi ho sakta.",
+            )
+
+        assignment.status = new_status
+
+        if new_status in ("picked_up", "on_the_way"):
+            # Kitchen ka kaam khatam, lekin sale abhi final complete nahi hai.
+            order.status = "out_for_delivery"
+        elif new_status == "delivered":
+            # Final completion is controlled only by the rider.
+            order.status = "completed"
 
         await db.commit()
-        return {"success": True, "status": data.status}
+        await db.refresh(assignment)
+        await db.refresh(order)
+
+        return {
+            "success": True,
+            "status": assignment.status,
+            "order_status": order.status,
+            "order_id": order.id,
+        }
     except HTTPException:
         raise
     except Exception as e:

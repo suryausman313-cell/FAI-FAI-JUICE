@@ -31,6 +31,23 @@ def verify_kitchen_pin(
     return True
 
 
+def is_delivery_order(order: Orders) -> bool:
+    """Detect delivery orders safely, including older records."""
+    explicit_type = str(getattr(order, "order_type", "") or "").lower().strip()
+    if explicit_type == "delivery":
+        return True
+
+    notes = str(getattr(order, "order_notes", "") or "").lower()
+    payment = str(getattr(order, "payment_method", "") or "").lower()
+
+    return (
+        "order type: delivery" in notes
+        or "delivery address:" in notes
+        or "cash on delivery" in payment
+        or "card on delivery" in payment
+    )
+
+
 def serialize_order(order: Orders) -> dict:
     """Return the order shape expected by the Admin and Kitchen frontends."""
     status = (order.status or "new").lower().strip()
@@ -45,6 +62,10 @@ def serialize_order(order: Orders) -> dict:
         "estimated_time": order.pickup_time or "",
         "order_notes": order.order_notes or "",
         "payment_method": order.payment_method,
+        "order_type": (
+            str(getattr(order, "order_type", "") or "").lower().strip()
+            or ("delivery" if is_delivery_order(order) else "pickup")
+        ),
         "status": status,
         "total_amount": order.total_amount,
         "service_fee": order.service_fee or 0,
@@ -126,6 +147,7 @@ async def update_kitchen_order_status(
             "accepted": ["preparing", "ready", "cancelled"],
             "preparing": ["ready", "cancelled"],
             "ready": ["completed", "cancelled"],
+            "out_for_delivery": ["cancelled"],
             "completed": [],
             "cancelled": [],
         }
@@ -137,6 +159,7 @@ async def update_kitchen_order_status(
             "accepted",
             "preparing",
             "ready",
+            "out_for_delivery",
             "completed",
             "cancelled",
         ]
@@ -147,6 +170,15 @@ async def update_kitchen_order_status(
                 detail=(
                     f"Invalid status '{new_status}'. "
                     f"Valid statuses: {', '.join(valid_statuses)}"
+                ),
+            )
+
+        if new_status == "completed" and is_delivery_order(order):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Delivery order Kitchen se complete nahi ho sakta. "
+                    "Rider customer ko deliver karke Delivered karega."
                 ),
             )
 
@@ -266,6 +298,7 @@ async def update_order_status(
             "accepted": ["preparing", "ready", "cancelled"],
             "preparing": ["ready", "cancelled"],
             "ready": ["completed", "cancelled"],
+            "out_for_delivery": ["cancelled"],
             "completed": [],  # Terminal state - no further transitions
             "cancelled": [],  # Terminal state - no further transitions
         }
@@ -274,11 +307,29 @@ async def update_order_status(
         new_status = data.status.lower().strip()
 
         # Validate the new status is a recognized value
-        all_valid_statuses = ["new", "accepted", "preparing", "ready", "completed", "cancelled"]
+        all_valid_statuses = [
+            "new",
+            "accepted",
+            "preparing",
+            "ready",
+            "out_for_delivery",
+            "completed",
+            "cancelled",
+        ]
         if new_status not in all_valid_statuses:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid status '{new_status}'. Valid statuses: {', '.join(all_valid_statuses)}"
+            )
+
+        # Delivery is completed only by the Rider.
+        if new_status == "completed" and is_delivery_order(order):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Delivery order Admin/Kitchen se complete nahi ho sakta. "
+                    "Rider ko Delivered press karna hoga."
+                ),
             )
 
         # Check if transition is allowed
