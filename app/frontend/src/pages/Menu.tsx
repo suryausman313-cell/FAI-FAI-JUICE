@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Category, MenuItem, Extra, getItemSizes } from '@/lib/api';
+import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes } from '@/lib/api';
 import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
@@ -55,6 +55,7 @@ export default function Menu() {
   const [selectedExtras, setSelectedExtras] = useState<Extra[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [settings, setSettings] = useState<RestaurantSettings | null>(null);
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -72,16 +73,19 @@ export default function Menu() {
 
   async function loadData() {
     try {
-      const [catRes, itemRes, extrasRes] = await Promise.all([
+      const [catRes, itemRes, extrasRes, settingsRes] = await Promise.all([
         client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 50 }),
         client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
         client.entities.extras.query({ query: { is_active: true }, limit: 50 }),
+        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
       ]);
       
       const cats = catRes?.data?.items || [];
       const items = itemRes?.data?.items || [];
       const ext = extrasRes?.data?.items || [];
+      const settingsData = settingsRes?.data?.items?.[0] || null;
 
+      setSettings(settingsData);
       setCategories(cats);
       setMenuItems(items);
       setExtras(ext);
@@ -134,6 +138,14 @@ export default function Menu() {
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen">
+        {settings?.offer_text && (
+          <div className="max-w-4xl mx-auto px-4 pt-4">
+            <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-center text-sm font-medium text-orange-200">
+              {settings.offer_text}
+            </div>
+          </div>
+        )}
+
         {/* Category Tabs */}
         <div className="sticky top-[60px] z-40 bg-black border-b border-gray-800">
           <div className="overflow-x-auto scrollbar-hide">

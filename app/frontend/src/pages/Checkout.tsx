@@ -55,6 +55,7 @@ export default function Checkout() {
   const [smallOrderFeeEnabled, setSmallOrderFeeEnabled] = useState(false);
   const [smallOrderFeeAmount, setSmallOrderFeeAmount] = useState(0);
   const [smallOrderFeeThreshold, setSmallOrderFeeThreshold] = useState(20);
+  const [taxPercent, setTaxPercent] = useState(0);
 
   // Payment method settings from admin
   const [cashEnabledPickup, setCashEnabledPickup] = useState(true);
@@ -376,6 +377,7 @@ export default function Checkout() {
         setSmallOrderFeeEnabled(s.small_order_fee_enabled === true);
         setSmallOrderFeeAmount(parseFloat(s.small_order_fee_amount) || 0);
         setSmallOrderFeeThreshold(parseFloat(s.small_order_fee_threshold) || 20);
+        setTaxPercent(Math.max(0, Math.min(100, parseFloat(s.tax_percent) || 0)));
         // Payment method settings
         setCashEnabledPickup(s.cash_enabled_pickup !== false);
         setCardEnabledPickup(s.card_enabled_pickup !== false);
@@ -451,15 +453,15 @@ export default function Checkout() {
       const matchedOffer = offers.find(
         (offer: Offer) => offer.promo_code.trim().toLowerCase() === promoCode.trim().toLowerCase()
       );
-      if (matchedOffer && matchedOffer.discount_percent > 0) {
+      if (matchedOffer && ((matchedOffer.discount_type || 'percentage') === 'fixed' ? Number(matchedOffer.fixed_discount_amount || 0) > 0 : Number(matchedOffer.discount_percent || 0) > 0)) {
         // Get user's previous orders for usage validation
         let previousOrders: any[] = [];
         try {
-          const ordersRes = await client.apiCall.invoke({
-            url: '/api/v1/orders/my-orders',
-            method: 'GET',
-          });
-          previousOrders = ordersRes?.data?.items || ordersRes?.data || [];
+          const ordersRes = await axios.get(
+            `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/orders/my-orders`,
+            { params: { session_id: getGuestSessionId() }, timeout: 15000 },
+          );
+          previousOrders = ordersRes?.data?.items || [];
         } catch {
           // If we can't check orders (not logged in), allow it - will be validated on backend
         }
@@ -485,8 +487,9 @@ export default function Checkout() {
           // Count how many times this promo was used by this customer
           const promoCodeUpper = matchedOffer.promo_code.toUpperCase();
           const usageCount = previousOrders.filter((o: any) => {
-            const notes = (o.order_notes || '').toUpperCase();
-            return notes.includes(`PROMO: ${promoCodeUpper}`) && o.status !== 'cancelled' && o.status !== 'expired';
+            const savedPromo = String(o.promo_code || '').toUpperCase();
+            const notes = String(o.order_notes || '').toUpperCase();
+            return (savedPromo === promoCodeUpper || notes.includes(`PROMO: ${promoCodeUpper}`)) && o.status !== 'cancelled' && o.status !== 'expired';
           }).length;
 
           if (usageCount >= usageLimit) {
@@ -499,10 +502,22 @@ export default function Checkout() {
           }
         }
 
+        const minimumOrder = Number(matchedOffer.minimum_order_amount || 0);
+        if (subtotal < minimumOrder) {
+          toast.error(`Minimum order for this promo is AED ${minimumOrder.toFixed(2)}`);
+          setPromoApplied(false);
+          setPromoOffer(null);
+          return;
+        }
+
+        const isFixed = (matchedOffer.discount_type || 'percentage') === 'fixed';
+        const value = isFixed
+          ? Number(matchedOffer.fixed_discount_amount || 0)
+          : Number(matchedOffer.discount_percent || 0);
         setPromoApplied(true);
-        setPromoDiscount(matchedOffer.discount_percent);
+        setPromoDiscount(value);
         setPromoOffer(matchedOffer);
-        toast.success(`🎉 Promo code applied! ${matchedOffer.discount_percent}% off`);
+        toast.success(isFixed ? `🎉 AED ${value.toFixed(2)} discount applied!` : `🎉 Promo code applied! ${value}% off`);
       } else {
         toast.error('Invalid or expired promo code');
         setPromoApplied(false);
@@ -527,7 +542,15 @@ export default function Checkout() {
   const originalSubtotal = getCartOriginalTotal(cart);
   const itemDiscountTotal = getCartItemDiscountTotal(cart);
   const deliveryFee = orderType === 'delivery' ? (locationShared ? calculatedDeliveryCharge : deliveryCharge) : 0;
-  const discountAmount = promoApplied ? (subtotal * promoDiscount) / 100 : 0;
+  const rawPromoDiscount = !promoApplied || !promoOffer
+    ? 0
+    : (promoOffer.discount_type || 'percentage') === 'fixed'
+      ? Math.min(subtotal, Number(promoOffer.fixed_discount_amount || promoDiscount || 0))
+      : (subtotal * Number(promoOffer.discount_percent || promoDiscount || 0)) / 100;
+  const maximumPromoDiscount = Number(promoOffer?.maximum_discount_amount || 0);
+  const discountAmount = maximumPromoDiscount > 0
+    ? Math.min(rawPromoDiscount, maximumPromoDiscount)
+    : rawPromoDiscount;
   // Service fee only applies based on admin setting (pickup/delivery/both)
   const shouldApplyServiceFee = serviceFeeEnabled && (
     serviceFeeAppliesTo === 'both' ||
@@ -539,7 +562,9 @@ export default function Checkout() {
     ? (serviceFeeType === 'percentage' ? (subtotal * serviceFeeAmount) / 100 : serviceFeeAmount)
     : 0;
   const smallOrderFee = (smallOrderFeeEnabled && subtotal < smallOrderFeeThreshold) ? smallOrderFeeAmount : 0;
-  const total = subtotal + deliveryFee + serviceFee + smallOrderFee + tipAmount - discountAmount;
+  const taxableAmount = Math.max(0, subtotal - discountAmount + deliveryFee + serviceFee + smallOrderFee);
+  const taxAmount = taxPercent > 0 ? (taxableAmount * taxPercent) / 100 : 0;
+  const total = subtotal + deliveryFee + serviceFee + smallOrderFee + taxAmount + tipAmount - discountAmount;
 
   // Determine available payment methods based on order type
   const availablePaymentMethods: { value: string; label: string; description: string }[] = [];
@@ -703,6 +728,7 @@ export default function Checkout() {
     submittingRef.current = true;
     try {
       const itemsData = cart.map(item => ({
+        menu_item_id: item.menuItem.id,
         name: item.menuItem.name,
         size: item.size,
         quantity: item.quantity,
@@ -727,7 +753,10 @@ export default function Checkout() {
         }
       }
       if (promoApplied && promoOffer) {
-        noteParts.push(`Promo: ${promoOffer.promo_code} (-${promoDiscount}%)`);
+        const promoLabel = (promoOffer.discount_type || 'percentage') === 'fixed'
+          ? `AED ${Number(promoOffer.fixed_discount_amount || promoDiscount).toFixed(2)}`
+          : `${Number(promoOffer.discount_percent || promoDiscount)}%`;
+        noteParts.push(`Promo: ${promoOffer.promo_code} (-${promoLabel})`);
       }
       noteParts.push(`Order Type: ${orderType === 'delivery' ? 'Delivery' : 'Pickup'}`);
       const fullNotes = noteParts.filter(Boolean).join(' | ');
@@ -747,16 +776,23 @@ export default function Checkout() {
               : orderType === 'delivery'
                 ? 'Card on Delivery'
                 : 'Card on Pickup',
-          total_amount: total,
-          service_fee: serviceFee,
-          small_order_fee: smallOrderFee,
-          delivery_charge: orderType === 'delivery' ? deliveryFee : 0,
-          tip_amount: tipAmount,
+          total_amount: Number(total.toFixed(2)),
+          subtotal_amount: Number(subtotal.toFixed(2)),
+          promo_code: promoApplied && promoOffer ? promoOffer.promo_code : '',
+          discount_type: promoApplied && promoOffer ? (promoOffer.discount_type || 'percentage') : '',
+          discount_percent: promoApplied && promoOffer && (promoOffer.discount_type || 'percentage') !== 'fixed' ? Number(promoOffer.discount_percent || 0) : 0,
+          discount_amount: Number(discountAmount.toFixed(2)),
+          service_fee: Number(serviceFee.toFixed(2)),
+          small_order_fee: Number(smallOrderFee.toFixed(2)),
+          delivery_charge: orderType === 'delivery' ? Number(deliveryFee.toFixed(2)) : 0,
+          tax_amount: Number(taxAmount.toFixed(2)),
+          tip_amount: Number(tipAmount.toFixed(2)),
           tip_type: tipAmount > 0 ? (orderType === 'delivery' ? 'rider' : 'shop') : '',
           items_json: JSON.stringify(itemsData),
           order_type: orderType,
           customer_lat: orderType === 'delivery' ? customerLat : null,
           customer_lng: orderType === 'delivery' ? customerLng : null,
+          customer_address: orderType === 'delivery' ? deliveryAddress.trim() : '',
         },
         { timeout: 30000 },
       );
@@ -1082,7 +1118,12 @@ export default function Checkout() {
                   <Tag className="w-5 h-5 text-green-400" />
                   <div className="flex-1">
                     <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} applied!</p>
-                    <p className="text-green-400/70 text-xs">{promoDiscount}% discount — saving AED {discountAmount.toFixed(2)}</p>
+                    <p className="text-green-400/70 text-xs">
+                      {(promoOffer?.discount_type || 'percentage') === 'fixed'
+                        ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)} discount`
+                        : `${Number(promoOffer?.discount_percent || promoDiscount)}% discount`}
+                      {' — '}saving AED {discountAmount.toFixed(2)}
+                    </p>
                   </div>
                   <button type="button" onClick={removePromo} className="text-gray-400 text-xs hover:text-red-400 cursor-pointer">
                     Remove
@@ -1258,6 +1299,12 @@ export default function Checkout() {
                   <span className="text-yellow-400">AED {smallOrderFee.toFixed(2)}</span>
                 </div>
               )}
+              {taxAmount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">VAT / Tax ({taxPercent.toFixed(2)}%)</span>
+                  <span className="text-gray-300">AED {taxAmount.toFixed(2)}</span>
+                </div>
+              )}
               {tipAmount > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-green-400">Tip ({orderType === 'delivery' ? 'Rider' : 'Shop'})</span>
@@ -1266,7 +1313,7 @@ export default function Checkout() {
               )}
               {promoApplied && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">Discount ({promoDiscount}%)</span>
+                  <span className="text-green-400">Discount ({(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})</span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
               )}

@@ -5,12 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
-import { getItemPriceBreakdown } from '@/lib/discounts';
+import { getItemPriceBreakdown, isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
 
-const CACHE_KEY = 'vita_home_cache';
+const CACHE_KEY = 'fai_home_cache_v6';
 const CACHE_TTL = 120000; // 2 minutes
 
 interface CachedData {
@@ -54,16 +54,20 @@ export default function Index() {
 
   const loadData = useCallback(async () => {
     try {
-      const [settingsRes, itemsRes, catRes, offersRes] = await Promise.all([
+      const [settingsRes, itemsRes, catRes, offersRes, popularRes] = await Promise.all([
         client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
-        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 8 }),
+        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
         client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
-        client.entities.offers.query({ query: { is_active: true }, limit: 10 }),
+        client.entities.offers.query({ query: { is_active: true }, limit: 100 }),
+        client.apiCall.invoke({ url: '/api/v1/public/popular-items', method: 'GET' }).catch(() => null),
       ]);
       const settingsData = settingsRes?.data?.items?.[0] || null;
-      const items = itemsRes?.data?.items || [];
+      const allItems = itemsRes?.data?.items || [];
+      const popularItems = popularRes?.data?.items || [];
+      const maxPopular = Math.max(2, Math.min(12, Number((settingsData as any)?.popular_max_items || 6)));
+      const items = popularItems.length > 0 ? popularItems.slice(0, maxPopular) : allItems.slice(0, maxPopular);
       const cats = catRes?.data?.items || [];
-      const offersList = offersRes?.data?.items || [];
+      const offersList = (offersRes?.data?.items || []).filter((offer: Offer) => isPromoOfferCurrentlyActive(offer));
 
       setSettings(settingsData);
       setFeaturedItems(items);
@@ -155,8 +159,7 @@ export default function Index() {
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="text-center">
           <div className="text-4xl font-black mb-2">
-            <span className="text-white">Vita</span>{' '}
-            <span className="text-red-600">Napoli</span>
+            <span className="text-white">{settings?.restaurant_name || 'Fai Fai Juice'}</span>
           </div>
           <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-2" />
           <p className="text-gray-500 text-sm mt-2">{t('home.loading')}</p>
@@ -177,8 +180,9 @@ export default function Index() {
               <img src={settings.logo_url} alt="Logo" className="w-8 h-8 rounded-full object-cover" />
             )}
             <div>
-              <span className="text-white font-black text-lg">Vita</span>{' '}
-              <span className="text-red-600 font-black text-lg">Napoli</span>
+              <span className="text-white font-black text-lg">
+                {settings?.restaurant_name || 'Fai Fai Juice'}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -198,12 +202,16 @@ export default function Index() {
         {/* Hero Branding */}
         <div className="py-8 text-center">
           <h1 className="text-5xl font-black mb-1">
-            <span className="text-white">Vita</span>{' '}
-            <span className="text-red-600">Napoli</span>
+            <span className="text-white">{settings?.restaurant_name || 'Fai Fai Juice'}</span>
           </h1>
           <p className="text-gray-400 text-sm">{t('home.tagline')}</p>
+          {settings?.banner_text && (
+            <div className="mt-4 rounded-xl border border-red-600/30 bg-red-600/10 px-4 py-3">
+              <p className="text-red-200 text-sm font-medium">{settings.banner_text}</p>
+            </div>
+          )}
           
-          {restaurantStatus === 'busy' && (
+          {settings?.show_status_banner !== false && restaurantStatus === 'busy' && (
             <div className="mt-4 bg-yellow-600/10 border border-yellow-600/30 rounded-xl px-4 py-3">
               <p className="text-yellow-400 text-sm font-medium">
                 {settings?.busy_message || 'We are currently very busy. Your order may take longer than usual.'}
@@ -213,7 +221,7 @@ export default function Index() {
               )}
             </div>
           )}
-          {restaurantStatus === 'closed' && (
+          {settings?.show_status_banner !== false && restaurantStatus === 'closed' && (
             <div className="mt-4 bg-red-600/10 border border-red-600/30 rounded-xl px-4 py-3">
               <p className="text-red-400 text-sm font-medium">
                 {t('home.closed_message')}
@@ -224,7 +232,7 @@ export default function Index() {
         </div>
 
         {/* Active Offers */}
-        {offers.length > 0 && (
+        {settings?.show_offers !== false && offers.length > 0 && (
           <div className="mb-6">
             <div className="flex items-center gap-2 mb-3">
               <Tag className="w-4 h-4 text-red-500" />
@@ -238,9 +246,13 @@ export default function Index() {
                 >
                   <h3 className="text-white font-bold text-sm">{offer.title}</h3>
                   <p className="text-gray-400 text-xs mt-1">{offer.description}</p>
-                  {offer.discount_percent > 0 && (
+                  {((offer.discount_type || 'percentage') === 'fixed'
+                    ? Number(offer.fixed_discount_amount || 0) > 0
+                    : Number(offer.discount_percent || 0) > 0) && (
                     <Badge className="bg-red-600 text-white mt-2 text-xs">
-                      {offer.discount_percent}% OFF
+                      {(offer.discount_type || 'percentage') === 'fixed'
+                        ? `AED ${Number(offer.fixed_discount_amount || 0).toFixed(2)} OFF`
+                        : `${Number(offer.discount_percent || 0)}% OFF`}
                     </Badge>
                   )}
                   {offer.promo_code && (
@@ -253,6 +265,7 @@ export default function Index() {
         )}
 
         {/* Quick Actions */}
+        {settings?.show_quick_actions !== false && (
         <div className="grid grid-cols-4 gap-2 mb-6">
           <Button
             onClick={() => navigate('/menu')}
@@ -285,8 +298,10 @@ export default function Index() {
             <span className="text-[10px]">{t('nav.contact')}</span>
           </Button>
         </div>
+        )}
 
         {/* Featured Items */}
+        {settings?.show_popular_items !== false && featuredItems.length > 0 && (
         <div className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-white font-bold">{t('home.popular_items')}</h2>
@@ -295,7 +310,7 @@ export default function Index() {
             </button>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            {featuredItems.slice(0, 6).map(item => {
+            {featuredItems.slice(0, Math.max(2, Math.min(12, Number(settings?.popular_max_items || 6)))).map(item => {
               const sizes = getItemSizes(item);
               const lowestSize = sizes.reduce((lowest, size) => size.price < lowest.price ? size : lowest, sizes[0]);
               const lowestPrice = lowestSize?.price || 0;
@@ -346,8 +361,10 @@ export default function Index() {
             })}
           </div>
         </div>
+        )}
 
         {/* Customer Reviews Section */}
+        {settings?.show_reviews !== false && (
         <div className="mb-6">
           <button
             onClick={() => navigate('/reviews')}
@@ -363,6 +380,7 @@ export default function Index() {
             <ChevronRight className="w-4 h-4 text-gray-500" />
           </button>
         </div>
+        )}
 
         {/* Blog Section */}
         {(settings as any)?.blog_enabled !== false && (
@@ -384,6 +402,7 @@ export default function Index() {
         )}
 
         {/* Restaurant Info */}
+        {settings?.show_restaurant_info !== false && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
           <h3 className="text-white font-bold text-sm">{t('home.restaurant_info')}</h3>
           <div className="flex items-start gap-3">
@@ -401,9 +420,11 @@ export default function Index() {
             <p className="text-gray-300 text-sm">{settings?.address || 'Murbah, Fujairah, UAE'}</p>
           </div>
         </div>
+        )}
       </div>
 
       {/* Bottom Navigation */}
+      {settings?.show_bottom_nav !== false && (
       <nav className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 z-50">
         <div className="max-w-lg mx-auto flex items-center justify-around py-3">
           <button onClick={() => navigate('/')} className="flex flex-col items-center gap-1 cursor-pointer">
@@ -426,6 +447,7 @@ export default function Index() {
           </button>
         </div>
       </nav>
+      )}
     </div>
   );
 }
