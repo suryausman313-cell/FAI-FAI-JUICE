@@ -331,7 +331,7 @@ export default function KitchenOrders() {
 
     try {
       const response = await axios.get(
-        `${getAPIBaseURL()}/api/v1/order-workflow/orders`,
+        `${getAPIBaseURL()}/api/v1/admin/kitchen/orders`,
         {
           headers: kitchenHeaders(),
           params: { limit: 300 },
@@ -407,7 +407,7 @@ export default function KitchenOrders() {
     }
 
     try {
-      await axios.get(`${getAPIBaseURL()}/api/v1/order-workflow/orders`, {
+      await axios.get(`${getAPIBaseURL()}/api/v1/admin/kitchen/orders`, {
         headers: {
           'Content-Type': 'application/json',
           'X-Kitchen-Pin': pin.trim(),
@@ -494,7 +494,7 @@ export default function KitchenOrders() {
   ) {
     try {
       const response = await axios.put(
-        `${getAPIBaseURL()}/api/v1/order-workflow/orders/${order.id}/status`,
+        `${getAPIBaseURL()}/api/v1/admin/kitchen/orders/${order.id}/status`,
         {
           status,
           estimated_minutes: estimatedMinutes,

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -11,31 +11,59 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { client, Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
-import ReadyTimeCountdown, { makeLocalReadyTime, readyTimeLabel } from '@/components/ReadyTimeCountdown';
 
-const ADMIN_PANEL_PIN_STORAGE_KEY = 'kitchen_pin';
 
-type AdminPanelRequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type AdminOrder = Order & {
+  order_type?: string;
+  delivery_charge?: number;
+  tip_amount?: number;
+  tip_type?: string;
+};
 
-async function adminPanelApiRequest<T = unknown>(
-  url: string,
-  method: AdminPanelRequestMethod,
+function getPanelPin(): string {
+  const direct = localStorage.getItem('kitchen_pin');
+  if (direct) return direct;
+
+  try {
+    const settings = JSON.parse(
+      localStorage.getItem('extended_settings') || '{}',
+    );
+    if (settings?.kitchen_pin) return String(settings.kitchen_pin);
+  } catch {
+    // Use current Kitchen default below.
+  }
+
+  return '1122';
+}
+
+function adminHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'X-Kitchen-Pin': getPanelPin(),
+  };
+}
+
+async function adminRequest<T>(
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
   data?: unknown,
+  params?: Record<string, unknown>,
 ): Promise<T> {
-  const pin = localStorage.getItem(ADMIN_PANEL_PIN_STORAGE_KEY) || '1122';
-  const baseURL = getAPIBaseURL().replace(/\/$/, '');
-
   const response = await axios.request<T>({
-    url: `${baseURL}${url}`,
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
     method,
     data,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Kitchen-Pin': pin,
-    },
+    params,
+    headers: adminHeaders(),
+    timeout: 20000,
   });
-
   return response.data;
+}
+
+function isDeliveryOrder(order: AdminOrder): boolean {
+  if (String(order.order_type || '').toLowerCase() === 'delivery') return true;
+  const notes = String(order.order_notes || '').toLowerCase();
+  return notes.includes('order type: delivery') || notes.includes('delivery address:');
 }
 
 interface RiderInfo {
@@ -53,7 +81,8 @@ const STATUS_OPTIONS = [
   { value: 'new', label: 'New Order', color: 'bg-blue-600' },
   { value: 'accepted', label: 'Accepted', color: 'bg-green-600' },
   { value: 'preparing', label: 'Preparing', color: 'bg-yellow-600' },
-  { value: 'ready', label: 'Ready for Pickup', color: 'bg-purple-600' },
+  { value: 'ready', label: 'Ready', color: 'bg-purple-600' },
+  { value: 'out_for_delivery', label: 'Out for Delivery', color: 'bg-blue-700' },
   { value: 'completed', label: 'Completed', color: 'bg-gray-600' },
   { value: 'cancelled', label: 'Cancelled', color: 'bg-red-600' },
 ];
@@ -70,7 +99,7 @@ const TIME_OPTIONS = [
 
 export default function AdminOrders() {
   const navigate = useNavigate();
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [search, setSearch] = useState('');
@@ -99,12 +128,13 @@ export default function AdminOrders() {
       if (filterStatus && filterStatus !== 'all') params.status = filterStatus;
       if (search) params.search = search;
 
-      const res = await client.apiCall.invoke({
-        url: '/api/v1/admin/orders',
-        method: 'GET',
-        data: params,
-      });
-      const newOrders = res.data?.items || [];
+      const payload = await adminRequest<{ items?: AdminOrder[] }>(
+        '/api/v1/admin/orders',
+        'GET',
+        undefined,
+        params,
+      );
+      const newOrders = payload?.items || [];
 
       // Clean old entries from recently-updated map (older than 5s)
       const now = Date.now();
@@ -143,8 +173,7 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Session expired. Please login again.');
-        navigate('/admin');
+        toast.error('Admin Settings ka Kitchen PIN backend KITCHEN_PIN ke same rakhein.');
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
@@ -251,16 +280,13 @@ export default function AdminOrders() {
   async function acceptOrder(orderId: number, minutes: number) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      const payload = await adminPanelApiRequest<{ order?: Order }>(
-        `/api/v1/order-workflow/orders/${orderId}/status`,
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
         'PUT',
-        { status: 'accepted', estimated_minutes: minutes }
+        { status: 'accepted', estimated_minutes: minutes },
       );
-      const fallbackEstimate = makeLocalReadyTime(minutes);
       setOrders(prev =>
-        prev.map(o => (o.id === orderId
-          ? { ...o, ...(payload.order || {}), status: 'accepted', estimated_time: payload.order?.estimated_time || fallbackEstimate }
-          : o))
+        prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
       );
       setAcceptingOrder(null);
       toast.success(`Order #${orderId} accepted — ${minutes} min`);
@@ -274,10 +300,15 @@ export default function AdminOrders() {
   async function updateStatus(orderId: number, newStatus: string) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await adminPanelApiRequest(
-        `/api/v1/order-workflow/orders/${orderId}/status`,
+      const target = orders.find((item) => item.id === orderId);
+      if (target && isDeliveryOrder(target) && newStatus === 'completed') {
+        toast.error('Delivery order sirf Rider Delivered karke complete karega.');
+        return;
+      }
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
         'PUT',
-        { status: newStatus }
+        { status: newStatus },
       );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
@@ -293,10 +324,10 @@ export default function AdminOrders() {
   async function cancelOrder(orderId: number, reason?: string) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await adminPanelApiRequest(
-        `/api/v1/order-workflow/orders/${orderId}/status`,
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
         'PUT',
-        { status: 'cancelled', cancel_reason: reason || '' }
+        { status: 'cancelled', cancel_reason: reason || '' },
       );
       setOrders(prev =>
         prev.map(o => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
@@ -312,10 +343,10 @@ export default function AdminOrders() {
   async function deleteOrder(orderId: number) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}`,
-        method: 'DELETE',
-      });
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}`,
+        'DELETE',
+      );
       setOrders(prev => prev.filter(o => o.id !== orderId));
       setDeletingOrder(null);
       toast.success(`Order #${orderId} deleted permanently`);
@@ -333,11 +364,11 @@ export default function AdminOrders() {
     }
     setAddingNote(true);
     try {
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/orders/${orderId}/notes`,
-        method: 'POST',
-        data: { note: staffNote, admin_name: 'Admin' },
-      });
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/notes`,
+        'POST',
+        { note: staffNote, admin_name: 'Admin' },
+      );
       toast.success('Staff note added');
       setNoteOrder(null);
       setStaffNote('');
@@ -499,7 +530,7 @@ export default function AdminOrders() {
                       {order.estimated_time && order.status !== 'completed' && order.status !== 'cancelled' && (
                         <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30">
                           <Clock className="w-3 h-3 mr-1" />
-                          {readyTimeLabel(order.estimated_time)}
+                          {order.estimated_time}
                         </Badge>
                       )}
                     </div>
@@ -517,17 +548,6 @@ export default function AdminOrders() {
                   </Button>
                 </div>
 
-                {order.estimated_time && !['new', 'completed', 'cancelled'].includes(order.status) && (
-                  <div className="mb-3">
-                    <ReadyTimeCountdown
-                      estimatedTime={order.estimated_time}
-                      referenceTime={order.updated_at || order.created_at}
-                      status={order.status}
-                      compact
-                    />
-                  </div>
-                )}
-
                 <div className="space-y-1 mb-3">
                   {items.map((item: any, idx: number) => (
                     <div key={idx} className="text-gray-300 text-sm">
@@ -543,8 +563,14 @@ export default function AdminOrders() {
                   <p className="text-yellow-400/80 text-xs mb-3 italic">📝 {order.order_notes}</p>
                 )}
 
+                {order.status === 'out_for_delivery' && (
+                  <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2 text-sm text-blue-300">
+                    Rider ne order pick kar liya hai. Customer ko deliver hone tak order pending rahega.
+                  </div>
+                )}
+
                 {/* Assign to Rider (for delivery orders) */}
-                {order.order_notes?.includes('Order Type: Delivery') && order.status !== 'completed' && order.status !== 'cancelled' && (
+                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (
                   assigningOrder === order.id ? (
                     <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
                       <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
@@ -824,7 +850,7 @@ export default function AdminOrders() {
                       </Button>
                     )}
 
-                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && (
+                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && order.status !== 'out_for_delivery' && (
                       <Select
                         value={order.status}
                         onValueChange={(val) => updateStatus(order.id, val)}
@@ -833,8 +859,14 @@ export default function AdminOrders() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-900 border-gray-700">
-                          {STATUS_OPTIONS.filter(s => s.value !== 'new').map(s => (
-                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                          {STATUS_OPTIONS.filter((status) => {
+                            if (status.value === 'new' || status.value === 'out_for_delivery') return false;
+                            if (isDeliveryOrder(order) && status.value === 'completed') return false;
+                            return true;
+                          }).map((status) => (
+                            <SelectItem key={status.value} value={status.value}>
+                              {status.label}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

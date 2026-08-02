@@ -1103,72 +1103,12 @@ export default function AdminMenu() {
               </button>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label>Sizes & Prices *</Label>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={addSizeOption}
-                  className="text-green-400"
-                >
-                  <Plus className="w-3 h-3 mr-1" />
-                  Add Size
-                </Button>
-              </div>
-
-              <div className="space-y-2">
-                {sizeOptions.map((size, index) => (
-                  <div
-                    key={`${index}-${size.name}`}
-                    className="flex items-center gap-2"
-                  >
-                    <Input
-                      value={size.name}
-                      onChange={(event) =>
-                        updateSizeOption(
-                          index,
-                          'name',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="Small / Medium / Large"
-                      className="bg-gray-800 border-gray-700 flex-1"
-                    />
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={size.price || ''}
-                      onChange={(event) =>
-                        updateSizeOption(
-                          index,
-                          'price',
-                          Number(event.target.value),
-                        )
-                      }
-                      placeholder="AED"
-                      className="bg-gray-800 border-gray-700 w-24"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeSizeOption(index)}
-                      className="text-red-400 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-green-700/40 bg-green-950/20 p-4 space-y-4">
+            <div className="rounded-xl border-2 border-green-500 bg-green-950/30 p-4 space-y-4 shadow-lg shadow-green-950/30">
               <div className="flex items-center justify-between">
                 <div>
                   <Label className="flex items-center gap-2 text-green-300">
                     <Tag className="w-4 h-4" />
-                    Item Discount
+                    ITEM DISCOUNT — ON / OFF
                   </Label>
                   <p className="text-green-300/60 text-xs mt-1">
                     Sirf food price par lagega. Extras aur fees discount nahi hongi.
@@ -1294,6 +1234,67 @@ export default function AdminMenu() {
                 </>
               )}
             </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label>Sizes & Prices *</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={addSizeOption}
+                  className="text-green-400"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add Size
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                {sizeOptions.map((size, index) => (
+                  <div
+                    key={`${index}-${size.name}`}
+                    className="flex items-center gap-2"
+                  >
+                    <Input
+                      value={size.name}
+                      onChange={(event) =>
+                        updateSizeOption(
+                          index,
+                          'name',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Small / Medium / Large"
+                      className="bg-gray-800 border-gray-700 flex-1"
+                    />
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={size.price || ''}
+                      onChange={(event) =>
+                        updateSizeOption(
+                          index,
+                          'price',
+                          Number(event.target.value),
+                        )
+                      }
+                      placeholder="AED"
+                      className="bg-gray-800 border-gray-700 w-24"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSizeOption(index)}
+                      className="text-red-400 p-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
 
             <Button
               type="button"
