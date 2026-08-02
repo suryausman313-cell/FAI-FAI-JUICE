@@ -61,7 +61,7 @@ export const DEFAULT_EXTENDED_SETTINGS: ExtendedSettings = {
   promo_discount: '0',
   offer_text: '',
   banner_text: '',
-  kitchen_pin: '1234',
+  kitchen_pin: '1122',
   admin_username: 'vitanapoli',
   admin_password: 'admin2024',
   auto_schedule_enabled: false,
