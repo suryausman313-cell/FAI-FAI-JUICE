@@ -22,7 +22,7 @@ class RiderLoginRequest(BaseModel):
 
 
 class DeliveryStatusUpdate(BaseModel):
-    status: str  # picked_up, on_the_way, delivered
+    status: str  # accepted, rejected, picked_up, on_the_way, delivered
 
 
 class AssignDeliveryRequest(BaseModel):
@@ -170,7 +170,7 @@ async def update_delivery_status(
     - delivered: order becomes completed
     """
     new_status = str(data.status or "").lower().strip()
-    valid_statuses = ["assigned", "picked_up", "on_the_way", "delivered"]
+    valid_statuses = ["assigned", "accepted", "rejected", "picked_up", "on_the_way", "delivered"]
 
     if new_status not in valid_statuses:
         raise HTTPException(
@@ -216,11 +216,13 @@ async def update_delivery_status(
 
         assignment.status = new_status
 
-        if new_status in ("picked_up", "on_the_way"):
-            # Kitchen ka kaam khatam, lekin sale abhi final complete nahi hai.
+        if new_status == "rejected":
+            order.status = "ready"
+        elif new_status == "accepted":
+            order.status = "ready"
+        elif new_status in ("picked_up", "on_the_way"):
             order.status = "out_for_delivery"
         elif new_status == "delivered":
-            # Final completion is controlled only by the rider.
             order.status = "completed"
 
         await db.commit()
@@ -303,7 +305,9 @@ async def assign_delivery(
         existing = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.order_id == data.order_id,
-                Delivery_assignments.status != "delivered",
+                Delivery_assignments.status.in_(
+                    ["assigned", "accepted", "picked_up", "on_the_way"]
+                ),
             )
         )
         if existing.scalar_one_or_none():
@@ -384,7 +388,7 @@ async def get_rider_locations(
                 Delivery_assignments.rider_id,
                 func.count(Delivery_assignments.id).label("count")
             ).where(
-                Delivery_assignments.status.in_(["assigned", "picked_up", "on_the_way"])
+                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"])
             ).group_by(Delivery_assignments.rider_id)
         )
         for row in count_result:
@@ -504,7 +508,7 @@ async def get_rider_stats(
         pending_result = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.rider_id == rider_id,
-                Delivery_assignments.status.in_(["assigned", "picked_up", "on_the_way"]),
+                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
             )
         )
         pending_assignments = pending_result.scalars().all()
@@ -632,7 +636,7 @@ async def get_admin_rider_reports(
         for rider in riders:
             rider_assignments = [a for a in all_assignments if a.rider_id == rider.id]
             delivered = [a for a in rider_assignments if a.status == "delivered"]
-            pending = [a for a in rider_assignments if a.status in ("assigned", "picked_up", "on_the_way")]
+            pending = [a for a in rider_assignments if a.status in ("assigned", "accepted", "picked_up", "on_the_way")]
 
             total_earnings = 0.0
             delivery_charges_earned = 0.0
