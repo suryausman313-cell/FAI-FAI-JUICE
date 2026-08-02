@@ -12,6 +12,7 @@ from core.database import get_db
 from models.orders import Orders
 from models.menu_items import Menu_items
 from models.offers import Offers
+from services.rider_assignment import auto_assign_order
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 
@@ -500,10 +501,20 @@ async def place_order(
         await db.commit()
         await db.refresh(order)
 
+        rider_assignment = None
+        if normalized_order_type == "delivery":
+            try:
+                rider_assignment = await auto_assign_order(db, order)
+            except Exception:
+                # Order placement must never fail only because no rider is online.
+                logging.exception("Auto rider assignment failed for order %s", order.id)
+                await db.rollback()
+
         return {
             "success": True,
             "order_id": order.id,
             "status": order.status,
+            "rider_assignment": rider_assignment,
         }
     except HTTPException:
         raise

@@ -15,6 +15,7 @@ from routers.fai_fai_admin_control import get_current_admin
 from schemas.auth import UserResponse
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
+from services.rider_assignment import auto_assign_order
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -232,11 +233,20 @@ async def update_kitchen_order_status(
         await db.commit()
         await db.refresh(order)
 
+        rider_assignment = None
+        if is_delivery_order(order) and new_status in {"accepted", "preparing", "ready"}:
+            try:
+                rider_assignment = await auto_assign_order(db, order)
+            except Exception:
+                logging.exception("Auto rider assignment after Kitchen status failed")
+                await db.rollback()
+
         return {
             "success": True,
             "status": new_status,
             "estimated_minutes": data.estimated_minutes,
             "order": serialize_order(order),
+            "rider_assignment": rider_assignment,
         }
     except HTTPException:
         raise
@@ -372,8 +382,22 @@ async def update_order_status(
             existing_notes = order.order_notes or ''
             order.order_notes = f"{existing_notes} | Cancelled by admin: {data.cancel_reason}"
         await db.commit()
+        await db.refresh(order)
 
-        return {"success": True, "status": new_status, "estimated_minutes": data.estimated_minutes}
+        rider_assignment = None
+        if is_delivery_order(order) and new_status in {"accepted", "preparing", "ready"}:
+            try:
+                rider_assignment = await auto_assign_order(db, order)
+            except Exception:
+                logging.exception("Auto rider assignment after Admin status failed")
+                await db.rollback()
+
+        return {
+            "success": True,
+            "status": new_status,
+            "estimated_minutes": data.estimated_minutes,
+            "rider_assignment": rider_assignment,
+        }
     except HTTPException:
         raise
     except Exception as e:

@@ -12,6 +12,12 @@ from core.database import get_db
 from models.riders import Riders
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
+from services.rider_assignment import (
+    auto_assign_order,
+    auto_assign_unassigned_orders,
+    get_auto_assign_enabled,
+    set_auto_assign_enabled,
+)
 
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
 
@@ -59,6 +65,10 @@ class CreateRiderRequest(BaseModel):
     delivery_charge: Optional[float] = 0
     shift_start: Optional[str] = None
     shift_end: Optional[str] = None
+
+
+class AutoAssignSettingsUpdate(BaseModel):
+    enabled: bool
 
 
 @router.post("/login")
@@ -112,6 +122,14 @@ async def rider_heartbeat(
             raise HTTPException(status_code=404, detail="Rider not found")
         rider.last_heartbeat = datetime.now(timezone.utc)
         await db.commit()
+        # When Auto Assign is ON, a rider coming online can immediately receive
+        # the oldest waiting delivery order. Heartbeat must still succeed even
+        # if assignment is temporarily unavailable.
+        try:
+            await auto_assign_unassigned_orders(db, limit=25)
+        except Exception:
+            logging.exception("Auto assignment after rider heartbeat failed")
+            await db.rollback()
         return {"success": True}
     except HTTPException:
         raise
@@ -182,8 +200,8 @@ async def update_delivery_status(
     - assigned: rider must Accept or Reject
     - accepted: order remains Ready in Kitchen
     - rejected: order stays Ready and can be assigned again
-    - picked_up / on_the_way: order becomes out_for_delivery and leaves Live Kitchen
-    - delivered: order becomes completed
+    - picked_up / on_the_way: order becomes out_for_delivery and appears in Kitchen Today as Delivery Pending
+    - delivered: order becomes completed automatically
     """
     new_status = str(data.status or "").lower().strip()
     valid_statuses = [
@@ -292,11 +310,24 @@ async def update_delivery_status(
         await db.refresh(assignment)
         await db.refresh(order)
 
+        auto_reassigned = None
+        if new_status == "rejected":
+            try:
+                auto_reassigned = await auto_assign_order(
+                    db,
+                    order,
+                    exclude_rider_ids={assignment.rider_id},
+                )
+            except Exception:
+                logging.exception("Automatic reassign after rejection failed")
+                await db.rollback()
+
         return {
             "success": True,
             "status": assignment.status,
             "order_status": order.status,
             "order_id": order.id,
+            "auto_reassigned": auto_reassigned,
         }
     except HTTPException:
         raise
@@ -364,15 +395,36 @@ async def assign_delivery(
 ):
     """Admin assigns a delivery order to a rider"""
     try:
-        # Check if already assigned
-        existing = await db.execute(
-            select(Delivery_assignments).where(
+        # Idempotent assignment: if an active assignment already exists,
+        # return it instead of creating a duplicate or showing a confusing error.
+        existing_result = await db.execute(
+            select(Delivery_assignments, Riders)
+            .join(Riders, Riders.id == Delivery_assignments.rider_id)
+            .where(
                 Delivery_assignments.order_id == data.order_id,
                 Delivery_assignments.status.notin_(["delivered", "rejected"]),
             )
+            .order_by(desc(Delivery_assignments.created_at), desc(Delivery_assignments.id))
+            .limit(1)
         )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Order already assigned to a rider")
+        existing_row = existing_result.first()
+        if existing_row:
+            existing_assignment, existing_rider = existing_row
+            return {
+                "success": True,
+                "already_assigned": True,
+                "assignment_id": existing_assignment.id,
+                "assignment": {
+                    "id": existing_assignment.id,
+                    "order_id": existing_assignment.order_id,
+                    "rider_id": existing_assignment.rider_id,
+                    "rider_name": existing_rider.name,
+                    "rider_phone": existing_rider.phone,
+                    "status": existing_assignment.status or "assigned",
+                    "created_at": existing_assignment.created_at.isoformat() if existing_assignment.created_at else None,
+                    "updated_at": existing_assignment.updated_at.isoformat() if existing_assignment.updated_at else None,
+                },
+            }
 
         order_result = await db.execute(
             select(Orders).where(Orders.id == data.order_id)
@@ -411,11 +463,60 @@ async def assign_delivery(
         db.add(assignment)
         await db.commit()
         await db.refresh(assignment)
-        return {"success": True, "assignment_id": assignment.id}
+        return {
+            "success": True,
+            "already_assigned": False,
+            "assignment_id": assignment.id,
+            "assignment": {
+                "id": assignment.id,
+                "order_id": assignment.order_id,
+                "rider_id": assignment.rider_id,
+                "rider_name": rider.name,
+                "rider_phone": rider.phone,
+                "status": assignment.status or "assigned",
+                "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
+                "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
         logging.error(f"Failed to assign delivery: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/auto-assign")
+async def get_auto_assign_setting(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the persistent Admin auto-assignment switch."""
+    try:
+        return {"enabled": await get_auto_assign_enabled(db)}
+    except Exception as e:
+        logging.error(f"Failed to read auto assign setting: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/admin/auto-assign")
+async def update_auto_assign_setting(
+    data: AutoAssignSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn automatic nearest-rider assignment ON/OFF from Admin Orders."""
+    try:
+        enabled = await set_auto_assign_enabled(db, data.enabled)
+        assigned = []
+        if enabled:
+            assigned = await auto_assign_unassigned_orders(db, force=True, limit=100)
+        return {
+            "success": True,
+            "enabled": enabled,
+            "assigned_count": len(assigned),
+            "assignments": assigned,
+        }
+    except Exception as e:
+        logging.error(f"Failed to update auto assign setting: {e}")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -442,6 +543,11 @@ async def update_rider_location(
         rider.current_lng = data.lng
         rider.location_updated_at = datetime.now(timezone.utc)
         await db.commit()
+        try:
+            await auto_assign_unassigned_orders(db, limit=25)
+        except Exception:
+            logging.exception("Auto assignment after rider location update failed")
+            await db.rollback()
         return {"success": True}
     except HTTPException:
         raise
