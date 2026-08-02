@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { ArrowLeft, Bike, MapPin, Phone, Clock, CheckCircle, Package, Navigation } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -57,10 +58,10 @@ export default function DeliveryTracking() {
 
   async function loadETA() {
     try {
-      const res = await client.apiCall.invoke({
-        url: `/api/v1/rider/delivery-eta/${orderId}`,
-        method: 'GET',
-      });
+      const res = await axios.get(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/rider/delivery-eta/${orderId}`,
+        { timeout: 20000 },
+      );
       if (res?.data) {
         setEta(res.data);
         setError('');
@@ -100,7 +101,8 @@ export default function DeliveryTracking() {
   }
 
   function getStatusIndex(status: string): number {
-    return STATUS_STEPS.findIndex(s => s.key === status);
+    const normalized = status === 'accepted' ? 'assigned' : status;
+    return STATUS_STEPS.findIndex(s => s.key === normalized);
   }
 
   if (loading) {

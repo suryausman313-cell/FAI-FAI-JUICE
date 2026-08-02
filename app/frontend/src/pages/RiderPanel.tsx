@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +7,25 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+
+type RiderApiOptions = {
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  data?: unknown;
+};
+
+function riderApi(options: RiderApiOptions) {
+  return axios.request({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${options.url}`,
+    method: options.method,
+    data: options.data,
+    timeout: 25000,
+  });
+}
 
 // Fix leaflet default marker icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -150,6 +167,7 @@ export default function RiderPanel() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const prevDeliveryIdsRef = useRef<number[]>([]);
+  const riderAlarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -194,7 +212,7 @@ export default function RiderPanel() {
   useEffect(() => {
     if (!rider) return;
     function sendHeartbeat() {
-      client.apiCall.invoke({
+      riderApi({
         url: `/api/v1/rider/heartbeat/${rider.id}`,
         method: 'POST',
         data: {},
@@ -211,7 +229,7 @@ export default function RiderPanel() {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          client.apiCall.invoke({
+          riderApi({
             url: `/api/v1/rider/location/${rider.id}`,
             method: 'POST',
             data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
@@ -247,12 +265,12 @@ export default function RiderPanel() {
 
   useEffect(() => {
     if (!rider || deliveries.length === 0) return;
-    const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
+    const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
     const newIds = activeIds.filter(id => !prevDeliveryIdsRef.current.includes(id));
     if (newIds.length > 0 && prevDeliveryIdsRef.current.length > 0) {
       const newDelivery = deliveries.find(d => newIds.includes(d.id));
       if (newDelivery) {
-        toast.success(`🍕 New Order #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
+        toast.success(`🛵 New Delivery #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
         playNotificationSound();
       }
     }
@@ -260,6 +278,30 @@ export default function RiderPanel() {
     if (swRegistrationRef.current?.active) {
       swRegistrationRef.current.active.postMessage({ type: 'UPDATE_DELIVERIES', data: { deliveryIds: activeIds } });
     }
+  }, [deliveries, rider]);
+
+  // Keep ringing while a newly assigned delivery is waiting for Accept/Reject.
+  useEffect(() => {
+    const waitingForDecision = Boolean(
+      rider && deliveries.some(delivery => delivery.status === 'assigned'),
+    );
+
+    if (riderAlarmIntervalRef.current !== null) {
+      clearInterval(riderAlarmIntervalRef.current);
+      riderAlarmIntervalRef.current = null;
+    }
+
+    if (waitingForDecision) {
+      playNotificationSound();
+      riderAlarmIntervalRef.current = setInterval(playNotificationSound, 3500);
+    }
+
+    return () => {
+      if (riderAlarmIntervalRef.current !== null) {
+        clearInterval(riderAlarmIntervalRef.current);
+        riderAlarmIntervalRef.current = null;
+      }
+    };
   }, [deliveries, rider]);
 
   function playNotificationSound() {
@@ -291,8 +333,8 @@ export default function RiderPanel() {
         });
       }
       if (registration.active && rider) {
-        const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBase: 'https://vita-napoli-backend-usman.onrender.com' } });
+        const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
+        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
       }
     } catch (error) { console.error('SW registration failed:', error); }
   }
@@ -322,8 +364,8 @@ export default function RiderPanel() {
         setNotificationsEnabled(true);
         localStorage.setItem('rider_notifications', 'on');
         if (swRegistrationRef.current?.active && rider) {
-          const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBase: 'https://vita-napoli-backend-usman.onrender.com' } });
+          const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
+          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
         }
         toast.success('Notifications on');
       } else { requestNotificationPermission(); }
@@ -331,7 +373,7 @@ export default function RiderPanel() {
   }
 
   function updateMap() {
-    const activeDeliveries = deliveries.filter(d => d.status !== 'delivered' && d.customer_lat && d.customer_lng);
+    const activeDeliveries = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status) && d.customer_lat && d.customer_lng);
     if (activeDeliveries.length === 0) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     if (!mapContainerRef.current) return;
@@ -355,7 +397,7 @@ export default function RiderPanel() {
     if (!phone || !pin) { toast.error('Please enter phone and PIN'); return; }
     setLoginLoading(true);
     try {
-      const res = await client.apiCall.invoke({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
+      const res = await riderApi({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
       if (res?.data?.success) {
         const riderData = res.data.rider;
         setRider(riderData);
@@ -369,7 +411,7 @@ export default function RiderPanel() {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
       }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Invalid phone or PIN'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Invalid phone or PIN'); }
     finally { setLoginLoading(false); }
   }
 
@@ -384,12 +426,16 @@ export default function RiderPanel() {
     setCashNote('');
     localStorage.removeItem('rider_auth');
     prevDeliveryIdsRef.current = [];
+    if (riderAlarmIntervalRef.current !== null) {
+      clearInterval(riderAlarmIntervalRef.current);
+      riderAlarmIntervalRef.current = null;
+    }
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   }
 
   async function loadDeliveries(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
       const items = res?.data?.items || [];
       setDeliveries(items);
       setLastRefresh(new Date());
@@ -401,7 +447,7 @@ export default function RiderPanel() {
 
   async function loadStats(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
       if (res?.data) { setStats(res.data); }
     } catch (e) { console.error('Failed to load stats:', e); }
   }
@@ -419,7 +465,7 @@ export default function RiderPanel() {
     if (period === 'custom' && (!customFrom || !customTo)) return;
     setFinanceLoading(true);
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: getFinanceUrl(riderId, period),
         method: 'GET',
         data: {},
@@ -427,7 +473,7 @@ export default function RiderPanel() {
       if (res?.data) setFinanceSummary(res.data);
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
-      toast.error(e?.data?.detail || 'Could not load finance report');
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not load finance report');
     } finally {
       setFinanceLoading(false);
     }
@@ -435,7 +481,7 @@ export default function RiderPanel() {
 
   async function loadCashSubmissions(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
         method: 'GET',
         data: {},
@@ -462,7 +508,7 @@ export default function RiderPanel() {
 
     setSubmittingCash(true);
     try {
-      await client.apiCall.invoke({
+      await riderApi({
         url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
         method: 'POST',
         data: { amount, note: cashNote.trim() },
@@ -475,7 +521,7 @@ export default function RiderPanel() {
         loadCashSubmissions(rider.id),
       ]);
     } catch (e: any) {
-      toast.error(e?.data?.detail || 'Cash submission failed');
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Cash submission failed');
     } finally {
       setSubmittingCash(false);
     }
@@ -495,10 +541,10 @@ export default function RiderPanel() {
 
   async function updateStatus(assignmentId: number, newStatus: string) {
     try {
-      await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
+      await riderApi({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
       if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to update status'); }
   }
 
   function openInMaps(lat: number, lng: number) {
@@ -508,7 +554,7 @@ export default function RiderPanel() {
   function getStatusColor(status: string) {
     switch (status) {
       case 'assigned': return 'bg-blue-600/20 text-blue-400 border-blue-600/30';
-      case 'accepted': return 'bg-cyan-600/20 text-cyan-400 border-cyan-600/30';
+      case 'accepted': return 'bg-emerald-600/20 text-emerald-400 border-emerald-600/30';
       case 'rejected': return 'bg-red-600/20 text-red-400 border-red-600/30';
       case 'picked_up': return 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30';
       case 'on_the_way': return 'bg-orange-600/20 text-orange-400 border-orange-600/30';
@@ -535,7 +581,7 @@ export default function RiderPanel() {
             <div className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Bike className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-xs text-green-400">FINAL V4</span></h1>
+            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-[10px] text-emerald-400">FINAL V5</span></h1>
             <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
@@ -841,27 +887,38 @@ export default function RiderPanel() {
                               </div>
                             )}
                           </div>
-                          {delivery.status === 'assigned' && (
-                            <div className="grid grid-cols-2 gap-2 mb-2">
-                              <Button onClick={() => updateStatus(delivery.id, 'accepted')} className="bg-green-600 hover:bg-green-700 text-white" size="sm">
-                                ✅ Accept
-                              </Button>
-                              <Button onClick={() => updateStatus(delivery.id, 'rejected')} className="bg-red-600 hover:bg-red-700 text-white" size="sm">
-                                ❌ Reject
-                              </Button>
-                            </div>
-                          )}
                           <div className="flex gap-2">
                             {delivery.customer_lat && delivery.customer_lng && (
                               <Button onClick={() => openInMaps(delivery.customer_lat!, delivery.customer_lng!)} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer" size="sm">
                                 <Navigation className="w-4 h-4 mr-1" /> Navigate
                               </Button>
                             )}
-                            {nextStatus && (
+                            {delivery.status === 'assigned' ? (
+                              <>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'accepted')}
+                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ✅ Accept
+                                </Button>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'rejected')}
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ❌ Reject
+                                </Button>
+                              </>
+                            ) : delivery.status === 'accepted' && delivery.order_status !== 'ready' ? (
+                              <Button disabled className="flex-1 bg-gray-700 text-gray-300 cursor-not-allowed" size="sm">
+                                Waiting for Kitchen Ready
+                              </Button>
+                            ) : nextStatus ? (
                               <Button onClick={() => updateStatus(delivery.id, nextStatus.value)} className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer" size="sm">
                                 {nextStatus.label}
                               </Button>
-                            )}
+                            ) : null}
                           </div>
                         </Card>
                       );
