@@ -1,4 +1,3 @@
-# FINAL V4 - unified kitchen/admin delivery flow
 # @File: backend/routers/admin.py
 # @Desc: Admin API routes for order management, customers, and sales reports
 import logging
@@ -20,7 +19,7 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 # Kitchen panel uses its own PIN header instead of an admin JWT.
 # On Render, you can set KITCHEN_PIN as an environment variable.
-KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1234")
+KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
 
 
 def verify_kitchen_pin(
@@ -674,47 +673,47 @@ async def get_tips_report(
         # Rider tips (delivery orders)
         rider_tips_today = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'rider', Orders.created_at >= today_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'rider', Orders.created_at >= today_start, Orders.status == 'completed')
         )
         rider_tips_week = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'rider', Orders.created_at >= week_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'rider', Orders.created_at >= week_start, Orders.status == 'completed')
         )
         rider_tips_month = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'rider', Orders.created_at >= month_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'rider', Orders.created_at >= month_start, Orders.status == 'completed')
         )
         rider_tips_all = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'rider', Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'rider', Orders.status == 'completed')
         )
 
         # Shop tips (pickup orders)
         shop_tips_today = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'shop', Orders.created_at >= today_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'shop', Orders.created_at >= today_start, Orders.status == 'completed')
         )
         shop_tips_week = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'shop', Orders.created_at >= week_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'shop', Orders.created_at >= week_start, Orders.status == 'completed')
         )
         shop_tips_month = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'shop', Orders.created_at >= month_start, Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'shop', Orders.created_at >= month_start, Orders.status == 'completed')
         )
         shop_tips_all = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_type == 'shop', Orders.status != 'cancelled')
+            .where(Orders.tip_type == 'shop', Orders.status == 'completed')
         )
 
         # Total tips
         total_tips_today = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_amount > 0, Orders.created_at >= today_start, Orders.status != 'cancelled')
+            .where(Orders.tip_amount > 0, Orders.created_at >= today_start, Orders.status == 'completed')
         )
         total_tips_all = await db.execute(
             select(func.sum(Orders.tip_amount))
-            .where(Orders.tip_amount > 0, Orders.status != 'cancelled')
+            .where(Orders.tip_amount > 0, Orders.status == 'completed')
         )
 
         # Per-rider tip breakdown (from delivered orders with rider tip)
@@ -795,7 +794,7 @@ async def get_sales_report(
 
         # Total orders count (exclude cancelled orders from metrics)
         total_orders_result = await db.execute(
-            select(func.count(Orders.id)).where(Orders.status != 'cancelled')
+            select(func.count(Orders.id)).where(Orders.status == 'completed')
         )
         total_orders = total_orders_result.scalar() or 0
 
@@ -803,7 +802,7 @@ async def get_sales_report(
         daily_result = await db.execute(
             select(func.sum(Orders.total_amount), func.count(Orders.id))
             .where(Orders.created_at >= today_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         daily_row = daily_result.one()
         daily_sales = float(daily_row[0] or 0)
@@ -813,7 +812,7 @@ async def get_sales_report(
         weekly_result = await db.execute(
             select(func.sum(Orders.total_amount), func.count(Orders.id))
             .where(Orders.created_at >= week_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         weekly_row = weekly_result.one()
         weekly_sales = float(weekly_row[0] or 0)
@@ -823,7 +822,7 @@ async def get_sales_report(
         monthly_result = await db.execute(
             select(func.sum(Orders.total_amount), func.count(Orders.id))
             .where(Orders.created_at >= month_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         monthly_row = monthly_result.one()
         monthly_sales = float(monthly_row[0] or 0)
@@ -832,7 +831,7 @@ async def get_sales_report(
         # Payment method breakdown
         payment_breakdown_result = await db.execute(
             select(Orders.payment_method, func.sum(Orders.total_amount), func.count(Orders.id))
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
             .group_by(Orders.payment_method)
         )
         payment_breakdown = {}
@@ -847,7 +846,7 @@ async def get_sales_report(
         today_payment_result = await db.execute(
             select(Orders.payment_method, func.sum(Orders.total_amount), func.count(Orders.id))
             .where(Orders.created_at >= today_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
             .group_by(Orders.payment_method)
         )
         today_payment_breakdown = {}
@@ -863,34 +862,34 @@ async def get_sales_report(
         service_fee_today_result = await db.execute(
             select(func.sum(Orders.service_fee))
             .where(Orders.created_at >= today_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         service_fee_today = float(service_fee_today_result.scalar() or 0)
 
         service_fee_week_result = await db.execute(
             select(func.sum(Orders.service_fee))
             .where(Orders.created_at >= week_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         service_fee_week = float(service_fee_week_result.scalar() or 0)
 
         service_fee_month_result = await db.execute(
             select(func.sum(Orders.service_fee))
             .where(Orders.created_at >= month_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         service_fee_month = float(service_fee_month_result.scalar() or 0)
 
         service_fee_year_result = await db.execute(
             select(func.sum(Orders.service_fee))
             .where(Orders.created_at >= year_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         service_fee_year = float(service_fee_year_result.scalar() or 0)
 
         service_fee_all_result = await db.execute(
             select(func.sum(Orders.service_fee))
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         service_fee_all = float(service_fee_all_result.scalar() or 0)
 
@@ -898,41 +897,41 @@ async def get_sales_report(
         small_order_fee_today_result = await db.execute(
             select(func.sum(Orders.small_order_fee))
             .where(Orders.created_at >= today_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         small_order_fee_today = float(small_order_fee_today_result.scalar() or 0)
 
         small_order_fee_week_result = await db.execute(
             select(func.sum(Orders.small_order_fee))
             .where(Orders.created_at >= week_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         small_order_fee_week = float(small_order_fee_week_result.scalar() or 0)
 
         small_order_fee_month_result = await db.execute(
             select(func.sum(Orders.small_order_fee))
             .where(Orders.created_at >= month_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         small_order_fee_month = float(small_order_fee_month_result.scalar() or 0)
 
         small_order_fee_year_result = await db.execute(
             select(func.sum(Orders.small_order_fee))
             .where(Orders.created_at >= year_start)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         small_order_fee_year = float(small_order_fee_year_result.scalar() or 0)
 
         small_order_fee_all_result = await db.execute(
             select(func.sum(Orders.small_order_fee))
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
         )
         small_order_fee_all = float(small_order_fee_all_result.scalar() or 0)
 
         # Best selling items - parse items_json from recent orders
         recent_orders_result = await db.execute(
             select(Orders.items_json)
-            .where(Orders.status != 'cancelled')
+            .where(Orders.status == 'completed')
             .order_by(desc(Orders.created_at))
             .limit(200)
         )

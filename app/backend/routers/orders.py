@@ -233,7 +233,8 @@ async def place_order(
                         )
 
                     # Accumulate calculated subtotal from item prices
-                    calculated_subtotal += item_price * item_quantity if item_quantity > 1 else item_price
+                    # Checkout sends each cart line total in item.price, so add it once.
+                    calculated_subtotal += item_price
 
                 if invalid_items:
                     logging.warning(

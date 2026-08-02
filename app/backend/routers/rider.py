@@ -16,6 +16,20 @@ from models.orders import Orders
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
 
 
+def is_delivery_order(order: Orders) -> bool:
+    """Detect delivery orders including older rows where type is stored in notes."""
+    explicit = str(getattr(order, "order_type", "") or "").lower().strip()
+    notes = str(getattr(order, "order_notes", "") or "").lower()
+    payment = str(getattr(order, "payment_method", "") or "").lower()
+    return (
+        explicit == "delivery"
+        or "order type: delivery" in notes
+        or "delivery address:" in notes
+        or "cash on delivery" in payment
+        or "card on delivery" in payment
+    )
+
+
 class RiderLoginRequest(BaseModel):
     phone: str
     pin: str
@@ -165,12 +179,21 @@ async def update_delivery_status(
     Update rider delivery progress.
 
     Order flow:
-    - assigned: order remains Ready in Kitchen
+    - assigned: rider must Accept or Reject
+    - accepted: order remains Ready in Kitchen
+    - rejected: order stays Ready and can be assigned again
     - picked_up / on_the_way: order becomes out_for_delivery and leaves Live Kitchen
     - delivered: order becomes completed
     """
     new_status = str(data.status or "").lower().strip()
-    valid_statuses = ["assigned", "accepted", "rejected", "picked_up", "on_the_way", "delivered"]
+    valid_statuses = [
+        "assigned",
+        "accepted",
+        "rejected",
+        "picked_up",
+        "on_the_way",
+        "delivered",
+    ]
 
     if new_status not in valid_statuses:
         raise HTTPException(
@@ -193,10 +216,30 @@ async def update_delivery_status(
             assignment.status or "assigned"
         ).lower().strip()
 
-        if current_assignment_status == "delivered" and new_status != "delivered":
+        transitions = {
+            "assigned": {"accepted", "rejected"},
+            "accepted": {"picked_up", "rejected"},
+            "picked_up": {"on_the_way", "delivered"},
+            "on_the_way": {"delivered"},
+            "rejected": set(),
+            "delivered": set(),
+        }
+
+        if new_status == current_assignment_status:
+            return {
+                "success": True,
+                "status": current_assignment_status,
+                "order_status": None,
+                "order_id": assignment.order_id,
+            }
+
+        if new_status not in transitions.get(current_assignment_status, set()):
             raise HTTPException(
                 status_code=400,
-                detail="Delivered order ka status dobara change nahi ho sakta.",
+                detail=(
+                    f"Cannot change delivery from {current_assignment_status} "
+                    f"to {new_status}."
+                ),
             )
 
         order_result = await db.execute(
@@ -214,15 +257,35 @@ async def update_delivery_status(
                 detail="Cancelled order deliver nahi ho sakta.",
             )
 
+        if not is_delivery_order(order):
+            raise HTTPException(
+                status_code=400,
+                detail="Pickup order Rider delivery flow me nahi ja sakta.",
+            )
+
+        if new_status == "picked_up" and current_order_status != "ready":
+            raise HTTPException(
+                status_code=400,
+                detail="Kitchen ne order abhi Ready nahi kiya.",
+            )
+
+        if new_status in {"on_the_way", "delivered"} and current_order_status != "out_for_delivery":
+            raise HTTPException(
+                status_code=400,
+                detail="Order pehle Picked Up hona chahiye.",
+            )
+
         assignment.status = new_status
 
-        if new_status == "rejected":
-            order.status = "ready"
-        elif new_status == "accepted":
-            order.status = "ready"
+        if new_status in ("assigned", "accepted", "rejected"):
+            # Accept/Reject only changes the assignment. The kitchen order keeps
+            # its current status; a rejected Ready order can be assigned again.
+            pass
         elif new_status in ("picked_up", "on_the_way"):
+            # Kitchen work is finished, but the sale is not final yet.
             order.status = "out_for_delivery"
         elif new_status == "delivered":
+            # Only Rider Delivered finalizes a delivery sale.
             order.status = "completed"
 
         await db.commit()
@@ -305,13 +368,32 @@ async def assign_delivery(
         existing = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.order_id == data.order_id,
-                Delivery_assignments.status.in_(
-                    ["assigned", "accepted", "picked_up", "on_the_way"]
-                ),
+                Delivery_assignments.status.notin_(["delivered", "rejected"]),
             )
         )
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Order already assigned to a rider")
+
+        order_result = await db.execute(
+            select(Orders).where(Orders.id == data.order_id)
+        )
+        order = order_result.scalar_one_or_none()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if str(order.status or "").lower().strip() in {"completed", "cancelled"}:
+            raise HTTPException(status_code=400, detail="Completed/cancelled order cannot be assigned")
+        if not is_delivery_order(order):
+            raise HTTPException(status_code=400, detail="Only delivery orders can be assigned to a rider")
+
+        rider_result = await db.execute(
+            select(Riders).where(
+                Riders.id == data.rider_id,
+                Riders.is_active == True,
+            )
+        )
+        rider = rider_result.scalar_one_or_none()
+        if not rider:
+            raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
         assignment = Delivery_assignments(
             order_id=data.order_id,
@@ -758,7 +840,7 @@ async def get_delivery_eta(
         result = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.order_id == order_id,
-                Delivery_assignments.status != "delivered",
+                Delivery_assignments.status.notin_(["delivered", "rejected"]),
             )
         )
         assignment = result.scalar_one_or_none()
@@ -783,7 +865,7 @@ async def get_delivery_eta(
 
         # Calculate ETA based on status
         eta_minutes = None
-        if assignment.status == "assigned":
+        if assignment.status in ("assigned", "accepted"):
             eta_minutes = 30  # Default: 30 min from assignment
         elif assignment.status == "picked_up":
             eta_minutes = 20  # Picked up, ~20 min

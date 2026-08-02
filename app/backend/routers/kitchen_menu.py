@@ -19,7 +19,7 @@ router = APIRouter(
     tags=["kitchen-menu"],
 )
 
-KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1234")
+KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
 
 
 def verify_kitchen_pin(

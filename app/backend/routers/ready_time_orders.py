@@ -1,7 +1,7 @@
-"""Kitchen/Admin order workflow with an exact ready-time deadline.
+"""Legacy workflow route kept compatible with the final Kitchen/Rider flow.
 
-The existing database column ``pickup_time`` is reused, so no migration is needed.
-Stored format: ``10 min|2026-08-01T14:30:00+00:00``.
+The existing ``pickup_time`` column stores the selected ready time and optional
+UTC deadline, so no database migration is required.
 """
 
 from __future__ import annotations
@@ -22,9 +22,6 @@ from models.orders import Orders
 
 router = APIRouter(prefix="/api/v1/order-workflow", tags=["order-workflow"])
 
-ACTIVE_STATUSES = {"new", "accepted", "preparing", "ready"}
-TERMINAL_STATUSES = {"completed", "cancelled"}
-
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -37,7 +34,6 @@ def verify_kitchen_pin(
 ) -> bool:
     expected = os.getenv("KITCHEN_PIN", "1122").strip()
     supplied = (x_kitchen_pin or "").strip()
-
     if not supplied or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid kitchen PIN")
     return True
@@ -50,22 +46,30 @@ def normalize_status(value: Optional[str]) -> str:
     return status
 
 
+def is_delivery_order(order: Orders) -> bool:
+    notes = str(order.order_notes or "").lower()
+    payment = str(order.payment_method or "").lower()
+    return (
+        "order type: delivery" in notes
+        or "delivery address:" in notes
+        or "cash on delivery" in payment
+        or "card on delivery" in payment
+    )
+
+
 def encode_ready_time(minutes: int) -> str:
     deadline = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     return f"{minutes} min|{deadline.isoformat()}"
 
 
 def serialize_order(order: Orders) -> dict:
-    notes = order.order_notes or ""
-    order_type = "delivery" if "delivery" in notes.lower() else "pickup"
-
     return {
         "id": order.id,
         "user_id": order.user_id,
         "customer_name": order.customer_name,
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
-        "order_notes": notes,
+        "order_notes": order.order_notes or "",
         "payment_method": order.payment_method,
         "status": normalize_status(order.status),
         "total_amount": order.total_amount,
@@ -75,7 +79,7 @@ def serialize_order(order: Orders) -> dict:
         "tip_amount": order.tip_amount or 0,
         "tip_type": order.tip_type or "",
         "items_json": order.items_json,
-        "order_type": order_type,
+        "order_type": "delivery" if is_delivery_order(order) else "pickup",
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "updated_at": order.updated_at.isoformat() if order.updated_at else None,
     }
@@ -89,11 +93,9 @@ async def get_workflow_orders(
     db: AsyncSession = Depends(get_db),
 ):
     del kitchen_access
-
     query = select(Orders).order_by(desc(Orders.created_at)).limit(limit)
     if status and status != "all":
-        query = query.where(Orders.status == status)
-
+        query = query.where(Orders.status == normalize_status(status))
     result = await db.execute(query)
     return {"items": [serialize_order(order) for order in result.scalars().all()]}
 
@@ -106,32 +108,41 @@ async def update_workflow_order_status(
     db: AsyncSession = Depends(get_db),
 ):
     del kitchen_access
-
     result = await db.execute(select(Orders).where(Orders.id == order_id))
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    transitions = {
+        "new": {"accepted", "preparing", "cancelled"},
+        "accepted": {"preparing", "ready", "cancelled"},
+        "preparing": {"ready", "cancelled"},
+        "ready": {"completed", "cancelled"},
+        "out_for_delivery": {"cancelled"},
+        "completed": set(),
+        "cancelled": set(),
+    }
+
     current_status = normalize_status(order.status)
     new_status = normalize_status(data.status)
-
-    if new_status not in ACTIVE_STATUSES | TERMINAL_STATUSES:
+    if new_status not in transitions:
         raise HTTPException(status_code=400, detail=f"Invalid status: {new_status}")
 
-    # Keep Admin/Kitchen controls flexible for active orders, while protecting
-    # completed/cancelled history from accidental reopening.
-    if current_status in TERMINAL_STATUSES and new_status != current_status:
+    if new_status == "completed" and is_delivery_order(order):
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot reopen a {current_status} order",
+            detail="Delivery order sirf Rider ke Delivered button se complete hoga.",
+        )
+
+    if new_status not in transitions.get(current_status, set()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot change order from {current_status} to {new_status}",
         )
 
     order.status = new_status
-
     if new_status == "accepted":
-        minutes = data.estimated_minutes or 20
-        order.pickup_time = encode_ready_time(minutes)
-
+        order.pickup_time = encode_ready_time(data.estimated_minutes or 20)
     if new_status == "cancelled" and data.cancel_reason:
         existing = order.order_notes or ""
         order.order_notes = f"{existing} | Cancelled by shop: {data.cancel_reason}".strip(" |")
@@ -144,7 +155,4 @@ async def update_workflow_order_status(
         logging.exception("Order workflow update failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {
-        "success": True,
-        "order": serialize_order(order),
-    }
+    return {"success": True, "order": serialize_order(order)}
