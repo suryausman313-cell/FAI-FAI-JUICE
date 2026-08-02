@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send, Zap, Loader2 } from 'lucide-react';
+import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
-import { ADMIN_TOKEN_KEY } from '@/lib/admin-control';
 
 
 type AdminOrder = Order & {
@@ -37,55 +36,24 @@ function getPanelPin(): string {
   return '1122';
 }
 
-function normalizeToken(value: string | null | undefined): string {
-  const token = String(value || '').trim();
-  return token.toLowerCase().startsWith('bearer ')
-    ? token.slice(7).trim()
-    : token;
-}
-
-function getStoredAdminToken(): string {
-  const directCandidates = [
-    localStorage.getItem(ADMIN_TOKEN_KEY),
-    localStorage.getItem('admin_token'),
-    localStorage.getItem('access_token'),
-    sessionStorage.getItem(ADMIN_TOKEN_KEY),
-    sessionStorage.getItem('admin_token'),
-    sessionStorage.getItem('access_token'),
-  ];
-
-  for (const candidate of directCandidates) {
-    const token = normalizeToken(candidate);
-    if (token) return token;
-  }
-
-  try {
-    const auth = JSON.parse(localStorage.getItem('admin_auth') || '{}');
-    const token = normalizeToken(
-      auth?.token || auth?.access_token || auth?.accessToken,
-    );
-    if (token) return token;
-  } catch {
-    // Invalid legacy admin_auth; login page will replace it.
-  }
-
-  return '';
-}
-
-function adminHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
+function adminHeaders() {
+  return {
     'Content-Type': 'application/json',
     'X-Kitchen-Pin': getPanelPin(),
   };
+}
 
-  const adminToken = getStoredAdminToken();
-  if (adminToken) {
-    headers.Authorization = `Bearer ${adminToken}`;
-    headers['X-Admin-Token'] = adminToken;
-  }
+function askAndSavePanelPin(): string | null {
+  const entered = window.prompt(
+    'Admin Orders ke liye Kitchen PIN enter karein. Ye Render KITCHEN_PIN ke same hona chahiye.',
+    localStorage.getItem('kitchen_pin') || '',
+  );
 
-  return headers;
+  const pin = String(entered || '').trim();
+  if (!pin) return null;
+
+  localStorage.setItem('kitchen_pin', pin);
+  return pin;
 }
 
 async function adminRequest<T>(
@@ -122,15 +90,6 @@ interface RiderInfo {
   active_deliveries?: number;
 }
 
-interface AssignmentInfo {
-  id: number;
-  order_id: number;
-  rider_id: number;
-  rider_name: string;
-  rider_phone?: string;
-  status: string;
-}
-
 const STATUS_OPTIONS = [
   { value: 'new', label: 'New Order', color: 'bg-blue-600' },
   { value: 'accepted', label: 'Accepted', color: 'bg-green-600' },
@@ -163,7 +122,6 @@ export default function AdminOrders() {
   const [acceptingOrder, setAcceptingOrder] = useState<number | null>(null);
   const [selectedTime, setSelectedTime] = useState<number>(20);
   const [riders, setRiders] = useState<RiderInfo[]>([]);
-  const [assignments, setAssignments] = useState<Record<number, AssignmentInfo>>({});
   const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
   const [selectedRider, setSelectedRider] = useState<string>('');
   const [deletingOrder, setDeletingOrder] = useState<number | null>(null);
@@ -172,8 +130,6 @@ export default function AdminOrders() {
   const [addingNote, setAddingNote] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState('');
-  const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
-  const [autoAssignLoading, setAutoAssignLoading] = useState(false);
 
   // Track recently updated order IDs to prevent poll from reverting optimistic updates
   const recentlyUpdatedRef = useRef<Map<number, number>>(new Map());
@@ -230,20 +186,16 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        localStorage.removeItem(ADMIN_TOKEN_KEY);
-        localStorage.removeItem('admin_token');
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('admin_auth');
-        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-        sessionStorage.removeItem('admin_token');
-        sessionStorage.removeItem('access_token');
-        toast.error('Admin session expire hai. Dobara login karo.');
-        navigate('/admin', { replace: true });
-      } else {
-        toast.error(
-          e?.response?.data?.detail ||
-          'Failed to refresh orders. Please try again.',
-        );
+        localStorage.removeItem('kitchen_pin');
+        const pin = askAndSavePanelPin();
+        if (pin) {
+          toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
+          setTimeout(() => void loadOrders(true), 100);
+        } else {
+          toast.error('Kitchen PIN ke baghair Admin Orders load nahi honge.');
+        }
+      } else if (showToast) {
+        toast.error('Failed to refresh orders. Please try again.');
       }
     } finally {
       setRefreshing(false);
@@ -252,66 +204,30 @@ export default function AdminOrders() {
 
   useEffect(() => {
     checkAuthAndLoad();
-    void loadRiders();
-    void loadAutoAssignSetting();
+    loadRiders();
     const interval = setInterval(() => {
-      void loadOrders();
-      void loadRiders();
+      loadOrders();
     }, 8000);
     return () => clearInterval(interval);
   }, []);
 
   async function loadRiders() {
     try {
-      const [riderPayload, assignmentPayload] = await Promise.all([
-        adminRequest<{ items?: RiderInfo[] }>('/api/v1/rider/admin/locations')
-          .catch(() => adminRequest<{ items?: RiderInfo[] }>('/api/v1/rider/admin/list')),
-        adminRequest<{ items?: AssignmentInfo[] }>('/api/v1/rider/admin/assignments'),
-      ]);
-      setRiders(Array.isArray(riderPayload?.items) ? riderPayload.items : []);
-      const map: Record<number, AssignmentInfo> = {};
-      for (const assignment of assignmentPayload?.items || []) {
-        map[Number(assignment.order_id)] = assignment;
+      const payload = await adminRequest<{ items?: RiderInfo[] }>(
+        '/api/v1/rider/admin/locations',
+      );
+      setRiders(Array.isArray(payload?.items) ? payload.items : []);
+    } catch (error) {
+      console.error('Failed to load rider locations:', error);
+      try {
+        const payload = await adminRequest<{ items?: RiderInfo[] }>(
+          '/api/v1/rider/admin/list',
+        );
+        setRiders(Array.isArray(payload?.items) ? payload.items : []);
+      } catch (fallbackError) {
+        console.error('Failed to load riders:', fallbackError);
+        setRiders([]);
       }
-      setAssignments(map);
-    } catch (error) {
-      console.error('Failed to load rider data:', error);
-      setRiders([]);
-    }
-  }
-
-  async function loadAutoAssignSetting() {
-    try {
-      const payload = await adminRequest<{ enabled?: boolean }>('/api/v1/rider/admin/auto-assign');
-      setAutoAssignEnabled(Boolean(payload?.enabled));
-    } catch (error) {
-      console.error('Failed to load auto assign setting:', error);
-    }
-  }
-
-  async function toggleAutoAssign() {
-    const nextEnabled = !autoAssignEnabled;
-    setAutoAssignLoading(true);
-    try {
-      const payload = await adminRequest<{ enabled?: boolean; assigned_count?: number }>(
-        '/api/v1/rider/admin/auto-assign',
-        'PUT',
-        { enabled: nextEnabled },
-      );
-      const enabled = Boolean(payload?.enabled);
-      setAutoAssignEnabled(enabled);
-      const assignedCount = Number(payload?.assigned_count || 0);
-      toast.success(
-        enabled
-          ? `Auto Assign ON${assignedCount > 0 ? ` — ${assignedCount} waiting order assigned` : ''}`
-          : 'Auto Assign OFF — rider manual assign hoga',
-      );
-      await Promise.all([loadRiders(), loadOrders()]);
-    } catch (error: any) {
-      console.error('Failed to update auto assign:', error);
-      toast.error(error?.response?.data?.detail || 'Auto Assign setting save nahi hui');
-    } finally {
-      setAutoAssignLoading(false);
     }
   }
 
@@ -320,52 +236,35 @@ export default function AdminOrders() {
       toast.error('Please select a rider');
       return;
     }
-    // Prefer structured GPS/address; keep notes fallback for old orders.
-    let lat = Number(order.customer_lat);
-    let lng = Number(order.customer_lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+)\s*,\s*([-\d.]+)/i);
-      lat = gpsMatch ? Number(gpsMatch[1]) : NaN;
-      lng = gpsMatch ? Number(gpsMatch[2]) : NaN;
+    // Parse GPS from order notes
+    let lat: number | null = null;
+    let lng: number | null = null;
+    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
+    if (gpsMatch) {
+      lat = parseFloat(gpsMatch[1]);
+      lng = parseFloat(gpsMatch[2]);
     }
-    let address = String(order.customer_address || '').trim();
-    if (!address) {
-      const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/i);
-      if (addrMatch) address = addrMatch[1].trim();
-    }
+    // Parse address from order notes
+    let address = '';
+    const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/);
+    if (addrMatch) address = addrMatch[1].trim();
 
     try {
-      const existingAssignment = assignments[order.id];
-      const existingActive = existingAssignment && !['rejected', 'delivered'].includes(String(existingAssignment.status).toLowerCase());
-
-      if (existingActive && existingAssignment.rider_id !== Number(selectedRider)) {
-        await adminRequest(
-          '/api/v1/rider/admin/reassign',
-          'POST',
-          { assignment_id: existingAssignment.id, new_rider_id: Number(selectedRider) },
-        );
-        toast.success(`Order #${order.id} ka rider change ho gaya`);
-      } else {
-        const payload = await adminRequest<{ assignment?: AssignmentInfo }>(
-          '/api/v1/rider/admin/assign',
-          'POST',
-          {
-            order_id: order.id,
-            rider_id: Number(selectedRider),
-            customer_lat: Number.isFinite(lat) ? lat : null,
-            customer_lng: Number.isFinite(lng) ? lng : null,
-            customer_address: address,
-            customer_name: order.customer_name,
-            customer_phone: order.customer_phone,
-            delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
-          },
-        );
-        if (payload?.assignment?.order_id) {
-          setAssignments((current) => ({ ...current, [Number(payload.assignment!.order_id)]: payload.assignment! }));
-        }
-        toast.success(`Order #${order.id} rider ko assign ho gaya`);
-      }
-
+      await adminRequest(
+        '/api/v1/rider/admin/assign',
+        'POST',
+        {
+          order_id: order.id,
+          rider_id: Number(selectedRider),
+          customer_lat: lat,
+          customer_lng: lng,
+          customer_address: address,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
+        },
+      );
+      toast.success(`Order #${order.id} rider ko assign ho gaya`);
       setAssigningOrder(null);
       setSelectedRider('');
       await loadRiders();
@@ -385,28 +284,24 @@ export default function AdminOrders() {
 
   function checkAuthAndLoad() {
     const auth = localStorage.getItem('admin_auth');
-    const token = getStoredAdminToken();
-
-    if (!auth || !token) {
-      navigate('/admin', { replace: true });
+    if (!auth) {
+      navigate('/admin');
       setLoading(false);
       return;
     }
-
     try {
       const parsed = JSON.parse(auth);
       if (!parsed.loggedIn) {
-        navigate('/admin', { replace: true });
+        navigate('/admin');
         setLoading(false);
         return;
       }
     } catch {
-      navigate('/admin', { replace: true });
+      navigate('/admin');
       setLoading(false);
       return;
     }
-
-    void loadOrders();
+    loadOrders();
     setLoading(false);
   }
 
@@ -600,7 +495,7 @@ export default function AdminOrders() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-green-400">RIDER FLOW FINAL</span></h1>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FINAL V5</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
               Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
             </p>
@@ -623,35 +518,6 @@ export default function AdminOrders() {
               </span>
             )}
           </div>
-        </div>
-
-        <div className={`mb-4 rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center gap-3 justify-between ${
-          autoAssignEnabled
-            ? 'border-green-600/40 bg-green-600/10'
-            : 'border-gray-800 bg-gray-900'
-        }`}>
-          <div className="flex items-start gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${autoAssignEnabled ? 'bg-green-600/20' : 'bg-gray-800'}`}>
-              <Zap className={`w-5 h-5 ${autoAssignEnabled ? 'text-green-400' : 'text-gray-500'}`} />
-            </div>
-            <div>
-              <p className="text-white font-semibold text-sm">Automatic Nearest Rider</p>
-              <p className="text-gray-400 text-xs mt-0.5">
-                {autoAssignEnabled
-                  ? 'ON: delivery order aate hi available nearest rider ko milega.'
-                  : 'OFF: Admin har delivery order ka rider manually select karega.'}
-              </p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            onClick={() => void toggleAutoAssign()}
-            disabled={autoAssignLoading}
-            className={autoAssignEnabled ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}
-          >
-            {autoAssignLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Zap className="w-4 h-4 mr-2" />}
-            Auto Assign {autoAssignEnabled ? 'ON' : 'OFF'}
-          </Button>
         </div>
 
         {/* Filters */}
@@ -732,48 +598,13 @@ export default function AdminOrders() {
                 )}
 
                 {/* Assign to Rider (for delivery orders) */}
-                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (() => {
-                  const assignment = assignments[order.id];
-                  const activeAssignment = assignment && !['rejected', 'delivered'].includes(String(assignment.status));
-                  if (activeAssignment && assigningOrder !== order.id) {
-                    const canChangeRider = ['assigned', 'accepted'].includes(String(assignment.status).toLowerCase());
-                    return (
-                      <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-2 text-blue-300 text-sm font-semibold">
-                              <Bike className="w-4 h-4" /> {assignment.rider_name}
-                            </div>
-                            {assignment.rider_phone && (
-                              <a href={`tel:${assignment.rider_phone}`} className="text-blue-200 text-xs mt-1 block hover:underline">
-                                {assignment.rider_phone}
-                              </a>
-                            )}
-                            <p className="text-blue-400/80 text-xs mt-1">Rider status: {String(assignment.status).replaceAll('_', ' ')}</p>
-                          </div>
-                          {canChangeRider && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => { setAssigningOrder(order.id); setSelectedRider(String(assignment.rider_id)); void loadRiders(); }}
-                              className="border-blue-600/40 text-blue-300 hover:bg-blue-600/10"
-                            >
-                              Change Rider
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return assigningOrder === order.id ? (
+                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (
+                  assigningOrder === order.id ? (
                     <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
-                      {assignment?.status === 'rejected' && (
-                        <p className="text-red-300 text-xs mb-2">Previous rider rejected. Reassign karein.</p>
-                      )}
                       <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
+                      {/* Rider cards with location info */}
                       <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                        {riders.filter(r => r.is_active !== false).map(r => {
+                        {riders.filter(r => r.is_active).map(r => {
                           const distance = getRiderDistance(r, order);
                           const locationAge = getLocationAge(r.location_updated_at);
                           const isSelected = selectedRider === String(r.id);
@@ -782,7 +613,9 @@ export default function AdminOrders() {
                               key={r.id}
                               onClick={() => setSelectedRider(String(r.id))}
                               className={`p-2 rounded-lg cursor-pointer border transition-colors ${
-                                isSelected ? 'border-blue-500 bg-blue-600/10' : 'border-gray-700 bg-gray-700/50 hover:border-gray-600'
+                                isSelected
+                                  ? 'border-blue-500 bg-blue-600/10'
+                                  : 'border-gray-700 bg-gray-700/50 hover:border-gray-600'
                               }`}
                             >
                               <div className="flex items-center justify-between">
@@ -797,15 +630,21 @@ export default function AdminOrders() {
                                 </div>
                                 {distance !== null && (
                                   <span className="text-green-400 text-xs font-medium">
-                                    <Navigation className="w-3 h-3 inline mr-0.5" />{distance} km
+                                    <Navigation className="w-3 h-3 inline mr-0.5" />
+                                    {distance} km
                                   </span>
                                 )}
                               </div>
                               <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
                                 <span>{r.phone}</span>
                                 {r.current_lat && r.current_lng ? (
-                                  <span className="flex items-center gap-0.5"><MapPin className="w-3 h-3 text-green-500" />{locationAge || 'Live'}</span>
-                                ) : <span className="text-gray-600">No GPS</span>}
+                                  <span className="flex items-center gap-0.5">
+                                    <MapPin className="w-3 h-3 text-green-500" />
+                                    {locationAge || 'Live'}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600">No GPS</span>
+                                )}
                               </div>
                             </div>
                           );
@@ -815,26 +654,25 @@ export default function AdminOrders() {
                         <Button size="sm" onClick={() => assignToRider(order)} disabled={!selectedRider} className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1">
                           Assign Selected
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">✕</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
+                          ✕
+                        </Button>
                       </div>
+                      {riders.filter(r => r.is_active).length === 0 && (
+                        <p className="text-gray-500 text-xs mt-2">No riders added. Go to Settings → Delivery Riders to add.</p>
+                      )}
                     </div>
                   ) : (
-                    <div className="mb-3 rounded-lg border border-amber-600/30 bg-amber-600/10 px-3 py-2">
-                      <p className="text-amber-300 text-sm font-semibold">Waiting Rider</p>
-                      <p className="text-amber-200/70 text-xs mt-0.5 mb-2">
-                        {autoAssignEnabled ? 'Auto Assign ON hai — available rider milte hi assign hoga.' : 'Manual mode — neeche se rider select karein.'}
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); void loadRiders(); }}
-                        className="border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
-                      >
-                        <Bike className="w-3 h-3 mr-1" /> {assignment?.status === 'rejected' ? 'Reassign Rider' : 'Assign Rider'}
-                      </Button>
-                    </div>
-                  );
-                })()}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); loadRiders(); }}
+                      className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
+                    >
+                      <Bike className="w-3 h-3 mr-1" /> Assign Rider
+                    </Button>
+                  )
+                )}
 
                 {/* Accept Order with Time Selection */}
                 {order.status === 'new' && acceptingOrder === order.id && (
