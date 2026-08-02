@@ -90,6 +90,15 @@ interface RiderInfo {
   active_deliveries?: number;
 }
 
+interface AssignmentInfo {
+  id: number;
+  order_id: number;
+  rider_id: number;
+  rider_name: string;
+  rider_phone?: string;
+  status: string;
+}
+
 const STATUS_OPTIONS = [
   { value: 'new', label: 'New Order', color: 'bg-blue-600' },
   { value: 'accepted', label: 'Accepted', color: 'bg-green-600' },
@@ -122,6 +131,7 @@ export default function AdminOrders() {
   const [acceptingOrder, setAcceptingOrder] = useState<number | null>(null);
   const [selectedTime, setSelectedTime] = useState<number>(20);
   const [riders, setRiders] = useState<RiderInfo[]>([]);
+  const [assignments, setAssignments] = useState<Record<number, AssignmentInfo>>({});
   const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
   const [selectedRider, setSelectedRider] = useState<string>('');
   const [deletingOrder, setDeletingOrder] = useState<number | null>(null);
@@ -213,21 +223,20 @@ export default function AdminOrders() {
 
   async function loadRiders() {
     try {
-      const payload = await adminRequest<{ items?: RiderInfo[] }>(
-        '/api/v1/rider/admin/locations',
-      );
-      setRiders(Array.isArray(payload?.items) ? payload.items : []);
-    } catch (error) {
-      console.error('Failed to load rider locations:', error);
-      try {
-        const payload = await adminRequest<{ items?: RiderInfo[] }>(
-          '/api/v1/rider/admin/list',
-        );
-        setRiders(Array.isArray(payload?.items) ? payload.items : []);
-      } catch (fallbackError) {
-        console.error('Failed to load riders:', fallbackError);
-        setRiders([]);
+      const [riderPayload, assignmentPayload] = await Promise.all([
+        adminRequest<{ items?: RiderInfo[] }>('/api/v1/rider/admin/locations')
+          .catch(() => adminRequest<{ items?: RiderInfo[] }>('/api/v1/rider/admin/list')),
+        adminRequest<{ items?: AssignmentInfo[] }>('/api/v1/rider/admin/assignments'),
+      ]);
+      setRiders(Array.isArray(riderPayload?.items) ? riderPayload.items : []);
+      const map: Record<number, AssignmentInfo> = {};
+      for (const assignment of assignmentPayload?.items || []) {
+        map[Number(assignment.order_id)] = assignment;
       }
+      setAssignments(map);
+    } catch (error) {
+      console.error('Failed to load rider data:', error);
+      setRiders([]);
     }
   }
 
@@ -598,13 +607,28 @@ export default function AdminOrders() {
                 )}
 
                 {/* Assign to Rider (for delivery orders) */}
-                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (
-                  assigningOrder === order.id ? (
+                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (() => {
+                  const assignment = assignments[order.id];
+                  const activeAssignment = assignment && !['rejected', 'delivered'].includes(String(assignment.status));
+                  if (activeAssignment) {
+                    return (
+                      <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2">
+                        <div className="flex items-center gap-2 text-blue-300 text-sm font-semibold">
+                          <Bike className="w-4 h-4" /> {assignment.rider_name}
+                        </div>
+                        <p className="text-blue-400/80 text-xs mt-1">Rider status: {String(assignment.status).replaceAll('_', ' ')}</p>
+                      </div>
+                    );
+                  }
+
+                  return assigningOrder === order.id ? (
                     <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
+                      {assignment?.status === 'rejected' && (
+                        <p className="text-red-300 text-xs mb-2">Previous rider rejected. Reassign karein.</p>
+                      )}
                       <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
-                      {/* Rider cards with location info */}
                       <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                        {riders.filter(r => r.is_active).map(r => {
+                        {riders.filter(r => r.is_active !== false).map(r => {
                           const distance = getRiderDistance(r, order);
                           const locationAge = getLocationAge(r.location_updated_at);
                           const isSelected = selectedRider === String(r.id);
@@ -613,9 +637,7 @@ export default function AdminOrders() {
                               key={r.id}
                               onClick={() => setSelectedRider(String(r.id))}
                               className={`p-2 rounded-lg cursor-pointer border transition-colors ${
-                                isSelected
-                                  ? 'border-blue-500 bg-blue-600/10'
-                                  : 'border-gray-700 bg-gray-700/50 hover:border-gray-600'
+                                isSelected ? 'border-blue-500 bg-blue-600/10' : 'border-gray-700 bg-gray-700/50 hover:border-gray-600'
                               }`}
                             >
                               <div className="flex items-center justify-between">
@@ -630,21 +652,15 @@ export default function AdminOrders() {
                                 </div>
                                 {distance !== null && (
                                   <span className="text-green-400 text-xs font-medium">
-                                    <Navigation className="w-3 h-3 inline mr-0.5" />
-                                    {distance} km
+                                    <Navigation className="w-3 h-3 inline mr-0.5" />{distance} km
                                   </span>
                                 )}
                               </div>
                               <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
                                 <span>{r.phone}</span>
                                 {r.current_lat && r.current_lng ? (
-                                  <span className="flex items-center gap-0.5">
-                                    <MapPin className="w-3 h-3 text-green-500" />
-                                    {locationAge || 'Live'}
-                                  </span>
-                                ) : (
-                                  <span className="text-gray-600">No GPS</span>
-                                )}
+                                  <span className="flex items-center gap-0.5"><MapPin className="w-3 h-3 text-green-500" />{locationAge || 'Live'}</span>
+                                ) : <span className="text-gray-600">No GPS</span>}
                               </div>
                             </div>
                           );
@@ -654,25 +670,20 @@ export default function AdminOrders() {
                         <Button size="sm" onClick={() => assignToRider(order)} disabled={!selectedRider} className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1">
                           Assign Selected
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
-                          ✕
-                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">✕</Button>
                       </div>
-                      {riders.filter(r => r.is_active).length === 0 && (
-                        <p className="text-gray-500 text-xs mt-2">No riders added. Go to Settings → Delivery Riders to add.</p>
-                      )}
                     </div>
                   ) : (
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); loadRiders(); }}
+                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); void loadRiders(); }}
                       className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
                     >
-                      <Bike className="w-3 h-3 mr-1" /> Assign Rider
+                      <Bike className="w-3 h-3 mr-1" /> {assignment?.status === 'rejected' ? 'Reassign Rider' : 'Assign Rider'}
                     </Button>
-                  )
-                )}
+                  );
+                })()}
 
                 {/* Accept Order with Time Selection */}
                 {order.status === 'new' && acceptingOrder === order.id && (

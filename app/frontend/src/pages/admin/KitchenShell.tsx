@@ -3,6 +3,7 @@ import {
   CalendarDays,
   ClipboardList,
   History,
+  Settings,
   UtensilsCrossed,
 } from 'lucide-react';
 
@@ -10,7 +11,7 @@ import KitchenHistoryPanel from './KitchenHistoryPanel';
 import KitchenMenuPanel from './KitchenMenuPanel';
 import KitchenOrders from './KitchenOrders';
 
-type KitchenTab = 'live' | 'today' | 'yesterday' | 'menu';
+type KitchenTab = 'live' | 'today' | 'yesterday' | 'menu' | 'admin';
 
 const HistoryPanel =
   KitchenHistoryPanel as ComponentType<Record<string, unknown>>;
@@ -40,6 +41,11 @@ const tabs: Array<{
     label: 'Menu',
     icon: UtensilsCrossed,
   },
+  {
+    key: 'admin',
+    label: 'Admin',
+    icon: Settings,
+  },
 ];
 
 export default function KitchenShell() {
@@ -49,7 +55,7 @@ export default function KitchenShell() {
   return (
     <div className="min-h-screen bg-gray-950">
       <div className="sticky top-0 z-50 border-b border-gray-800 bg-gray-950/95 px-2 py-2 backdrop-blur">
-        <div className="mx-auto grid max-w-6xl grid-cols-4 gap-1">
+        <div className="mx-auto grid max-w-6xl grid-cols-5 gap-1">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.key;
@@ -58,7 +64,13 @@ export default function KitchenShell() {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => {
+                  if (tab.key === 'admin') {
+                    window.location.href = '/admin/dashboard';
+                    return;
+                  }
+                  setActiveTab(tab.key);
+                }}
                 className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1 py-2.5 text-[10px] font-semibold transition-colors sm:flex-row sm:text-xs ${
                   active
                     ? 'bg-yellow-500 text-black'

@@ -64,6 +64,7 @@ export default function AdminFeesSettings() {
         small_order_fee_threshold: String(
           settings.small_order_fee_threshold || 20,
         ),
+        tax_percent: String(settings.tax_percent ?? current.tax_percent),
       }));
     } catch (error) {
       console.error(error);
@@ -95,6 +96,7 @@ export default function AdminFeesSettings() {
           form.small_order_fee_threshold,
           20,
         ),
+        tax_percent: Math.max(0, Math.min(100, numberValue(form.tax_percent))),
       });
 
       saveExtendedSettings(form);
@@ -300,9 +302,8 @@ export default function AdminFeesSettings() {
             }
             className="bg-gray-800 border-gray-700 text-white mt-1 w-32"
           />
-          <p className="text-yellow-400/80 text-xs mt-2">
-            This keeps the existing local VAT setting. Confirm checkout
-            calculation separately before using it for tax filing.
+          <p className="text-gray-500 text-xs mt-2">
+            This percentage is now shown and calculated in customer checkout.
           </p>
         </Card>
 

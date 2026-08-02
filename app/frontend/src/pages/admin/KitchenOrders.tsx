@@ -4,6 +4,7 @@ import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
 import {
   Bell,
+  Bike,
   Check,
   ChefHat,
   Clock,
@@ -49,6 +50,7 @@ type KitchenOrder = Order & {
   order_type?: string;
   service_fee?: number | string;
   small_order_fee?: number | string;
+  tax_amount?: number | string;
   delivery_charge?: number | string;
   tip_amount?: number | string;
 };
@@ -70,6 +72,23 @@ type ReceiptSettings = {
   paper_cut?: boolean;
 };
 
+type RiderInfo = {
+  id: number;
+  name: string;
+  phone: string;
+  is_active?: boolean;
+  active_deliveries?: number;
+};
+
+type AssignmentInfo = {
+  id: number;
+  order_id: number;
+  rider_id: number;
+  rider_name: string;
+  rider_phone?: string;
+  status: string;
+};
+
 type ParsedItem = {
   name: string;
   quantity: number;
@@ -80,7 +99,7 @@ type ParsedItem = {
 };
 
 const TIME_OPTIONS = [10, 15, 20, 30, 45];
-const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
+const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready', 'out_for_delivery']);
 const DELIVERY_PENDING_STATUSES = new Set([
   'out_for_delivery',
   'picked_up',
@@ -293,6 +312,10 @@ export default function KitchenOrders() {
     auto_print_on_accept: true,
     restaurant_name: 'Fai Fai Juice',
   });
+  const [riders, setRiders] = useState<RiderInfo[]>([]);
+  const [assignments, setAssignments] = useState<Record<number, AssignmentInfo>>({});
+  const [selectedRiders, setSelectedRiders] = useState<Record<number, string>>({});
+  const [assigningRiderOrder, setAssigningRiderOrder] = useState<number | null>(null);
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
@@ -324,6 +347,24 @@ export default function KitchenOrders() {
       // Defaults remain available; receipt settings failure must never blank Kitchen.
     }
   }, []);
+
+  const loadRiderData = useCallback(async () => {
+    try {
+      const [ridersResponse, assignmentsResponse] = await Promise.all([
+        axios.get(`${getAPIBaseURL()}/api/v1/rider/admin/locations`, { headers: kitchenHeaders(), timeout: 12000 }),
+        axios.get(`${getAPIBaseURL()}/api/v1/rider/admin/assignments`, { headers: kitchenHeaders(), timeout: 12000 }),
+      ]);
+      setRiders(Array.isArray(ridersResponse.data?.items) ? ridersResponse.data.items : []);
+      const map: Record<number, AssignmentInfo> = {};
+      for (const assignment of assignmentsResponse.data?.items || []) {
+        const orderId = Number(assignment?.order_id || 0);
+        if (orderId > 0) map[orderId] = assignment as AssignmentInfo;
+      }
+      setAssignments(map);
+    } catch (error) {
+      console.error('Rider data loading failed:', error);
+    }
+  }, [kitchenHeaders]);
 
   const loadOrders = useCallback(async () => {
     if (loadInProgressRef.current) return;
@@ -396,9 +437,13 @@ export default function KitchenOrders() {
   useEffect(() => {
     if (!authenticated) return;
     void loadOrders();
-    const timer = setInterval(() => void loadOrders(), 8000);
+    void loadRiderData();
+    const timer = setInterval(() => {
+      void loadOrders();
+      void loadRiderData();
+    }, 8000);
     return () => clearInterval(timer);
-  }, [authenticated, loadOrders]);
+  }, [authenticated, loadOrders, loadRiderData]);
 
   async function handlePinLogin(event: FormEvent) {
     event.preventDefault();
@@ -560,6 +605,53 @@ export default function KitchenOrders() {
     }
   }
 
+  async function assignRider(order: KitchenOrder) {
+    const riderId = Number(selectedRiders[order.id] || 0);
+    if (!riderId) {
+      toast.error('Rider select karein');
+      return;
+    }
+
+    let latitude = Number(order.customer_lat);
+    let longitude = Number(order.customer_lng);
+    let address = String(order.customer_address || '');
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      const gpsMatch = String(order.order_notes || '').match(/GPS:\s*([-\d.]+),([-\d.]+)/i);
+      latitude = gpsMatch ? Number(gpsMatch[1]) : NaN;
+      longitude = gpsMatch ? Number(gpsMatch[2]) : NaN;
+    }
+    if (!address) {
+      const addressMatch = String(order.order_notes || '').match(/Delivery Address:\s*([^|]+)/i);
+      address = addressMatch?.[1]?.trim() || '';
+    }
+
+    setAssigningRiderOrder(order.id);
+    try {
+      await axios.post(
+        `${getAPIBaseURL()}/api/v1/rider/admin/assign`,
+        {
+          order_id: order.id,
+          rider_id: riderId,
+          customer_lat: Number.isFinite(latitude) ? latitude : null,
+          customer_lng: Number.isFinite(longitude) ? longitude : null,
+          customer_address: address,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          delivery_charge: Number(order.delivery_charge || 0),
+        },
+        { headers: kitchenHeaders(), timeout: 15000 },
+      );
+      toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      setSelectedRiders((current) => ({ ...current, [order.id]: '' }));
+      await loadRiderData();
+    } catch (error: any) {
+      toast.error(String(error?.response?.data?.detail || 'Rider assign nahi hua'));
+      await loadRiderData();
+    } finally {
+      setAssigningRiderOrder(null);
+    }
+  }
+
   function uaeDateKey(value: string | null | undefined): string {
     if (!value) return '';
     const date = new Date(value);
@@ -592,12 +684,7 @@ export default function KitchenOrders() {
   );
 
   const terminalOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          ['completed', 'cancelled'].includes(order.status) ||
-          DELIVERY_PENDING_STATUSES.has(order.status)
-      ),
+    () => orders.filter((order) => ['completed', 'cancelled'].includes(order.status)),
     [orders]
   );
 
@@ -625,6 +712,10 @@ export default function KitchenOrders() {
   );
   const readyDeliveryOrders = useMemo(
     () => activeOrders.filter((order) => order.status === 'ready' && isDeliveryOrder(order)),
+    [activeOrders]
+  );
+  const deliveryInTransitOrders = useMemo(
+    () => activeOrders.filter((order) => order.status === 'out_for_delivery' && isDeliveryOrder(order)),
     [activeOrders]
   );
 
@@ -674,7 +765,7 @@ export default function KitchenOrders() {
     ));
   }
 
-  function OrderCard({ order, section }: { order: KitchenOrder; section: 'new' | 'progress' | 'ready' }) {
+  function OrderCard({ order, section }: { order: KitchenOrder; section: 'new' | 'progress' | 'ready' | 'delivery' }) {
     return (
       <Card className="bg-gray-900 border-gray-800 p-3">
         <div className="flex items-center justify-between mb-2">
@@ -814,15 +905,48 @@ export default function KitchenOrders() {
 
         {section === 'ready' && (
           <div className="grid grid-cols-2 gap-2">
-            {isDeliveryOrder(order) ? (
-              <Button
-                type="button"
-                disabled
-                className="bg-blue-950 text-blue-300 border border-blue-700/50 disabled:opacity-100"
-              >
-                Waiting for Rider
-              </Button>
-            ) : (
+            {isDeliveryOrder(order) ? (() => {
+              const assignment = assignments[order.id];
+              const activeAssignment = assignment && !['rejected', 'delivered'].includes(String(assignment.status));
+              if (activeAssignment) {
+                return (
+                  <div className="col-span-2 rounded-lg border border-blue-700/40 bg-blue-950/50 p-2">
+                    <div className="flex items-center gap-2 text-blue-300 text-sm font-semibold">
+                      <Bike className="w-4 h-4" /> {assignment.rider_name}
+                    </div>
+                    <p className="text-blue-400/80 text-xs mt-1">Rider status: {String(assignment.status).replaceAll('_', ' ')}</p>
+                  </div>
+                );
+              }
+              return (
+                <div className="col-span-2 space-y-2">
+                  {assignment?.status === 'rejected' && (
+                    <p className="text-red-300 text-xs">Previous rider rejected. Dusra rider select karein.</p>
+                  )}
+                  <select
+                    value={selectedRiders[order.id] || ''}
+                    onChange={(event) => setSelectedRiders((current) => ({ ...current, [order.id]: event.target.value }))}
+                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
+                  >
+                    <option value="">Select Rider</option>
+                    {riders.filter((rider) => rider.is_active !== false).map((rider) => (
+                      <option key={rider.id} value={rider.id}>
+                        {rider.name}{Number(rider.active_deliveries || 0) > 0 ? ` (${rider.active_deliveries} active)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    type="button"
+                    onClick={() => void assignRider(order)}
+                    disabled={!selectedRiders[order.id] || assigningRiderOrder === order.id}
+                    className="w-full bg-blue-600 hover:bg-blue-700"
+                  >
+                    <Bike className="w-4 h-4 mr-1" />
+                    {assigningRiderOrder === order.id ? 'Assigning...' : 'Assign Rider'}
+                  </Button>
+                </div>
+              );
+            })() : (
               <Button
                 onClick={() => void updateOrderStatus(order, 'completed')}
                 className="bg-gray-700 hover:bg-gray-600"
@@ -837,13 +961,31 @@ export default function KitchenOrders() {
 
             {isDeliveryOrder(order) && (
               <p className="col-span-2 text-[11px] text-blue-300 bg-blue-600/10 border border-blue-600/20 rounded-lg px-2 py-1.5">
-                Rider Picked Up karega to order Kitchen se hat kar Today me
-                Delivery Pending show hoga. Sirf Rider Delivered karega to
-                Completed hoga.
+                Rider Picked Up ke baad order Live Kitchen ke “ON DELIVERY” column me rahega. Sirf Rider Delivered karega to Today Completed me jayega.
               </p>
             )}
           </div>
         )}
+
+        {section === 'delivery' && (() => {
+          const assignment = assignments[order.id];
+          return (
+            <div className="space-y-2">
+              <div className="rounded-lg border border-cyan-700/40 bg-cyan-950/40 p-2">
+                <p className="text-cyan-300 text-sm font-semibold flex items-center gap-2">
+                  <Bike className="w-4 h-4" /> ON DELIVERY
+                </p>
+                <p className="text-cyan-400/80 text-xs mt-1">
+                  {assignment ? `${assignment.rider_name} · ${String(assignment.status).replaceAll('_', ' ')}` : 'Rider delivery in progress'}
+                </p>
+                <p className="text-gray-500 text-[11px] mt-1">Delivered hone tak yahan rahega.</p>
+              </div>
+              <Button variant="outline" onClick={() => printReceipt(order, true)} className="w-full">
+                <Printer className="w-4 h-4 mr-1" /> Reprint
+              </Button>
+            </div>
+          );
+        })()}
       </Card>
     );
   }
@@ -868,7 +1010,7 @@ export default function KitchenOrders() {
 
         {historyOrders.length === 0 ? (
           <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
-            Is din koi completed, delivery pending ya cancelled order nahi hai.
+            Is din koi completed ya cancelled order nahi hai.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -1034,7 +1176,7 @@ export default function KitchenOrders() {
         )}
 
         {viewMode === 'live' ? (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
             <Column title="NEW" count={newOrders.length} dotClass="bg-blue-600" emptyText="No new orders">
               {newOrders.map((order) => <OrderCard key={order.id} order={order} section="new" />)}
             </Column>
@@ -1049,6 +1191,10 @@ export default function KitchenOrders() {
 
             <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-600" emptyText="No delivery orders ready">
               {readyDeliveryOrders.map((order) => <OrderCard key={order.id} order={order} section="ready" />)}
+            </Column>
+
+            <Column title="ON DELIVERY" count={deliveryInTransitOrders.length} dotClass="bg-cyan-500" emptyText="No orders on delivery">
+              {deliveryInTransitOrders.map((order) => <OrderCard key={order.id} order={order} section="delivery" />)}
             </Column>
           </div>
         ) : (
