@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
+import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send, Zap, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
-import { ADMIN_TOKEN_KEY, clearAdminSession } from '@/lib/admin-control';
+import { ADMIN_TOKEN_KEY } from '@/lib/admin-control';
 
 
 type AdminOrder = Order & {
@@ -148,6 +148,8 @@ export default function AdminOrders() {
   const [addingNote, setAddingNote] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
+  const [autoAssignLoading, setAutoAssignLoading] = useState(false);
 
   // Track recently updated order IDs to prevent poll from reverting optimistic updates
   const recentlyUpdatedRef = useRef<Map<number, number>>(new Map());
@@ -204,20 +206,13 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
-        if (adminToken) {
-          clearAdminSession();
-          toast.error('Admin session expire ho gayi. Dobara login karein.');
-          navigate('/admin');
+        localStorage.removeItem('kitchen_pin');
+        const pin = askAndSavePanelPin();
+        if (pin) {
+          toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
+          setTimeout(() => void loadOrders(true), 100);
         } else {
-          localStorage.removeItem('kitchen_pin');
-          const pin = askAndSavePanelPin();
-          if (pin) {
-            toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
-            setTimeout(() => void loadOrders(true), 100);
-          } else {
-            toast.error('Admin login ya correct Kitchen PIN required hai.');
-          }
+          toast.error('Correct Kitchen PIN required hai.');
         }
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
@@ -229,9 +224,11 @@ export default function AdminOrders() {
 
   useEffect(() => {
     checkAuthAndLoad();
-    loadRiders();
+    void loadRiders();
+    void loadAutoAssignSetting();
     const interval = setInterval(() => {
-      loadOrders();
+      void loadOrders();
+      void loadRiders();
     }, 8000);
     return () => clearInterval(interval);
   }, []);
@@ -255,40 +252,92 @@ export default function AdminOrders() {
     }
   }
 
+  async function loadAutoAssignSetting() {
+    try {
+      const payload = await adminRequest<{ enabled?: boolean }>('/api/v1/rider/admin/auto-assign');
+      setAutoAssignEnabled(Boolean(payload?.enabled));
+    } catch (error) {
+      console.error('Failed to load auto assign setting:', error);
+    }
+  }
+
+  async function toggleAutoAssign() {
+    const nextEnabled = !autoAssignEnabled;
+    setAutoAssignLoading(true);
+    try {
+      const payload = await adminRequest<{ enabled?: boolean; assigned_count?: number }>(
+        '/api/v1/rider/admin/auto-assign',
+        'PUT',
+        { enabled: nextEnabled },
+      );
+      const enabled = Boolean(payload?.enabled);
+      setAutoAssignEnabled(enabled);
+      const assignedCount = Number(payload?.assigned_count || 0);
+      toast.success(
+        enabled
+          ? `Auto Assign ON${assignedCount > 0 ? ` — ${assignedCount} waiting order assigned` : ''}`
+          : 'Auto Assign OFF — rider manual assign hoga',
+      );
+      await Promise.all([loadRiders(), loadOrders()]);
+    } catch (error: any) {
+      console.error('Failed to update auto assign:', error);
+      toast.error(error?.response?.data?.detail || 'Auto Assign setting save nahi hui');
+    } finally {
+      setAutoAssignLoading(false);
+    }
+  }
+
   async function assignToRider(order: Order) {
     if (!selectedRider) {
       toast.error('Please select a rider');
       return;
     }
-    // Parse GPS from order notes
-    let lat: number | null = null;
-    let lng: number | null = null;
-    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
-    if (gpsMatch) {
-      lat = parseFloat(gpsMatch[1]);
-      lng = parseFloat(gpsMatch[2]);
+    // Prefer structured GPS/address; keep notes fallback for old orders.
+    let lat = Number(order.customer_lat);
+    let lng = Number(order.customer_lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+)\s*,\s*([-\d.]+)/i);
+      lat = gpsMatch ? Number(gpsMatch[1]) : NaN;
+      lng = gpsMatch ? Number(gpsMatch[2]) : NaN;
     }
-    // Parse address from order notes
-    let address = '';
-    const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/);
-    if (addrMatch) address = addrMatch[1].trim();
+    let address = String(order.customer_address || '').trim();
+    if (!address) {
+      const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/i);
+      if (addrMatch) address = addrMatch[1].trim();
+    }
 
     try {
-      await adminRequest(
-        '/api/v1/rider/admin/assign',
-        'POST',
-        {
-          order_id: order.id,
-          rider_id: Number(selectedRider),
-          customer_lat: lat,
-          customer_lng: lng,
-          customer_address: address,
-          customer_name: order.customer_name,
-          customer_phone: order.customer_phone,
-          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
-        },
-      );
-      toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      const existingAssignment = assignments[order.id];
+      const existingActive = existingAssignment && !['rejected', 'delivered'].includes(String(existingAssignment.status).toLowerCase());
+
+      if (existingActive && existingAssignment.rider_id !== Number(selectedRider)) {
+        await adminRequest(
+          '/api/v1/rider/admin/reassign',
+          'POST',
+          { assignment_id: existingAssignment.id, new_rider_id: Number(selectedRider) },
+        );
+        toast.success(`Order #${order.id} ka rider change ho gaya`);
+      } else {
+        const payload = await adminRequest<{ assignment?: AssignmentInfo }>(
+          '/api/v1/rider/admin/assign',
+          'POST',
+          {
+            order_id: order.id,
+            rider_id: Number(selectedRider),
+            customer_lat: Number.isFinite(lat) ? lat : null,
+            customer_lng: Number.isFinite(lng) ? lng : null,
+            customer_address: address,
+            customer_name: order.customer_name,
+            customer_phone: order.customer_phone,
+            delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
+          },
+        );
+        if (payload?.assignment?.order_id) {
+          setAssignments((current) => ({ ...current, [Number(payload.assignment!.order_id)]: payload.assignment! }));
+        }
+        toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      }
+
       setAssigningOrder(null);
       setSelectedRider('');
       await loadRiders();
@@ -519,7 +568,7 @@ export default function AdminOrders() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FINAL V5</span></h1>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-green-400">RIDER FLOW FINAL</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
               Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
             </p>
@@ -542,6 +591,35 @@ export default function AdminOrders() {
               </span>
             )}
           </div>
+        </div>
+
+        <div className={`mb-4 rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center gap-3 justify-between ${
+          autoAssignEnabled
+            ? 'border-green-600/40 bg-green-600/10'
+            : 'border-gray-800 bg-gray-900'
+        }`}>
+          <div className="flex items-start gap-3">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${autoAssignEnabled ? 'bg-green-600/20' : 'bg-gray-800'}`}>
+              <Zap className={`w-5 h-5 ${autoAssignEnabled ? 'text-green-400' : 'text-gray-500'}`} />
+            </div>
+            <div>
+              <p className="text-white font-semibold text-sm">Automatic Nearest Rider</p>
+              <p className="text-gray-400 text-xs mt-0.5">
+                {autoAssignEnabled
+                  ? 'ON: delivery order aate hi available nearest rider ko milega.'
+                  : 'OFF: Admin har delivery order ka rider manually select karega.'}
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            onClick={() => void toggleAutoAssign()}
+            disabled={autoAssignLoading}
+            className={autoAssignEnabled ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}
+          >
+            {autoAssignLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Zap className="w-4 h-4 mr-2" />}
+            Auto Assign {autoAssignEnabled ? 'ON' : 'OFF'}
+          </Button>
         </div>
 
         {/* Filters */}
@@ -625,13 +703,33 @@ export default function AdminOrders() {
                 {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (() => {
                   const assignment = assignments[order.id];
                   const activeAssignment = assignment && !['rejected', 'delivered'].includes(String(assignment.status));
-                  if (activeAssignment) {
+                  if (activeAssignment && assigningOrder !== order.id) {
+                    const canChangeRider = ['assigned', 'accepted'].includes(String(assignment.status).toLowerCase());
                     return (
                       <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2">
-                        <div className="flex items-center gap-2 text-blue-300 text-sm font-semibold">
-                          <Bike className="w-4 h-4" /> {assignment.rider_name}
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2 text-blue-300 text-sm font-semibold">
+                              <Bike className="w-4 h-4" /> {assignment.rider_name}
+                            </div>
+                            {assignment.rider_phone && (
+                              <a href={`tel:${assignment.rider_phone}`} className="text-blue-200 text-xs mt-1 block hover:underline">
+                                {assignment.rider_phone}
+                              </a>
+                            )}
+                            <p className="text-blue-400/80 text-xs mt-1">Rider status: {String(assignment.status).replaceAll('_', ' ')}</p>
+                          </div>
+                          {canChangeRider && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => { setAssigningOrder(order.id); setSelectedRider(String(assignment.rider_id)); void loadRiders(); }}
+                              className="border-blue-600/40 text-blue-300 hover:bg-blue-600/10"
+                            >
+                              Change Rider
+                            </Button>
+                          )}
                         </div>
-                        <p className="text-blue-400/80 text-xs mt-1">Rider status: {String(assignment.status).replaceAll('_', ' ')}</p>
                       </div>
                     );
                   }
@@ -689,14 +787,20 @@ export default function AdminOrders() {
                       </div>
                     </div>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); void loadRiders(); }}
-                      className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
-                    >
-                      <Bike className="w-3 h-3 mr-1" /> {assignment?.status === 'rejected' ? 'Reassign Rider' : 'Assign Rider'}
-                    </Button>
+                    <div className="mb-3 rounded-lg border border-amber-600/30 bg-amber-600/10 px-3 py-2">
+                      <p className="text-amber-300 text-sm font-semibold">Waiting Rider</p>
+                      <p className="text-amber-200/70 text-xs mt-0.5 mb-2">
+                        {autoAssignEnabled ? 'Auto Assign ON hai — available rider milte hi assign hoga.' : 'Manual mode — neeche se rider select karein.'}
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); void loadRiders(); }}
+                        className="border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
+                      >
+                        <Bike className="w-3 h-3 mr-1" /> {assignment?.status === 'rejected' ? 'Reassign Rider' : 'Assign Rider'}
+                      </Button>
+                    </div>
                   );
                 })()}
 
