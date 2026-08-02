@@ -43,6 +43,19 @@ function adminHeaders() {
   };
 }
 
+function askAndSavePanelPin(): string | null {
+  const entered = window.prompt(
+    'Admin Orders ke liye Kitchen PIN enter karein. Ye Render KITCHEN_PIN ke same hona chahiye.',
+    localStorage.getItem('kitchen_pin') || '',
+  );
+
+  const pin = String(entered || '').trim();
+  if (!pin) return null;
+
+  localStorage.setItem('kitchen_pin', pin);
+  return pin;
+}
+
 async function adminRequest<T>(
   path: string,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
@@ -173,7 +186,14 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Admin Settings ka Kitchen PIN backend KITCHEN_PIN ke same rakhein.');
+        localStorage.removeItem('kitchen_pin');
+        const pin = askAndSavePanelPin();
+        if (pin) {
+          toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
+          setTimeout(() => void loadOrders(true), 100);
+        } else {
+          toast.error('Kitchen PIN ke baghair Admin Orders load nahi honge.');
+        }
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
@@ -467,7 +487,7 @@ export default function AdminOrders() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Order Management</h1>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FLOW V3</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
               Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
             </p>
