@@ -565,9 +565,9 @@ export default function RiderPanel() {
 
   function getNextStatus(current: string): { label: string; value: string } | null {
     switch (current) {
-      case 'accepted': return { label: '🏪 Picked Up', value: 'picked_up' };
-      case 'picked_up': return { label: '🚗 On the Way', value: 'on_the_way' };
-      case 'on_the_way': return { label: '✅ Delivered', value: 'delivered' };
+      case 'accepted': return { label: '🏪 Picked Up from Kitchen', value: 'picked_up' };
+      case 'picked_up': return { label: '✅ Delivered to Customer', value: 'delivered' };
+      case 'on_the_way': return { label: '✅ Delivered to Customer', value: 'delivered' };
       default: return null;
     }
   }
@@ -581,7 +581,7 @@ export default function RiderPanel() {
             <div className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Bike className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-[10px] text-emerald-400">FINAL V5</span></h1>
+            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-[10px] text-emerald-400">FINAL RIDER FLOW</span></h1>
             <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
