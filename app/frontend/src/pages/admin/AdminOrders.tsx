@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import { ADMIN_TOKEN_KEY, clearAdminSession } from '@/lib/admin-control';
 
 
 type AdminOrder = Order & {
@@ -36,11 +37,18 @@ function getPanelPin(): string {
   return '1122';
 }
 
-function adminHeaders() {
-  return {
+function adminHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Kitchen-Pin': getPanelPin(),
   };
+
+  const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
+  if (adminToken) {
+    headers.Authorization = `Bearer ${adminToken}`;
+  }
+
+  return headers;
 }
 
 function askAndSavePanelPin(): string | null {
@@ -196,13 +204,20 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        localStorage.removeItem('kitchen_pin');
-        const pin = askAndSavePanelPin();
-        if (pin) {
-          toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
-          setTimeout(() => void loadOrders(true), 100);
+        const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
+        if (adminToken) {
+          clearAdminSession();
+          toast.error('Admin session expire ho gayi. Dobara login karein.');
+          navigate('/admin');
         } else {
-          toast.error('Kitchen PIN ke baghair Admin Orders load nahi honge.');
+          localStorage.removeItem('kitchen_pin');
+          const pin = askAndSavePanelPin();
+          if (pin) {
+            toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
+            setTimeout(() => void loadOrders(true), 100);
+          } else {
+            toast.error('Admin login ya correct Kitchen PIN required hai.');
+          }
         }
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
