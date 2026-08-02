@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import axios from 'axios';
 import { Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,12 +8,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes } from '@/lib/api';
+import { Category, MenuItem, Extra, RestaurantSettings, getItemSizes } from '@/lib/api';
 import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
+import { getAPIBaseURL } from '@/lib/config';
 
-const MENU_CACHE_KEY = 'vita_menu_cache';
+const MENU_CACHE_KEY = 'fai_menu_cache_render_v5';
 const MENU_CACHE_TTL = 120000; // 2 minutes
 
 interface MenuCache {
@@ -73,28 +75,53 @@ export default function Menu() {
 
   async function loadData() {
     try {
+      const base = getAPIBaseURL().replace(/\/$/, '');
+      const activeQuery = JSON.stringify({ is_active: true });
+
       const [catRes, itemRes, extrasRes, settingsRes] = await Promise.all([
-        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 50 }),
-        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
-        client.entities.extras.query({ query: { is_active: true }, limit: 50 }),
-        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
+        axios.get(`${base}/api/v1/entities/categories`, {
+          params: { query: activeQuery, sort: 'sort_order', limit: 50 },
+          timeout: 20000,
+        }),
+        axios.get(`${base}/api/v1/entities/menu_items`, {
+          params: { query: activeQuery, sort: 'sort_order', limit: 500 },
+          timeout: 20000,
+        }),
+        axios.get(`${base}/api/v1/entities/extras`, {
+          params: { query: activeQuery, sort: 'id', limit: 200 },
+          timeout: 20000,
+        }),
+        axios.get(`${base}/api/v1/entities/restaurant_settings`, {
+          params: { limit: 1 },
+          timeout: 20000,
+        }),
       ]);
-      
-      const cats = catRes?.data?.items || [];
-      const items = itemRes?.data?.items || [];
-      const ext = extrasRes?.data?.items || [];
-      const settingsData = settingsRes?.data?.items?.[0] || null;
+
+      const cats = (catRes.data?.items || []) as Category[];
+      const items = (itemRes.data?.items || []) as MenuItem[];
+      const ext = (extrasRes.data?.items || []) as Extra[];
+      const settingsData =
+        (settingsRes.data?.items?.[0] || null) as RestaurantSettings | null;
 
       setSettings(settingsData);
       setCategories(cats);
       setMenuItems(items);
       setExtras(ext);
-      if (cats.length > 0 && !activeCategory) setActiveCategory(cats[0].id);
 
-      // Update cache
+      if (cats.length > 0) {
+        setActiveCategory((current) =>
+          current && cats.some((category) => category.id === current)
+            ? current
+            : cats[0].id,
+        );
+      } else {
+        setActiveCategory(null);
+      }
+
       setMenuCache({ categories: cats, menuItems: items, extras: ext });
-    } catch (e) {
-      console.error('Failed to load menu:', e);
+    } catch (error) {
+      console.error('Failed to load menu from Render:', error);
+      toast.error('Menu load nahi hua. Page refresh karein.');
     }
   }
 
