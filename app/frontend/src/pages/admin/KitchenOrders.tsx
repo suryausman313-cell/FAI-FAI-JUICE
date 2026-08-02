@@ -1,4 +1,4 @@
-// FINAL V4 LIVE
+// FINAL V5 DELIVERY/RIDER FIX
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
@@ -299,7 +299,7 @@ export default function KitchenOrders() {
   const loadInProgressRef = useRef(false);
 
   const kitchenPin = useCallback(
-    () => localStorage.getItem('kitchen_pin') || '1234',
+    () => localStorage.getItem('kitchen_pin') || '1122',
     []
   );
 
@@ -1069,7 +1069,7 @@ export default function KitchenOrders() {
               <div className="flex items-center gap-2">
                 <ChefHat className="w-6 h-6 text-orange-500" />
                 <div>
-                  <p className="text-white font-bold">Fai Fai Kitchen <span className="text-[10px] text-blue-400">FINAL V4</span></p>
+                  <p className="text-white font-bold">Fai Fai Kitchen <span className="text-[10px] text-blue-400">FINAL V5</span></p>
                   <p className="text-gray-500 text-xs">Orders & history</p>
                 </div>
               </div>

@@ -88,6 +88,8 @@ function statusClasses(status: string): string {
       return 'bg-red-600/20 text-red-400 border-red-600/30';
     case 'ready':
       return 'bg-purple-600/20 text-purple-400 border-purple-600/30';
+    case 'out_for_delivery':
+      return 'bg-blue-700/20 text-blue-300 border-blue-700/30';
     case 'preparing':
       return 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30';
     case 'accepted':
@@ -107,6 +109,8 @@ function statusLabel(status: string): string {
       return 'PREPARING';
     case 'ready':
       return 'READY';
+    case 'out_for_delivery':
+      return 'DELIVERY PENDING';
     case 'completed':
       return 'COMPLETED';
     case 'cancelled':
@@ -145,7 +149,7 @@ export default function KitchenHistoryPanel({
 
   const loadOrders = useCallback(async (silent = false) => {
     const pin =
-      localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1234';
+      localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1122';
     const baseURL = getAPIBaseURL().replace(/\/$/, '');
 
     if (!silent) setRefreshing(true);
@@ -212,7 +216,7 @@ export default function KitchenHistoryPanel({
   ).length;
 
   const validSalesTotal = dayOrders
-    .filter(order => normalizedStatus(order.status) !== 'cancelled')
+    .filter(order => normalizedStatus(order.status) === 'completed')
     .reduce(
       (total, order) => total + Number(order.total_amount || 0),
       0,
@@ -277,7 +281,7 @@ export default function KitchenHistoryPanel({
               AED {formatMoney(validSalesTotal)}
             </p>
             <p className="text-gray-500 text-xs">
-              Non-Cancelled Total
+              Completed Sales
             </p>
           </Card>
         </div>

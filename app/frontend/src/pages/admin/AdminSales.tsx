@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import {
   ArrowLeft,
   Banknote,
@@ -25,7 +26,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 
 type FinancePeriod =
   | 'today'
@@ -147,7 +148,7 @@ function numeric(value: unknown): number {
 }
 
 function isCountedOrder(order: ReportOrder): boolean {
-  const status = String(order.status || '').toLowerCase().trim();
+  const status = String(order.status || '').toLowerCase();
   return status === 'completed';
 }
 
@@ -238,16 +239,14 @@ export default function AdminSales() {
     else setRefreshing(true);
 
     try {
+      const baseURL = getAPIBaseURL().replace(/\/$/, '');
+      const pin = localStorage.getItem('kitchen_pin') || '1122';
       const [summaryResult, ordersResult] = await Promise.allSettled([
-        client.apiCall.invoke({
-          url: summaryUrl(),
-          method: 'GET',
-          data: {},
-        }),
-        client.apiCall.invoke({
-          url: '/api/v1/admin/orders',
-          method: 'GET',
-          data: { sort: '-created_at', limit: 2000 },
+        axios.get(`${baseURL}${summaryUrl()}`, { timeout: 20000 }),
+        axios.get(`${baseURL}/api/v1/admin/orders`, {
+          params: { sort: '-created_at', limit: 2000 },
+          headers: { 'X-Kitchen-Pin': pin },
+          timeout: 20000,
         }),
       ]);
 
@@ -507,7 +506,7 @@ export default function AdminSales() {
           </Button>
 
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Sales & Reports</h1>
+            <h1 className="text-white text-2xl font-bold">Sales & Reports <span className="text-[10px] text-emerald-400">FINAL V5</span></h1>
             <p className="text-gray-500 text-xs mt-1">
               Complete Fai Fai revenue, fees, payment and rider report
             </p>

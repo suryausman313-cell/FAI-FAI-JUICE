@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,7 +8,26 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+
+
+type RiderAdminApiOptions = {
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  data?: unknown;
+};
+
+function riderAdminApi(options: RiderAdminApiOptions) {
+  return axios.request({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${options.url}`,
+    method: options.method,
+    data: options.data,
+    headers: {
+      'X-Kitchen-Pin': localStorage.getItem('kitchen_pin') || '1122',
+    },
+    timeout: 25000,
+  });
+}
 
 interface RiderReport {
   id: number;
@@ -81,7 +101,7 @@ export default function AdminRiders() {
 
   async function loadReports() {
     try {
-      const res = await client.apiCall.invoke({ url: '/api/v1/rider/admin/reports', method: 'GET' });
+      const res = await riderAdminApi({ url: '/api/v1/rider/admin/reports', method: 'GET' });
       setReports(res?.data?.items || []);
     } catch (e) {
       console.error('Failed to load rider reports:', e);
@@ -93,7 +113,7 @@ export default function AdminRiders() {
   async function addRider() {
     if (!newName || !newPhone || !newPin) { toast.error('Fill all fields'); return; }
     try {
-      await client.apiCall.invoke({
+      await riderAdminApi({
         url: '/api/v1/rider/admin/create',
         method: 'POST',
         data: {
@@ -110,24 +130,24 @@ export default function AdminRiders() {
       setNewDeliveryCharge(''); setNewShiftStart(''); setNewShiftEnd('');
       setShowAddForm(false);
       await loadReports();
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed to add rider'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to add rider'); }
   }
 
   async function toggleActive(riderId: number, currentActive: boolean) {
     try {
-      await client.apiCall.invoke({ url: `/api/v1/rider/admin/${riderId}`, method: 'PUT', data: { is_active: !currentActive } });
+      await riderAdminApi({ url: `/api/v1/rider/admin/${riderId}`, method: 'PUT', data: { is_active: !currentActive } });
       toast.success(currentActive ? 'Rider blocked' : 'Rider unblocked');
       await loadReports();
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed'); }
   }
 
   async function deleteRider(riderId: number, name: string) {
     if (!confirm(`Delete rider "${name}" permanently?`)) return;
     try {
-      await client.apiCall.invoke({ url: `/api/v1/rider/admin/${riderId}`, method: 'DELETE' });
+      await riderAdminApi({ url: `/api/v1/rider/admin/${riderId}`, method: 'DELETE' });
       toast.success('Rider deleted');
       await loadReports();
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed'); }
   }
 
   function startEdit(rider: RiderReport) {
@@ -151,11 +171,11 @@ export default function AdminRiders() {
         shift_end: editShiftEnd || null,
       };
       if (editPin) data.pin = editPin;
-      await client.apiCall.invoke({ url: `/api/v1/rider/admin/${riderId}`, method: 'PUT', data });
+      await riderAdminApi({ url: `/api/v1/rider/admin/${riderId}`, method: 'PUT', data });
       toast.success('Rider updated');
       setEditingId(null);
       await loadReports();
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed'); }
   }
 
   function saveTimeLimit() {
@@ -179,7 +199,7 @@ export default function AdminRiders() {
             <Button variant="ghost" onClick={() => navigate('/admin/dashboard')} className="text-gray-400 cursor-pointer">
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <h1 className="text-white text-2xl font-bold">Rider Management</h1>
+            <h1 className="text-white text-2xl font-bold">Rider Management <span className="text-xs text-emerald-400">FINAL V5</span></h1>
           </div>
           <div className="flex items-center gap-2">
             <Button onClick={loadReports} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">

@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { client, Order } from '@/lib/api';
+import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
 
 
@@ -33,13 +33,13 @@ function getPanelPin(): string {
     // Use current Kitchen default below.
   }
 
-  return '';
+  return '1122';
 }
 
-function adminHeaders(pin = getPanelPin()) {
+function adminHeaders() {
   return {
     'Content-Type': 'application/json',
-    'X-Kitchen-Pin': pin,
+    'X-Kitchen-Pin': getPanelPin(),
   };
 }
 
@@ -62,36 +62,12 @@ async function adminRequest<T>(
   data?: unknown,
   params?: Record<string, unknown>,
 ): Promise<T> {
-  let pin = getPanelPin();
-  if (!pin) pin = askAndSavePanelPin() || '';
-  if (!pin) {
-    throw Object.assign(new Error('Kitchen PIN required'), {
-      response: { status: 401 },
-    });
-  }
-
   const response = await axios.request<T>({
     url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
     method,
     data,
     params,
-    headers: adminHeaders(pin),
-    timeout: 20000,
-  });
-  return response.data;
-}
-
-
-async function riderAdminRequest<T>(
-  path: string,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-  data?: unknown,
-): Promise<T> {
-  const response = await axios.request<T>({
-    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
-    method,
-    data,
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders(),
     timeout: 20000,
   });
   return response.data;
@@ -237,19 +213,19 @@ export default function AdminOrders() {
 
   async function loadRiders() {
     try {
-      const payload = await riderAdminRequest<{ items?: RiderInfo[] }>(
+      const payload = await adminRequest<{ items?: RiderInfo[] }>(
         '/api/v1/rider/admin/locations',
       );
-      setRiders((payload.items || []).filter((rider) => rider.is_active !== false));
-    } catch {
+      setRiders(Array.isArray(payload?.items) ? payload.items : []);
+    } catch (error) {
+      console.error('Failed to load rider locations:', error);
       try {
-        const payload = await riderAdminRequest<{ items?: RiderInfo[] }>(
+        const payload = await adminRequest<{ items?: RiderInfo[] }>(
           '/api/v1/rider/admin/list',
         );
-        setRiders((payload.items || []).filter((rider) => rider.is_active !== false));
-      } catch (error) {
-        console.error('Rider list load failed:', error);
-        toast.error('Rider list load nahi hui');
+        setRiders(Array.isArray(payload?.items) ? payload.items : []);
+      } catch (fallbackError) {
+        console.error('Failed to load riders:', fallbackError);
         setRiders([]);
       }
     }
@@ -274,24 +250,31 @@ export default function AdminOrders() {
     if (addrMatch) address = addrMatch[1].trim();
 
     try {
-      await riderAdminRequest(
+      await adminRequest(
         '/api/v1/rider/admin/assign',
         'POST',
         {
           order_id: order.id,
-          rider_id: parseInt(selectedRider),
+          rider_id: Number(selectedRider),
           customer_lat: lat,
           customer_lng: lng,
           customer_address: address,
           customer_name: order.customer_name,
           customer_phone: order.customer_phone,
+          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
         },
       );
-      toast.success(`Order #${order.id} assigned to rider!`);
+      toast.success(`Order #${order.id} rider ko assign ho gaya`);
       setAssigningOrder(null);
       setSelectedRider('');
+      await loadRiders();
+      await loadOrders();
     } catch (e: any) {
-      toast.error(e?.data?.detail || 'Failed to assign rider');
+      toast.error(
+        e?.response?.data?.detail ||
+        e?.data?.detail ||
+        'Failed to assign rider',
+      );
     }
   }
 
@@ -438,7 +421,7 @@ export default function AdminOrders() {
       .item{display:flex;justify-content:space-between;margin:5px 0}
       .total{font-weight:bold;font-size:1.2em}</style></head>
       <body>
-      <h2>Vita Napoli</h2>
+      <h2>Fai Fai Juice</h2>
       <p style="text-align:center">Murbah, Fujairah, UAE<br>+971 54 294 0112</p>
       <div class="line"></div>
       <p><strong>Order #${order.id}</strong><br>
@@ -512,7 +495,7 @@ export default function AdminOrders() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FLOW V3</span></h1>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FINAL V5</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
               Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
             </p>
