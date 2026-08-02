@@ -46,5 +46,22 @@ class Restaurant_settings(Base):
     allow_modify_preparing = Column(Boolean, nullable=True)
     order_accept_timeout_minutes = Column(Integer, nullable=True)
     order_expire_timeout_minutes = Column(Integer, nullable=True)
+    checkout_flow = Column(String, nullable=True, default='two_step', server_default='two_step')
+    tax_percent = Column(Float, nullable=True, default=0, server_default='0')
+    banner_text = Column(String, nullable=True, default='', server_default='')
+    offer_text = Column(String, nullable=True, default='', server_default='')
+
+    # Customer homepage controls (database-backed; shared by every device).
+    show_status_banner = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_offers = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_quick_actions = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_popular_items = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_reviews = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_restaurant_info = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_bottom_nav = Column(Boolean, nullable=True, default=True, server_default='true')
+    popular_auto_enabled = Column(Boolean, nullable=True, default=True, server_default='true')
+    popular_manual_enabled = Column(Boolean, nullable=True, default=True, server_default='true')
+    popular_max_items = Column(Integer, nullable=True, default=6, server_default='6')
+
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

@@ -48,6 +48,19 @@ class Orders(Base):
         nullable=False,
     )
 
+    # Structured fulfilment data. Older rows may still have these details in notes.
+    order_type = Column(
+        String(20),
+        nullable=False,
+        default="pickup",
+        server_default="pickup",
+        index=True,
+    )
+
+    customer_lat = Column(Float, nullable=True)
+    customer_lng = Column(Float, nullable=True)
+    customer_address = Column(String, nullable=True, default="", server_default="")
+
     status = Column(
         String(50),
         nullable=True,
@@ -117,6 +130,13 @@ class Orders(Base):
     )
 
     delivery_charge = Column(
+        Float,
+        nullable=True,
+        default=0,
+        server_default="0",
+    )
+
+    tax_amount = Column(
         Float,
         nullable=True,
         default=0,
