@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +13,8 @@ import { client, CartItem, Offer } from '@/lib/api';
 import { getCart, getCartTotal, getCartOriginalTotal, getCartItemDiscountTotal, clearCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 import { isPromoOfferCurrentlyActive } from '@/lib/discounts';
+import { getGuestSessionId } from '@/lib/guest-session';
+import { getAPIBaseURL } from '@/lib/config';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -729,17 +732,25 @@ export default function Checkout() {
       noteParts.push(`Order Type: ${orderType === 'delivery' ? 'Delivery' : 'Pickup'}`);
       const fullNotes = noteParts.filter(Boolean).join(' | ');
 
-      const response = await client.apiCall.invoke({
-        url: '/api/v1/orders/place',
-        method: 'POST',
-        data: {
-          customer_name: name,
-          customer_phone: phone,
+      const response = await axios.post(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/orders/place`,
+        {
+          session_id: getGuestSessionId(),
+          customer_name: name.trim(),
+          customer_phone: phone.trim(),
           order_notes: fullNotes,
-          payment_method: paymentMethod === 'cash' ? 'Cash on Pickup' : 'Card on Pickup',
+          payment_method:
+            paymentMethod === 'cash'
+              ? orderType === 'delivery'
+                ? 'Cash on Delivery'
+                : 'Cash on Pickup'
+              : orderType === 'delivery'
+                ? 'Card on Delivery'
+                : 'Card on Pickup',
           total_amount: total,
           service_fee: serviceFee,
           small_order_fee: smallOrderFee,
+          delivery_charge: orderType === 'delivery' ? deliveryFee : 0,
           tip_amount: tipAmount,
           tip_type: tipAmount > 0 ? (orderType === 'delivery' ? 'rider' : 'shop') : '',
           items_json: JSON.stringify(itemsData),
@@ -747,7 +758,8 @@ export default function Checkout() {
           customer_lat: orderType === 'delivery' ? customerLat : null,
           customer_lng: orderType === 'delivery' ? customerLng : null,
         },
-      });
+        { timeout: 30000 },
+      );
 
       const orderId = response?.data?.order_id;
       
