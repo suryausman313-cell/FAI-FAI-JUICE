@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from core.database import get_db
 from dependencies.auth import get_current_user
+from routers.fai_fai_admin_control import get_current_admin
 from schemas.auth import UserResponse
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
@@ -22,13 +23,22 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
 
 
-def verify_kitchen_pin(
+async def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
 ) -> bool:
-    """Allow only requests that include the correct kitchen PIN header."""
-    if not x_kitchen_pin or x_kitchen_pin != KITCHEN_PIN:
-        raise HTTPException(status_code=401, detail="Invalid kitchen PIN")
-    return True
+    """Allow a correct Kitchen PIN or a valid Fai Fai Admin login token."""
+    if x_kitchen_pin and x_kitchen_pin == KITCHEN_PIN:
+        return True
+
+    if authorization and authorization.lower().startswith("bearer "):
+        identity = await get_current_admin(authorization=authorization, db=db)
+        if identity.role == "super_admin" or identity.permissions.get("orders") or identity.permissions.get("kitchen"):
+            return True
+        raise HTTPException(status_code=403, detail="Orders permission required")
+
+    raise HTTPException(status_code=401, detail="Admin login or valid kitchen PIN required")
 
 
 def is_delivery_order(order: Orders) -> bool:
