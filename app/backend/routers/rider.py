@@ -494,6 +494,38 @@ async def get_rider_locations(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/admin/assignments")
+async def list_order_assignments(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the latest rider assignment for each order for Admin/Kitchen UI."""
+    try:
+        result = await db.execute(
+            select(Delivery_assignments, Riders)
+            .join(Riders, Riders.id == Delivery_assignments.rider_id)
+            .order_by(desc(Delivery_assignments.created_at), desc(Delivery_assignments.id))
+            .limit(1000)
+        )
+        latest_by_order = {}
+        for assignment, rider in result.all():
+            if assignment.order_id in latest_by_order:
+                continue
+            latest_by_order[assignment.order_id] = {
+                "id": assignment.id,
+                "order_id": assignment.order_id,
+                "rider_id": assignment.rider_id,
+                "rider_name": rider.name,
+                "rider_phone": rider.phone,
+                "status": assignment.status or "assigned",
+                "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
+                "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
+            }
+        return {"items": list(latest_by_order.values())}
+    except Exception as e:
+        logging.error(f"Failed to list assignments: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class UpdateRiderRequest(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None

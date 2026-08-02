@@ -58,6 +58,20 @@ class Restaurant_settingsData(BaseModel):
     allow_modify_preparing: bool = None
     order_accept_timeout_minutes: int = None
     order_expire_timeout_minutes: int = None
+    checkout_flow: str = None
+    tax_percent: float = None
+    banner_text: str = None
+    offer_text: str = None
+    show_status_banner: bool = None
+    show_offers: bool = None
+    show_quick_actions: bool = None
+    show_popular_items: bool = None
+    show_reviews: bool = None
+    show_restaurant_info: bool = None
+    show_bottom_nav: bool = None
+    popular_auto_enabled: bool = None
+    popular_manual_enabled: bool = None
+    popular_max_items: int = None
 
 
 class Restaurant_settingsUpdateData(BaseModel):
@@ -100,6 +114,20 @@ class Restaurant_settingsUpdateData(BaseModel):
     allow_modify_preparing: Optional[bool] = None
     order_accept_timeout_minutes: Optional[int] = None
     order_expire_timeout_minutes: Optional[int] = None
+    checkout_flow: Optional[str] = None
+    tax_percent: Optional[float] = None
+    banner_text: Optional[str] = None
+    offer_text: Optional[str] = None
+    show_status_banner: Optional[bool] = None
+    show_offers: Optional[bool] = None
+    show_quick_actions: Optional[bool] = None
+    show_popular_items: Optional[bool] = None
+    show_reviews: Optional[bool] = None
+    show_restaurant_info: Optional[bool] = None
+    show_bottom_nav: Optional[bool] = None
+    popular_auto_enabled: Optional[bool] = None
+    popular_manual_enabled: Optional[bool] = None
+    popular_max_items: Optional[int] = None
 
 
 class Restaurant_settingsResponse(BaseModel):
@@ -143,6 +171,20 @@ class Restaurant_settingsResponse(BaseModel):
     allow_modify_preparing: Optional[bool] = None
     order_accept_timeout_minutes: Optional[int] = None
     order_expire_timeout_minutes: Optional[int] = None
+    checkout_flow: Optional[str] = None
+    tax_percent: Optional[float] = None
+    banner_text: Optional[str] = None
+    offer_text: Optional[str] = None
+    show_status_banner: Optional[bool] = None
+    show_offers: Optional[bool] = None
+    show_quick_actions: Optional[bool] = None
+    show_popular_items: Optional[bool] = None
+    show_reviews: Optional[bool] = None
+    show_restaurant_info: Optional[bool] = None
+    show_bottom_nav: Optional[bool] = None
+    popular_auto_enabled: Optional[bool] = None
+    popular_manual_enabled: Optional[bool] = None
+    popular_max_items: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

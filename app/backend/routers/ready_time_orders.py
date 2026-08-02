@@ -76,6 +76,7 @@ def serialize_order(order: Orders) -> dict:
         "service_fee": order.service_fee or 0,
         "small_order_fee": order.small_order_fee or 0,
         "delivery_charge": order.delivery_charge or 0,
+        "tax_amount": getattr(order, "tax_amount", 0) or 0,
         "tip_amount": order.tip_amount or 0,
         "tip_type": order.tip_type or "",
         "items_json": order.items_json,

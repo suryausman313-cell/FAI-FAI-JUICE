@@ -76,6 +76,7 @@ def serialize_order(order: Orders) -> dict:
         "service_fee": float(getattr(order, "service_fee", 0) or 0),
         "small_order_fee": float(getattr(order, "small_order_fee", 0) or 0),
         "delivery_charge": float(getattr(order, "delivery_charge", 0) or 0),
+        "tax_amount": float(getattr(order, "tax_amount", 0) or 0),
         "tip_amount": float(getattr(order, "tip_amount", 0) or 0),
         "tip_type": getattr(order, "tip_type", "") or "",
         "items_json": order.items_json or "[]",

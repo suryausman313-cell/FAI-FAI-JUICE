@@ -5,12 +5,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from typing import Optional
 
 from core.database import get_db
 from models.orders import Orders
 from models.menu_items import Menu_items
+from models.offers import Offers
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 
@@ -32,9 +33,15 @@ class PlaceOrderRequest(BaseModel):
     order_notes: Optional[str] = ""
     payment_method: str
     total_amount: float
+    subtotal_amount: Optional[float] = 0
+    promo_code: Optional[str] = ""
+    discount_type: Optional[str] = ""
+    discount_percent: Optional[float] = 0
+    discount_amount: Optional[float] = 0
     service_fee: Optional[float] = 0
     small_order_fee: Optional[float] = 0
     delivery_charge: Optional[float] = 0
+    tax_amount: Optional[float] = 0
     tip_amount: Optional[float] = 0
     tip_type: Optional[str] = ""  # 'rider' or 'shop'
     items_json: str
@@ -49,6 +56,7 @@ class DeliveryLocationData(BaseModel):
 class PlaceOrderFullRequest(PlaceOrderRequest):
     customer_lat: Optional[float] = None
     customer_lng: Optional[float] = None
+    customer_address: Optional[str] = ""
     order_type: Optional[str] = "pickup"
 
 
@@ -178,6 +186,7 @@ async def place_order(
                         )
 
         # ===== MENU ITEM VALIDATION - Reject fake orders =====
+        calculated_subtotal = 0.0
         try:
             order_items = json.loads(data.items_json)
             if not isinstance(order_items, list) or len(order_items) == 0:
@@ -250,7 +259,7 @@ async def place_order(
                 # ===== PRICE VALIDATION - Prevent price manipulation =====
                 # Allow tolerance for fees (service fee, small order fee, delivery, tips)
                 # but reject if total is unreasonably low (someone trying to pay less)
-                max_fees = (data.service_fee or 0) + (data.small_order_fee or 0) + (data.tip_amount or 0)
+                max_fees = (data.service_fee or 0) + (data.small_order_fee or 0) + (data.delivery_charge or 0) + (data.tip_amount or 0)
                 expected_minimum = calculated_subtotal * 0.5  # Allow 50% tolerance for discounts/promos
                 expected_maximum = calculated_subtotal + max_fees + 200  # Allow up to 200 AED extra for delivery + fees
 
@@ -298,6 +307,129 @@ async def place_order(
             raise
         # ===== END MENU VALIDATION =====
 
+        # ===== PROMO VALIDATION + SERVER TOTAL =====
+        normalized_order_type = str(data.order_type or "pickup").lower().strip()
+        if normalized_order_type not in {"pickup", "delivery"}:
+            raise HTTPException(status_code=400, detail="Invalid order type")
+
+        # Cart line prices already include item-level discounts.
+        subtotal_amount = round(float(calculated_subtotal or data.subtotal_amount or 0), 2)
+        promo_code = str(data.promo_code or "").strip().upper()
+        discount_type = ""
+        discount_percent = 0.0
+        discount_amount = 0.0
+
+        if promo_code:
+            offer_result = await db.execute(
+                select(Offers).where(
+                    Offers.is_active == True,
+                    func.upper(func.trim(Offers.promo_code)) == promo_code,
+                ).limit(1)
+            )
+            offer = offer_result.scalar_one_or_none()
+            if not offer:
+                raise HTTPException(status_code=400, detail="Invalid or inactive promo code")
+
+            def parse_offer_time(value: Optional[str], end_of_day: bool = False):
+                if not value:
+                    return None
+                raw = str(value).strip().replace("Z", "+00:00")
+                try:
+                    parsed = datetime.fromisoformat(raw)
+                except ValueError:
+                    try:
+                        parsed = datetime.strptime(raw, "%Y-%m-%d")
+                        if end_of_day:
+                            parsed = parsed.replace(hour=23, minute=59, second=59)
+                    except ValueError:
+                        return None
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed
+
+            now_utc = datetime.now(timezone.utc)
+            start_at = parse_offer_time(offer.start_date)
+            end_at = parse_offer_time(offer.end_date, end_of_day=True)
+            if start_at and now_utc < start_at:
+                raise HTTPException(status_code=400, detail="Promo code is not active yet")
+            if end_at and now_utc > end_at:
+                raise HTTPException(status_code=400, detail="Promo code has expired")
+
+            minimum = float(offer.minimum_order_amount or 0)
+            if subtotal_amount + 0.001 < minimum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Minimum order for this promo is AED {minimum:.2f}",
+                )
+
+            active_order_filter = Orders.status.notin_(["cancelled", "expired"])
+            if bool(offer.first_order_only):
+                previous_count = await db.scalar(
+                    select(func.count(Orders.id)).where(
+                        Orders.user_id == guest_user_id, active_order_filter
+                    )
+                )
+                if int(previous_count or 0) > 0:
+                    raise HTTPException(status_code=400, detail="This promo is for first orders only")
+
+            per_customer_limit = int(offer.usage_limit_per_customer or 0)
+            if per_customer_limit > 0:
+                customer_usage = await db.scalar(
+                    select(func.count(Orders.id)).where(
+                        Orders.user_id == guest_user_id,
+                        func.upper(func.trim(Orders.promo_code)) == promo_code,
+                        active_order_filter,
+                    )
+                )
+                if int(customer_usage or 0) >= per_customer_limit:
+                    raise HTTPException(status_code=400, detail="Promo usage limit reached")
+
+            total_limit = int(offer.total_usage_limit or 0)
+            if total_limit > 0:
+                total_usage = await db.scalar(
+                    select(func.count(Orders.id)).where(
+                        func.upper(func.trim(Orders.promo_code)) == promo_code,
+                        active_order_filter,
+                    )
+                )
+                if int(total_usage or 0) >= total_limit:
+                    raise HTTPException(status_code=400, detail="Promo total usage limit reached")
+
+            discount_type = str(offer.discount_type or "percentage").lower().strip()
+            if discount_type == "fixed":
+                discount_amount = min(subtotal_amount, float(offer.fixed_discount_amount or 0))
+            else:
+                discount_type = "percentage"
+                discount_percent = max(0.0, min(100.0, float(offer.discount_percent or 0)))
+                discount_amount = subtotal_amount * discount_percent / 100
+
+            maximum = float(offer.maximum_discount_amount or 0)
+            if maximum > 0:
+                discount_amount = min(discount_amount, maximum)
+            discount_amount = round(max(0.0, discount_amount), 2)
+
+        service_fee = round(max(0.0, float(data.service_fee or 0)), 2)
+        small_order_fee = round(max(0.0, float(data.small_order_fee or 0)), 2)
+        delivery_charge = round(max(0.0, float(data.delivery_charge or 0)), 2)
+        tip_amount = round(max(0.0, float(data.tip_amount or 0)), 2)
+        if normalized_order_type == "pickup":
+            delivery_charge = 0.0
+
+        tax_percent = max(0.0, min(100.0, float(getattr(settings, "tax_percent", 0) or 0)))
+        taxable_amount = max(0.0, subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge)
+        tax_amount = round(taxable_amount * tax_percent / 100, 2)
+
+        server_total = round(
+            max(0.0, subtotal_amount + service_fee + small_order_fee + delivery_charge + tax_amount + tip_amount - discount_amount),
+            2,
+        )
+        if abs(float(data.total_amount) - server_total) > 0.15:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Order total changed. Correct total is AED {server_total:.2f}. Please refresh checkout.",
+            )
+        # ===== END PROMO VALIDATION + SERVER TOTAL =====
+
         # ===== RATE LIMITING - Prevent order spam =====
         # Check if user has placed more than 5 orders in the last 5 minutes
         five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -340,17 +472,27 @@ async def place_order(
 
         order = Orders(
             user_id=guest_user_id,
-            customer_name=data.customer_name,
-            customer_phone=data.customer_phone,
+            customer_name=data.customer_name.strip(),
+            customer_phone=data.customer_phone.strip(),
             pickup_time="",
             order_notes=data.order_notes or "",
             payment_method=data.payment_method,
+            order_type=normalized_order_type,
+            customer_lat=data.customer_lat if normalized_order_type == "delivery" else None,
+            customer_lng=data.customer_lng if normalized_order_type == "delivery" else None,
+            customer_address=(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
             status="new",
-            total_amount=data.total_amount,
-            service_fee=data.service_fee or 0,
-            small_order_fee=data.small_order_fee or 0,
-            delivery_charge=data.delivery_charge or 0,
-            tip_amount=data.tip_amount or 0,
+            total_amount=server_total,
+            subtotal_amount=subtotal_amount,
+            promo_code=promo_code,
+            discount_type=discount_type,
+            discount_percent=discount_percent,
+            discount_amount=discount_amount,
+            service_fee=service_fee,
+            small_order_fee=small_order_fee,
+            delivery_charge=delivery_charge,
+            tax_amount=tax_amount,
+            tip_amount=tip_amount,
             tip_type=data.tip_type or "",
             items_json=data.items_json,
         )
@@ -470,11 +612,21 @@ async def get_my_orders(
                 "estimated_time": order.pickup_time or "",
                 "order_notes": order.order_notes or "",
                 "payment_method": order.payment_method,
+                "order_type": getattr(order, "order_type", "pickup") or "pickup",
+                "customer_lat": getattr(order, "customer_lat", None),
+                "customer_lng": getattr(order, "customer_lng", None),
+                "customer_address": getattr(order, "customer_address", "") or "",
                 "status": order.status,
                 "total_amount": order.total_amount,
+                "subtotal_amount": order.subtotal_amount or 0,
+                "promo_code": order.promo_code or "",
+                "discount_type": order.discount_type or "",
+                "discount_percent": order.discount_percent or 0,
+                "discount_amount": order.discount_amount or 0,
                 "service_fee": order.service_fee or 0,
                 "small_order_fee": order.small_order_fee or 0,
                 "delivery_charge": order.delivery_charge or 0,
+                "tax_amount": getattr(order, "tax_amount", 0) or 0,
                 "tip_amount": order.tip_amount or 0,
                 "tip_type": order.tip_type or "",
                 "items_json": order.items_json,
