@@ -256,6 +256,7 @@ async def ensure_homepage_settings_columns() -> None:
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS popular_auto_enabled BOOLEAN DEFAULT TRUE",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS popular_manual_enabled BOOLEAN DEFAULT TRUE",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS popular_max_items INTEGER DEFAULT 6",
+        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS auto_assign_rider_enabled BOOLEAN DEFAULT FALSE",
     ]
     async with db_manager.async_session_maker() as session:
         for statement in statements:
@@ -300,9 +301,9 @@ async def initialize_database():
 
         logger.info("V6 schema migration 3/3: checking restaurant/homepage columns...")
         await ensure_homepage_settings_columns()
-        logger.info("V6 schema migration 3/3 completed")
+        logger.info("V7 rider auto-assign schema migration completed")
 
-        logger.info("V6 database schema migration completed successfully")
+        logger.info("V7 database schema migration completed successfully")
         logger.info("Database initialized successfully")
         logger.debug(
             "[DB_OP] Database initialization completed in "
