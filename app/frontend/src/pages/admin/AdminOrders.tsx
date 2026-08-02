@@ -37,31 +37,55 @@ function getPanelPin(): string {
   return '1122';
 }
 
+function normalizeToken(value: string | null | undefined): string {
+  const token = String(value || '').trim();
+  return token.toLowerCase().startsWith('bearer ')
+    ? token.slice(7).trim()
+    : token;
+}
+
+function getStoredAdminToken(): string {
+  const directCandidates = [
+    localStorage.getItem(ADMIN_TOKEN_KEY),
+    localStorage.getItem('admin_token'),
+    localStorage.getItem('access_token'),
+    sessionStorage.getItem(ADMIN_TOKEN_KEY),
+    sessionStorage.getItem('admin_token'),
+    sessionStorage.getItem('access_token'),
+  ];
+
+  for (const candidate of directCandidates) {
+    const token = normalizeToken(candidate);
+    if (token) return token;
+  }
+
+  try {
+    const auth = JSON.parse(localStorage.getItem('admin_auth') || '{}');
+    const token = normalizeToken(
+      auth?.token || auth?.access_token || auth?.accessToken,
+    );
+    if (token) return token;
+  } catch {
+    // Invalid legacy admin_auth; login page will replace it.
+  }
+
+  return '';
+}
+
 function adminHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
+    Accept: 'application/json',
     'Content-Type': 'application/json',
     'X-Kitchen-Pin': getPanelPin(),
   };
 
-  const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
+  const adminToken = getStoredAdminToken();
   if (adminToken) {
     headers.Authorization = `Bearer ${adminToken}`;
+    headers['X-Admin-Token'] = adminToken;
   }
 
   return headers;
-}
-
-function askAndSavePanelPin(): string | null {
-  const entered = window.prompt(
-    'Admin Orders ke liye Kitchen PIN enter karein. Ye Render KITCHEN_PIN ke same hona chahiye.',
-    localStorage.getItem('kitchen_pin') || '',
-  );
-
-  const pin = String(entered || '').trim();
-  if (!pin) return null;
-
-  localStorage.setItem('kitchen_pin', pin);
-  return pin;
 }
 
 async function adminRequest<T>(
@@ -206,16 +230,20 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        localStorage.removeItem('kitchen_pin');
-        const pin = askAndSavePanelPin();
-        if (pin) {
-          toast.info('PIN save ho gaya. Orders dobara load ho rahe hain.');
-          setTimeout(() => void loadOrders(true), 100);
-        } else {
-          toast.error('Correct Kitchen PIN required hai.');
-        }
-      } else if (showToast) {
-        toast.error('Failed to refresh orders. Please try again.');
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+        localStorage.removeItem('admin_token');
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('admin_auth');
+        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+        sessionStorage.removeItem('admin_token');
+        sessionStorage.removeItem('access_token');
+        toast.error('Admin session expire hai. Dobara login karo.');
+        navigate('/admin', { replace: true });
+      } else {
+        toast.error(
+          e?.response?.data?.detail ||
+          'Failed to refresh orders. Please try again.',
+        );
       }
     } finally {
       setRefreshing(false);
@@ -357,24 +385,28 @@ export default function AdminOrders() {
 
   function checkAuthAndLoad() {
     const auth = localStorage.getItem('admin_auth');
-    if (!auth) {
-      navigate('/admin');
+    const token = getStoredAdminToken();
+
+    if (!auth || !token) {
+      navigate('/admin', { replace: true });
       setLoading(false);
       return;
     }
+
     try {
       const parsed = JSON.parse(auth);
       if (!parsed.loggedIn) {
-        navigate('/admin');
+        navigate('/admin', { replace: true });
         setLoading(false);
         return;
       }
     } catch {
-      navigate('/admin');
+      navigate('/admin', { replace: true });
       setLoading(false);
       return;
     }
-    loadOrders();
+
+    void loadOrders();
     setLoading(false);
   }
 
