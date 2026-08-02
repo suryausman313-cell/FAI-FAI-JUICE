@@ -11,11 +11,9 @@ from datetime import datetime, timezone, timedelta
 
 from core.database import get_db
 from dependencies.auth import get_current_user
-from routers.fai_fai_admin_control import get_current_admin
 from schemas.auth import UserResponse
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
-from services.rider_assignment import auto_assign_order
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -24,41 +22,13 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
 
 
-async def verify_kitchen_pin(
+def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
-    authorization: Optional[str] = Header(default=None, alias="Authorization"),
-    x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
-    db: AsyncSession = Depends(get_db),
 ) -> bool:
-    """Allow a correct Kitchen PIN or a valid Fai Fai Admin login token.
-
-    X-Admin-Token is accepted as a compatibility fallback for browsers/proxies
-    that do not forward the Authorization header from the Admin Orders page.
-    """
-    supplied_pin = str(x_kitchen_pin or "").strip()
-    if supplied_pin and supplied_pin == KITCHEN_PIN:
-        return True
-
-    token_header = str(authorization or "").strip()
-    fallback_token = str(x_admin_token or "").strip()
-    if not token_header and fallback_token:
-        token_header = (
-            fallback_token
-            if fallback_token.lower().startswith("bearer ")
-            else f"Bearer {fallback_token}"
-        )
-
-    if token_header.lower().startswith("bearer "):
-        identity = await get_current_admin(authorization=token_header, db=db)
-        if (
-            identity.role == "super_admin"
-            or identity.permissions.get("orders")
-            or identity.permissions.get("kitchen")
-        ):
-            return True
-        raise HTTPException(status_code=403, detail="Orders permission required")
-
-    raise HTTPException(status_code=401, detail="Admin login required")
+    """Allow only requests that include the correct kitchen PIN header."""
+    if not x_kitchen_pin or x_kitchen_pin != KITCHEN_PIN:
+        raise HTTPException(status_code=401, detail="Invalid kitchen PIN")
+    return True
 
 
 def is_delivery_order(order: Orders) -> bool:
@@ -97,19 +67,10 @@ def serialize_order(order: Orders) -> dict:
             or ("delivery" if is_delivery_order(order) else "pickup")
         ),
         "status": status,
-        "customer_lat": getattr(order, "customer_lat", None),
-        "customer_lng": getattr(order, "customer_lng", None),
-        "customer_address": getattr(order, "customer_address", "") or "",
         "total_amount": order.total_amount,
-        "subtotal_amount": order.subtotal_amount or 0,
-        "promo_code": order.promo_code or "",
-        "discount_type": order.discount_type or "",
-        "discount_percent": order.discount_percent or 0,
-        "discount_amount": order.discount_amount or 0,
         "service_fee": order.service_fee or 0,
         "small_order_fee": order.small_order_fee or 0,
         "delivery_charge": order.delivery_charge or 0,
-        "tax_amount": getattr(order, "tax_amount", 0) or 0,
         "tip_amount": order.tip_amount or 0,
         "tip_type": order.tip_type or "",
         "items_json": order.items_json,
@@ -252,20 +213,11 @@ async def update_kitchen_order_status(
         await db.commit()
         await db.refresh(order)
 
-        rider_assignment = None
-        if is_delivery_order(order) and new_status in {"accepted", "preparing", "ready"}:
-            try:
-                rider_assignment = await auto_assign_order(db, order)
-            except Exception:
-                logging.exception("Auto rider assignment after Kitchen status failed")
-                await db.rollback()
-
         return {
             "success": True,
             "status": new_status,
             "estimated_minutes": data.estimated_minutes,
             "order": serialize_order(order),
-            "rider_assignment": rider_assignment,
         }
     except HTTPException:
         raise
@@ -401,22 +353,8 @@ async def update_order_status(
             existing_notes = order.order_notes or ''
             order.order_notes = f"{existing_notes} | Cancelled by admin: {data.cancel_reason}"
         await db.commit()
-        await db.refresh(order)
 
-        rider_assignment = None
-        if is_delivery_order(order) and new_status in {"accepted", "preparing", "ready"}:
-            try:
-                rider_assignment = await auto_assign_order(db, order)
-            except Exception:
-                logging.exception("Auto rider assignment after Admin status failed")
-                await db.rollback()
-
-        return {
-            "success": True,
-            "status": new_status,
-            "estimated_minutes": data.estimated_minutes,
-            "rider_assignment": rider_assignment,
-        }
+        return {"success": True, "status": new_status, "estimated_minutes": data.estimated_minutes}
     except HTTPException:
         raise
     except Exception as e:
