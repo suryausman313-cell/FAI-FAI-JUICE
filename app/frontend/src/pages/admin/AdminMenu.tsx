@@ -1,350 +1,639 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Image as ImageIcon, Upload, Loader2, Star, Tag } from 'lucide-react';
+import axios from 'axios';
+import {
+  ArrowLeft,
+  Edit2,
+  Image as ImageIcon,
+  Loader2,
+  Plus,
+  Star,
+  Tag,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { client, Category, MenuItem, Extra, SizeOption, getItemSizes } from '@/lib/api';
-import { getItemPriceBreakdown, isItemDiscountActive } from '@/lib/discounts';
 
-const MENU_IMAGES_BUCKET = 'menu-images';
+import {
+  Category,
+  Extra,
+  getItemSizes,
+  MenuItem,
+  SizeOption,
+} from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+import { getItemPriceBreakdown } from '@/lib/discounts';
+import { uploadMenuImage } from '@/lib/image-upload';
 
-export default function AdminMenu() {
-  const navigate = useNavigate();
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [extras, setExtras] = useState<Extra[]>([]);
-  const [loading, setLoading] = useState(true);
+type EntityList<T> = {
+  items?: T[];
+  total?: number;
+};
 
-  // Dialog states
-  const [itemDialogOpen, setItemDialogOpen] = useState(false);
-  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
-  const [extraDialogOpen, setExtraDialogOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-  const [editingExtra, setEditingExtra] = useState<Extra | null>(null);
+type DiscountType = 'percentage' | 'fixed';
 
-  // Form states
-  const [itemForm, setItemForm] = useState({
+type ItemForm = {
+  name: string;
+  description: string;
+  category_id: number;
+  image_url: string;
+  has_extras: boolean;
+  is_popular: boolean;
+  discount_enabled: boolean;
+  discount_type: DiscountType;
+  discount_value: number;
+  discount_start_at: string;
+  discount_end_at: string;
+};
+
+function apiBase(): string {
+  return getAPIBaseURL().replace(/\/$/, '');
+}
+
+async function request<T>(
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  data?: unknown,
+  params?: Record<string, unknown>,
+): Promise<T> {
+  const response = await axios.request<T>({
+    url: `${apiBase()}${path}`,
+    method,
+    data,
+    params,
+    timeout: 20000,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  return response.data;
+}
+
+function errorText(error: unknown, fallback: string): string {
+  const value = error as any;
+  return String(
+    value?.response?.data?.detail ||
+      value?.response?.data?.message ||
+      value?.message ||
+      fallback,
+  );
+}
+
+function emptyItemForm(categoryId = 0): ItemForm {
+  return {
     name: '',
     description: '',
-    category_id: 0,
+    category_id: categoryId,
     image_url: '',
     has_extras: true,
     is_popular: false,
     discount_enabled: false,
-    discount_type: 'percentage' as 'percentage' | 'fixed',
+    discount_type: 'percentage',
     discount_value: 0,
     discount_start_at: '',
     discount_end_at: '',
+  };
+}
+
+function dateInputValue(value: unknown): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.length >= 16 ? text.slice(0, 16) : text;
+}
+
+function clearCustomerMenuCache() {
+  localStorage.removeItem('vita_menu_cache');
+  window.dispatchEvent(new Event('menu-updated'));
+}
+
+function itemDiscountText(item: MenuItem): string {
+  if (!item.discount_enabled || Number(item.discount_value || 0) <= 0) {
+    return '';
+  }
+
+  return item.discount_type === 'fixed'
+    ? `AED ${Number(item.discount_value).toFixed(2)} OFF`
+    : `${Number(item.discount_value).toFixed(
+        Number(item.discount_value) % 1 === 0 ? 0 : 2,
+      )}% OFF`;
+}
+
+export default function AdminMenu() {
+  const navigate = useNavigate();
+
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [extras, setExtras] = useState<Extra[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingItem, setSavingItem] = useState(false);
+
+  const [itemDialogOpen, setItemDialogOpen] = useState(false);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [extraDialogOpen, setExtraDialogOpen] = useState(false);
+
+  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+  const [editingCategory, setEditingCategory] =
+    useState<Category | null>(null);
+  const [editingExtra, setEditingExtra] = useState<Extra | null>(null);
+
+  const [itemForm, setItemForm] = useState<ItemForm>(emptyItemForm());
+  const [sizeOptions, setSizeOptions] = useState<SizeOption[]>([
+    { name: 'Medium', price: 0 },
+    { name: 'Large', price: 0 },
+  ]);
+  const [categoryForm, setCategoryForm] = useState({
+    name: '',
+    sort_order: 0,
   });
-  const [sizeOptions, setSizeOptions] = useState<SizeOption[]>([{ name: 'Medium', price: 0 }, { name: 'Large', price: 0 }]);
-  const [categoryForm, setCategoryForm] = useState({ name: '', sort_order: 0 });
-  const [extraForm, setExtraForm] = useState({ name: '', price: 0 });
+  const [extraForm, setExtraForm] = useState({
+    name: '',
+    price: 0,
+  });
+
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    checkAuthAndLoad();
+    void checkAuthAndLoad();
   }, []);
 
   async function checkAuthAndLoad() {
     const auth = localStorage.getItem('admin_auth');
-    if (!auth) { navigate('/admin'); setLoading(false); return; }
+
+    if (!auth) {
+      navigate('/admin');
+      setLoading(false);
+      return;
+    }
+
     try {
       const parsed = JSON.parse(auth);
-      if (!parsed.loggedIn) { navigate('/admin'); setLoading(false); return; }
-    } catch { navigate('/admin'); setLoading(false); return; }
+      if (!parsed.loggedIn) {
+        navigate('/admin');
+        setLoading(false);
+        return;
+      }
+    } catch {
+      navigate('/admin');
+      setLoading(false);
+      return;
+    }
+
     await loadData();
     setLoading(false);
   }
 
   async function loadData() {
     try {
-      const [catRes, itemRes, extrasRes] = await Promise.all([
-        client.entities.categories.query({ query: {}, sort: 'sort_order', limit: 50 }),
-        client.entities.menu_items.query({ query: {}, sort: 'sort_order', limit: 200 }),
-        client.entities.extras.query({ query: {}, limit: 50 }),
+      const [categoryData, itemData, extraData] = await Promise.all([
+        request<EntityList<Category>>(
+          '/api/v1/entities/categories',
+          'GET',
+          undefined,
+          { sort: 'sort_order', limit: 100 },
+        ),
+        request<EntityList<MenuItem>>(
+          '/api/v1/entities/menu_items',
+          'GET',
+          undefined,
+          { sort: 'sort_order', limit: 500 },
+        ),
+        request<EntityList<Extra>>(
+          '/api/v1/entities/extras',
+          'GET',
+          undefined,
+          { sort: 'id', limit: 200 },
+        ),
       ]);
-      setCategories(catRes?.data?.items || []);
-      setMenuItems(itemRes?.data?.items || []);
-      setExtras(extrasRes?.data?.items || []);
-    } catch (e) { console.error('Failed to load data:', e); }
+
+      setCategories(categoryData.items || []);
+      setMenuItems(itemData.items || []);
+      setExtras(extraData.items || []);
+    } catch (error) {
+      console.error('Admin Menu load failed:', error);
+      toast.error(errorText(error, 'Menu load nahi hua'));
+    }
   }
 
-  // Image upload
+  async function refreshAfterChange(message?: string) {
+    clearCustomerMenuCache();
+    await loadData();
+    if (message) toast.success(message);
+  }
+
   async function handleImageUpload(file: File) {
     setUploading(true);
     try {
-      const ext = file.name.split('.').pop() || 'jpg';
-      const objectKey = `items/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      
-      // Get upload URL
-      const uploadRes = await client.storage.getUploadUrl({
-        bucket_name: MENU_IMAGES_BUCKET,
-        object_key: objectKey,
-      });
-      const uploadUrl = uploadRes?.data?.upload_url;
-      if (!uploadUrl) throw new Error('Failed to get upload URL');
-
-      // Upload file
-      await fetch(uploadUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type },
-      });
-
-      // Get download URL for preview
-      const downloadRes = await client.storage.getDownloadUrl({
-        bucket_name: MENU_IMAGES_BUCKET,
-        object_key: objectKey,
-      });
-      const downloadUrl = downloadRes?.data?.download_url;
-      
-      setItemForm(prev => ({ ...prev, image_url: downloadUrl || objectKey }));
-      toast.success('Image uploaded successfully!');
-    } catch (e: any) {
-      console.error('Upload failed:', e);
-      toast.error('Failed to upload image');
+      const imageUrl = await uploadMenuImage(file);
+      setItemForm((current) => ({
+        ...current,
+        image_url: imageUrl,
+      }));
+      toast.success('Image ready');
+    } catch (error) {
+      toast.error(errorText(error, 'Image upload failed'));
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
-  // Category CRUD
-  function openCategoryDialog(cat?: Category) {
-    if (cat) {
-      setEditingCategory(cat);
-      setCategoryForm({ name: cat.name, sort_order: cat.sort_order });
+  function openCategoryDialog(category?: Category) {
+    if (category) {
+      setEditingCategory(category);
+      setCategoryForm({
+        name: category.name,
+        sort_order: Number(category.sort_order || 0),
+      });
     } else {
       setEditingCategory(null);
-      setCategoryForm({ name: '', sort_order: categories.length + 1 });
+      setCategoryForm({
+        name: '',
+        sort_order: categories.length + 1,
+      });
     }
+
     setCategoryDialogOpen(true);
   }
 
   async function saveCategory() {
+    if (!categoryForm.name.trim()) {
+      toast.error('Category name enter karein');
+      return;
+    }
+
     try {
       if (editingCategory) {
-        await client.entities.categories.update({ id: String(editingCategory.id), data: categoryForm });
-        toast.success('Category updated');
+        await request(
+          `/api/v1/entities/categories/${editingCategory.id}`,
+          'PUT',
+          categoryForm,
+        );
+        setCategoryDialogOpen(false);
+        await refreshAfterChange('Category updated');
       } else {
-        await client.entities.categories.create({ data: { ...categoryForm, is_active: true } });
-        toast.success('Category created');
+        await request('/api/v1/entities/categories', 'POST', {
+          ...categoryForm,
+          is_active: true,
+        });
+        setCategoryDialogOpen(false);
+        await refreshAfterChange('Category created');
       }
-      setCategoryDialogOpen(false);
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to save category'); }
+    } catch (error) {
+      toast.error(errorText(error, 'Category save failed'));
+    }
   }
 
   async function deleteCategory(id: number) {
-    if (!confirm('Delete this category?')) return;
+    if (!window.confirm('Delete this category?')) return;
+
     try {
-      await client.entities.categories.delete({ id: String(id) });
-      toast.success('Category deleted');
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to delete'); }
+      await request(`/api/v1/entities/categories/${id}`, 'DELETE');
+      await refreshAfterChange('Category deleted');
+    } catch (error) {
+      toast.error(errorText(error, 'Category delete failed'));
+    }
   }
 
-  // Menu Item CRUD with custom sizes
   function openItemDialog(item?: MenuItem) {
     if (item) {
       setEditingItem(item);
       setItemForm({
-        name: item.name,
-        description: item.description,
-        category_id: item.category_id,
+        name: item.name || '',
+        description: item.description || '',
+        category_id: Number(item.category_id || 0),
         image_url: item.image_url || '',
         has_extras: item.has_extras !== false,
         is_popular: item.is_popular === true,
         discount_enabled: item.discount_enabled === true,
-        discount_type: item.discount_type === 'fixed' ? 'fixed' : 'percentage',
+        discount_type:
+          item.discount_type === 'fixed' ? 'fixed' : 'percentage',
         discount_value: Number(item.discount_value || 0),
-        discount_start_at: item.discount_start_at || '',
-        discount_end_at: item.discount_end_at || '',
+        discount_start_at: dateInputValue(item.discount_start_at),
+        discount_end_at: dateInputValue(item.discount_end_at),
       });
-      // Load sizes from sizes_json or fallback
-      const sizes = getItemSizes(item);
-      setSizeOptions(sizes);
+      setSizeOptions(getItemSizes(item));
     } else {
       setEditingItem(null);
-      setItemForm({
-        name: '',
-        description: '',
-        category_id: categories[0]?.id || 0,
-        image_url: '',
-        has_extras: true,
-        is_popular: false,
-        discount_enabled: false,
-        discount_type: 'percentage',
-        discount_value: 0,
-        discount_start_at: '',
-        discount_end_at: '',
-      });
-      setSizeOptions([{ name: 'Medium', price: 0 }, { name: 'Large', price: 0 }]);
+      setItemForm(emptyItemForm(categories[0]?.id || 0));
+      setSizeOptions([
+        { name: 'Small', price: 0 },
+        { name: 'Medium', price: 0 },
+        { name: 'Large', price: 0 },
+      ]);
     }
+
     setItemDialogOpen(true);
   }
 
   function addSizeOption() {
-    setSizeOptions([...sizeOptions, { name: '', price: 0 }]);
+    setSizeOptions((current) => [
+      ...current,
+      { name: '', price: 0 },
+    ]);
   }
 
-  function removeSizeOption(idx: number) {
+  function removeSizeOption(index: number) {
     if (sizeOptions.length <= 1) {
-      toast.error('At least one size is required');
+      toast.error('Kam az kam ek size zaroori hai');
       return;
     }
-    setSizeOptions(sizeOptions.filter((_, i) => i !== idx));
+
+    setSizeOptions((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
   }
 
-  function updateSizeOption(idx: number, field: 'name' | 'price', value: string | number) {
-    const updated = [...sizeOptions];
-    if (field === 'name') updated[idx].name = value as string;
-    else updated[idx].price = value as number;
-    setSizeOptions(updated);
+  function updateSizeOption(
+    index: number,
+    field: 'name' | 'price',
+    value: string | number,
+  ) {
+    setSizeOptions((current) =>
+      current.map((size, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...size,
+              [field]: value,
+            }
+          : size,
+      ),
+    );
   }
 
-  async function saveItem() {
-    // Validate sizes
-    const validSizes = sizeOptions.filter(s => s.name.trim() && s.price > 0);
+  function validateItem(validSizes: SizeOption[]): boolean {
+    if (!itemForm.name.trim()) {
+      toast.error('Item name enter karein');
+      return false;
+    }
+
+    if (!itemForm.category_id) {
+      toast.error('Category select karein');
+      return false;
+    }
+
     if (validSizes.length === 0) {
-      toast.error('Please add at least one size with a name and price');
-      return;
+      toast.error('Kam az kam ek size aur price add karein');
+      return false;
     }
 
     if (itemForm.discount_enabled) {
-      if (itemForm.discount_value <= 0) {
-        toast.error('Discount value must be greater than 0');
-        return;
+      const value = Number(itemForm.discount_value || 0);
+
+      if (value <= 0) {
+        toast.error('Discount value 0 se zyada honi chahiye');
+        return false;
       }
-      if (itemForm.discount_type === 'percentage' && itemForm.discount_value > 100) {
-        toast.error('Percentage discount cannot be more than 100%');
-        return;
-      }
+
       if (
-        itemForm.discount_start_at &&
-        itemForm.discount_end_at &&
-        new Date(itemForm.discount_start_at).getTime() > new Date(itemForm.discount_end_at).getTime()
+        itemForm.discount_type === 'percentage' &&
+        value > 100
       ) {
-        toast.error('Discount end time must be after start time');
-        return;
+        toast.error('Percentage discount 100% se zyada nahi ho sakta');
+        return false;
+      }
+
+      const start = itemForm.discount_start_at
+        ? new Date(itemForm.discount_start_at)
+        : null;
+      const end = itemForm.discount_end_at
+        ? new Date(itemForm.discount_end_at)
+        : null;
+
+      if (
+        start &&
+        end &&
+        !Number.isNaN(start.getTime()) &&
+        !Number.isNaN(end.getTime()) &&
+        end.getTime() <= start.getTime()
+      ) {
+        toast.error('Discount end time start time ke baad honi chahiye');
+        return false;
       }
     }
 
-    // Store sizes as JSON and also keep legacy price_medium/price_large for backward compat
-    const sizesJson = JSON.stringify(validSizes);
+    return true;
+  }
+
+  async function saveItem() {
+    const validSizes = sizeOptions
+      .map((size) => ({
+        name: String(size.name || '').trim(),
+        price: Number(size.price || 0),
+      }))
+      .filter((size) => size.name && size.price > 0);
+
+    if (!validateItem(validSizes)) return;
+
     const priceMedium = validSizes[0]?.price || 0;
-    const priceLarge = validSizes.length > 1 ? validSizes[validSizes.length - 1].price : validSizes[0]?.price || 0;
+    const priceLarge =
+      validSizes.length > 1
+        ? validSizes[validSizes.length - 1].price
+        : priceMedium;
 
     const saveData = {
-      name: itemForm.name,
-      description: itemForm.description,
+      name: itemForm.name.trim(),
+      description: itemForm.description.trim(),
       category_id: itemForm.category_id,
       price_medium: priceMedium,
       price_large: priceLarge,
-      sizes_json: sizesJson,
-      image_url: itemForm.image_url,
+      sizes_json: JSON.stringify(validSizes),
+      image_url: itemForm.image_url.trim(),
       has_extras: itemForm.has_extras,
       is_popular: itemForm.is_popular,
       discount_enabled: itemForm.discount_enabled,
       discount_type: itemForm.discount_type,
-      discount_value: itemForm.discount_enabled ? itemForm.discount_value : 0,
-      discount_start_at: itemForm.discount_enabled ? itemForm.discount_start_at || null : null,
-      discount_end_at: itemForm.discount_enabled ? itemForm.discount_end_at || null : null,
+      discount_value: itemForm.discount_enabled
+        ? Number(itemForm.discount_value || 0)
+        : 0,
+      discount_start_at: itemForm.discount_enabled
+        ? itemForm.discount_start_at
+        : '',
+      discount_end_at: itemForm.discount_enabled
+        ? itemForm.discount_end_at
+        : '',
     };
+
+    setSavingItem(true);
 
     try {
       if (editingItem) {
-        await client.entities.menu_items.update({ id: String(editingItem.id), data: saveData });
-        toast.success('Item updated');
+        await request(
+          `/api/v1/entities/menu_items/${editingItem.id}`,
+          'PUT',
+          saveData,
+        );
+        setItemDialogOpen(false);
+        await refreshAfterChange('Item aur discount updated');
       } else {
-        await client.entities.menu_items.create({ data: { ...saveData, is_active: true, sort_order: menuItems.length + 1 } });
-        toast.success('Item created');
+        await request('/api/v1/entities/menu_items', 'POST', {
+          ...saveData,
+          is_active: true,
+          sort_order: menuItems.length + 1,
+        });
+        setItemDialogOpen(false);
+        await refreshAfterChange('Item created');
       }
-      setItemDialogOpen(false);
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to save item'); }
+    } catch (error) {
+      toast.error(errorText(error, 'Item save failed'));
+    } finally {
+      setSavingItem(false);
+    }
   }
 
   async function toggleItemActive(item: MenuItem) {
     try {
-      await client.entities.menu_items.update({ id: String(item.id), data: { is_active: !item.is_active } });
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to toggle'); }
+      await request(
+        `/api/v1/entities/menu_items/${item.id}`,
+        'PUT',
+        { is_active: !item.is_active },
+      );
+      await refreshAfterChange(
+        `${item.name}: ${item.is_active ? 'Sold Out' : 'Available'}`,
+      );
+    } catch (error) {
+      toast.error(errorText(error, 'Availability update failed'));
+    }
   }
 
   async function togglePopular(item: MenuItem) {
     try {
-      await client.apiCall.invoke({
-        url: `/api/v1/admin/menu/${item.id}/toggle-popular`,
-        method: 'PUT',
-      });
-      await loadData();
-      toast.success(`${item.name} ${item.is_popular ? 'removed from' : 'marked as'} popular`);
-    } catch (e: any) { toast.error(e?.message || 'Failed to toggle popular'); }
+      await request(
+        `/api/v1/entities/menu_items/${item.id}`,
+        'PUT',
+        { is_popular: !item.is_popular },
+      );
+      await refreshAfterChange(
+        `${item.name}: ${item.is_popular ? 'Popular OFF' : 'Popular ON'}`,
+      );
+    } catch (error) {
+      toast.error(errorText(error, 'Popular update failed'));
+    }
   }
 
   async function deleteItem(id: number) {
-    if (!confirm('Delete this item?')) return;
+    if (!window.confirm('Delete this item?')) return;
+
     try {
-      await client.entities.menu_items.delete({ id: String(id) });
-      toast.success('Item deleted');
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to delete'); }
+      await request(`/api/v1/entities/menu_items/${id}`, 'DELETE');
+      await refreshAfterChange('Item deleted');
+    } catch (error) {
+      toast.error(errorText(error, 'Item delete failed'));
+    }
   }
 
-  // Extra CRUD
   function openExtraDialog(extra?: Extra) {
     if (extra) {
       setEditingExtra(extra);
-      setExtraForm({ name: extra.name, price: extra.price });
+      setExtraForm({
+        name: extra.name,
+        price: Number(extra.price || 0),
+      });
     } else {
       setEditingExtra(null);
-      setExtraForm({ name: '', price: 0 });
+      setExtraForm({
+        name: '',
+        price: 0,
+      });
     }
+
     setExtraDialogOpen(true);
   }
 
   async function saveExtra() {
+    if (!extraForm.name.trim()) {
+      toast.error('Extra name enter karein');
+      return;
+    }
+
     try {
       if (editingExtra) {
-        await client.entities.extras.update({ id: String(editingExtra.id), data: extraForm });
-        toast.success('Extra updated');
+        await request(
+          `/api/v1/entities/extras/${editingExtra.id}`,
+          'PUT',
+          extraForm,
+        );
+        setExtraDialogOpen(false);
+        await refreshAfterChange('Extra updated');
       } else {
-        await client.entities.extras.create({ data: { ...extraForm, is_active: true } });
-        toast.success('Extra created');
+        await request('/api/v1/entities/extras', 'POST', {
+          ...extraForm,
+          is_active: true,
+        });
+        setExtraDialogOpen(false);
+        await refreshAfterChange('Extra created');
       }
-      setExtraDialogOpen(false);
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to save extra'); }
+    } catch (error) {
+      toast.error(errorText(error, 'Extra save failed'));
+    }
   }
 
   async function deleteExtra(id: number) {
-    if (!confirm('Delete this extra?')) return;
+    if (!window.confirm('Delete this extra?')) return;
+
     try {
-      await client.entities.extras.delete({ id: String(id) });
-      toast.success('Extra deleted');
-      await loadData();
-    } catch (e: any) { toast.error(e?.message || 'Failed to delete'); }
+      await request(`/api/v1/entities/extras/${id}`, 'DELETE');
+      await refreshAfterChange('Extra deleted');
+    } catch (error) {
+      toast.error(errorText(error, 'Extra delete failed'));
+    }
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Loading...</div></div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
-          <Button variant="ghost" onClick={() => navigate('/admin/dashboard')} className="text-gray-400 cursor-pointer">
+          <Button
+            variant="ghost"
+            onClick={() => navigate('/admin/dashboard')}
+            className="text-gray-400"
+          >
             <ArrowLeft className="w-4 h-4" />
           </Button>
-          <h1 className="text-white text-2xl font-bold">Menu Management</h1>
+          <div>
+            <h1 className="text-white text-2xl font-bold">
+              Menu Management
+            </h1>
+            <p className="text-gray-500 text-xs mt-1">
+              Availability, Popular aur Item Discount yahin se control karein.
+            </p>
+          </div>
         </div>
 
         <Tabs defaultValue="items" className="space-y-4">
@@ -352,59 +641,132 @@ export default function AdminMenu() {
             <TabsTrigger value="items">Menu Items</TabsTrigger>
             <TabsTrigger value="popular">⭐ Popular</TabsTrigger>
             <TabsTrigger value="categories">Categories</TabsTrigger>
-            <TabsTrigger value="extras">Extras/Toppings</TabsTrigger>
+            <TabsTrigger value="extras">Extras</TabsTrigger>
           </TabsList>
 
-          {/* Menu Items Tab */}
           <TabsContent value="items" className="space-y-4">
-            <Button onClick={() => openItemDialog()} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              <Plus className="w-4 h-4 mr-2" /> Add Item
+            <Button
+              onClick={() => openItemDialog()}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Item
             </Button>
+
             <div className="space-y-3">
-              {menuItems.map(item => {
+              {menuItems.map((item) => {
                 const sizes = getItemSizes(item);
+                const discountText = itemDiscountText(item);
+                const firstPrice = sizes[0]?.price || 0;
+                const price = getItemPriceBreakdown(item, firstPrice);
+
                 return (
-                  <Card key={item.id} className={`bg-gray-900 border-gray-800 p-4 ${!item.is_active ? 'opacity-50' : ''}`}>
+                  <Card
+                    key={item.id}
+                    className={`bg-gray-900 border-gray-800 p-4 ${
+                      !item.is_active ? 'opacity-50' : ''
+                    }`}
+                  >
                     <div className="flex items-center gap-3">
-                      {item.image_url && (
-                        <img src={item.image_url} alt={item.name} className="w-14 h-14 rounded-lg object-cover" />
-                      )}
-                      {!item.image_url && (
+                      {item.image_url ? (
+                        <img
+                          src={item.image_url}
+                          alt={item.name}
+                          className="w-14 h-14 rounded-lg object-cover"
+                        />
+                      ) : (
                         <div className="w-14 h-14 rounded-lg bg-gray-800 flex items-center justify-center">
                           <ImageIcon className="w-5 h-5 text-gray-600" />
                         </div>
                       )}
+
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-white font-semibold">{item.name}</h3>
+                        <h3 className="text-white font-semibold">
+                          {item.name}
+                        </h3>
                         <p className="text-gray-400 text-sm truncate">
-                          {categories.find(c => c.id === item.category_id)?.name} • {sizes.map(s => `${s.name}: AED ${s.price}`).join(' / ')}
+                          {categories.find(
+                            (category) =>
+                              category.id === item.category_id,
+                          )?.name || 'No Category'}
+                          {' • '}
+                          {sizes
+                            .map(
+                              (size) =>
+                                `${size.name}: AED ${Number(
+                                  size.price,
+                                ).toFixed(0)}`,
+                            )
+                            .join(' / ')}
                         </p>
-                        {isItemDiscountActive(item) && (
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="inline-flex items-center gap-1 text-green-400 text-xs font-semibold">
-                              <Tag className="w-3 h-3" />
-                              {item.discount_type === 'fixed'
-                                ? `AED ${Number(item.discount_value || 0).toFixed(2)} OFF`
-                                : `${Number(item.discount_value || 0)}% OFF`}
+
+                        {discountText && (
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <span className="rounded-full bg-green-600/15 border border-green-600/30 text-green-400 px-2 py-0.5">
+                              {discountText}
                             </span>
-                            {(item.discount_start_at || item.discount_end_at) && (
-                              <span className="text-gray-600 text-[10px]">Scheduled</span>
+                            {price.discountActive && (
+                              <span className="text-gray-500">
+                                AED {price.originalPrice.toFixed(2)}
+                                {' → '}
+                                <span className="text-green-400">
+                                  AED {price.finalPrice.toFixed(2)}
+                                </span>
+                              </span>
                             )}
                           </div>
                         )}
                       </div>
+
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        <button onClick={() => togglePopular(item)} className="cursor-pointer" title={item.is_popular ? 'Remove from Popular' : 'Mark as Popular'}>
-                          <Star className={`w-4 h-4 ${item.is_popular ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600 hover:text-yellow-400'}`} />
+                        <button
+                          type="button"
+                          onClick={() => void togglePopular(item)}
+                          title={
+                            item.is_popular
+                              ? 'Remove from Popular'
+                              : 'Mark as Popular'
+                          }
+                        >
+                          <Star
+                            className={`w-5 h-5 ${
+                              item.is_popular
+                                ? 'text-yellow-400 fill-yellow-400'
+                                : 'text-gray-600'
+                            }`}
+                          />
                         </button>
-                        <button onClick={() => toggleItemActive(item)} className="cursor-pointer text-gray-400 hover:text-white">
-                          {item.is_active ? <ToggleRight className="w-5 h-5 text-green-500" /> : <ToggleLeft className="w-5 h-5" />}
+
+                        <button
+                          type="button"
+                          onClick={() => void toggleItemActive(item)}
+                          title={
+                            item.is_active
+                              ? 'Mark Sold Out'
+                              : 'Mark Available'
+                          }
+                        >
+                          {item.is_active ? (
+                            <ToggleRight className="w-6 h-6 text-green-500" />
+                          ) : (
+                            <ToggleLeft className="w-6 h-6 text-gray-500" />
+                          )}
                         </button>
-                        <button onClick={() => openItemDialog(item)} className="cursor-pointer text-gray-400 hover:text-white">
-                          <Edit2 className="w-4 h-4" />
+
+                        <button
+                          type="button"
+                          onClick={() => openItemDialog(item)}
+                          className="text-gray-400 hover:text-white"
+                        >
+                          <Edit2 className="w-5 h-5" />
                         </button>
-                        <button onClick={() => deleteItem(item.id)} className="cursor-pointer text-gray-400 hover:text-red-500">
-                          <Trash2 className="w-4 h-4" />
+
+                        <button
+                          type="button"
+                          onClick={() => void deleteItem(item.id)}
+                          className="text-gray-400 hover:text-red-500"
+                        >
+                          <Trash2 className="w-5 h-5" />
                         </button>
                       </div>
                     </div>
@@ -414,243 +776,386 @@ export default function AdminMenu() {
             </div>
           </TabsContent>
 
-          {/* Popular Items Tab - Visual Toggle with Images */}
           <TabsContent value="popular" className="space-y-4">
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
-              <h3 className="text-white font-semibold mb-1">⭐ Popular Items on Homepage</h3>
-              <p className="text-gray-500 text-xs">Toggle ON/OFF which items appear in the "Popular Items" section on the customer homepage. Items with the star ON will show on homepage.</p>
-            </div>
+            <Card className="bg-gray-900 border-gray-800 p-4">
+              <p className="text-white font-semibold">
+                ⭐ Customer Homepage Popular Items
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                Card dabakar Popular ON/OFF karein.
+              </p>
+            </Card>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {menuItems.filter(i => i.is_active).map(item => {
-                const sizes = getItemSizes(item);
-                const lowestSize = sizes.reduce((lowest, size) => size.price < lowest.price ? size : lowest, sizes[0]);
-                const lowestPrice = lowestSize?.price || 0;
-                const lowestBreakdown = getItemPriceBreakdown(item, lowestPrice);
-                return (
+              {menuItems
+                .filter((item) => item.is_active)
+                .map((item) => (
                   <Card
                     key={item.id}
-                    className={`bg-gray-900 border-2 overflow-hidden transition-all cursor-pointer ${
-                      item.is_popular ? 'border-yellow-500/60 bg-yellow-900/10' : 'border-gray-800 hover:border-gray-700'
+                    onClick={() => void togglePopular(item)}
+                    className={`cursor-pointer overflow-hidden border-2 ${
+                      item.is_popular
+                        ? 'bg-yellow-900/10 border-yellow-500/60'
+                        : 'bg-gray-900 border-gray-800'
                     }`}
-                    onClick={() => togglePopular(item)}
                   >
                     <div className="flex items-center gap-3 p-3">
                       {item.image_url ? (
-                        <img src={item.image_url} alt={item.name} className="w-16 h-16 rounded-lg object-cover flex-shrink-0" />
+                        <img
+                          src={item.image_url}
+                          alt={item.name}
+                          className="w-16 h-16 rounded-lg object-cover"
+                        />
                       ) : (
-                        <div className="w-16 h-16 rounded-lg bg-gray-800 flex items-center justify-center flex-shrink-0">
-                          <span className="text-2xl">🍕</span>
+                        <div className="w-16 h-16 bg-gray-800 rounded-lg flex items-center justify-center">
+                          <ImageIcon className="w-5 h-5 text-gray-600" />
                         </div>
                       )}
                       <div className="flex-1 min-w-0">
-                        <h4 className="text-white font-semibold text-sm truncate">{item.name}</h4>
-                        <p className="text-gray-500 text-xs">{categories.find(c => c.id === item.category_id)?.name}</p>
-                        {lowestBreakdown.discountActive ? (
-                          <div className="mt-0.5">
-                            <span className="text-gray-500 text-[10px] line-through mr-1">AED {lowestBreakdown.originalPrice.toFixed(2)}</span>
-                            <span className="text-green-400 text-xs font-bold">AED {lowestBreakdown.finalPrice.toFixed(2)}</span>
-                          </div>
-                        ) : (
-                          <p className="text-red-400 text-xs font-bold mt-0.5">AED {lowestPrice}</p>
-                        )}
+                        <p className="text-white font-semibold truncate">
+                          {item.name}
+                        </p>
+                        <p className="text-gray-500 text-xs">
+                          {categories.find(
+                            (category) =>
+                              category.id === item.category_id,
+                          )?.name || ''}
+                        </p>
                       </div>
-                      <div className="flex-shrink-0">
-                        <Star className={`w-6 h-6 transition-all ${item.is_popular ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600'}`} />
-                      </div>
+                      <Star
+                        className={`w-6 h-6 ${
+                          item.is_popular
+                            ? 'text-yellow-400 fill-yellow-400'
+                            : 'text-gray-600'
+                        }`}
+                      />
                     </div>
                   </Card>
-                );
-              })}
+                ))}
             </div>
-            {menuItems.filter(i => i.is_active && i.is_popular).length > 0 && (
-              <div className="bg-green-900/20 border border-green-600/30 rounded-xl p-3 mt-4">
-                <p className="text-green-400 text-sm font-medium">
-                  ✅ {menuItems.filter(i => i.is_active && i.is_popular).length} items marked as popular
-                </p>
-              </div>
-            )}
           </TabsContent>
 
-          {/* Categories Tab */}
           <TabsContent value="categories" className="space-y-4">
-            <Button onClick={() => openCategoryDialog()} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              <Plus className="w-4 h-4 mr-2" /> Add Category
+            <Button
+              onClick={() => openCategoryDialog()}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Category
             </Button>
-            <div className="space-y-3">
-              {categories.map(cat => (
-                <Card key={cat.id} className="bg-gray-900 border-gray-800 p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-white font-semibold">{cat.name}</h3>
-                      <p className="text-gray-400 text-sm">Order: {cat.sort_order} • {menuItems.filter(i => i.category_id === cat.id).length} items</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => openCategoryDialog(cat)} className="cursor-pointer text-gray-400 hover:text-white">
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => deleteCategory(cat.id)} className="cursor-pointer text-gray-400 hover:text-red-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+
+            {categories.map((category) => (
+              <Card
+                key={category.id}
+                className="bg-gray-900 border-gray-800 p-4"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-semibold">
+                      {category.name}
+                    </p>
+                    <p className="text-gray-500 text-sm">
+                      Order: {category.sort_order}
+                      {' • '}
+                      {
+                        menuItems.filter(
+                          (item) =>
+                            item.category_id === category.id,
+                        ).length
+                      }{' '}
+                      items
+                    </p>
                   </div>
-                </Card>
-              ))}
-            </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openCategoryDialog(category)}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      <Edit2 className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void deleteCategory(category.id)
+                      }
+                      className="text-gray-400 hover:text-red-500"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ))}
           </TabsContent>
 
-          {/* Extras Tab */}
           <TabsContent value="extras" className="space-y-4">
-            <Button onClick={() => openExtraDialog()} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              <Plus className="w-4 h-4 mr-2" /> Add Extra/Topping
+            <Button
+              onClick={() => openExtraDialog()}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Extra
             </Button>
-            <div className="space-y-3">
-              {extras.map(extra => (
-                <Card key={extra.id} className="bg-gray-900 border-gray-800 p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-white font-semibold">{extra.name}</h3>
-                      <p className="text-gray-400 text-sm">+AED {extra.price}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => openExtraDialog(extra)} className="cursor-pointer text-gray-400 hover:text-white">
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => deleteExtra(extra.id)} className="cursor-pointer text-gray-400 hover:text-red-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+
+            {extras.map((extra) => (
+              <Card
+                key={extra.id}
+                className="bg-gray-900 border-gray-800 p-4"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-semibold">
+                      {extra.name}
+                    </p>
+                    <p className="text-gray-500 text-sm">
+                      +AED {Number(extra.price || 0).toFixed(2)}
+                    </p>
                   </div>
-                </Card>
-              ))}
-            </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openExtraDialog(extra)}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      <Edit2 className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteExtra(extra.id)}
+                      className="text-gray-400 hover:text-red-500"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ))}
           </TabsContent>
         </Tabs>
       </div>
 
-      {/* Item Dialog - Enhanced with Custom Sizes */}
       <Dialog open={itemDialogOpen} onOpenChange={setItemDialogOpen}>
-        <DialogContent className="bg-gray-900 border-gray-700 text-white max-h-[90vh] overflow-y-auto">
+        <DialogContent className="bg-gray-900 border-gray-700 text-white max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingItem ? 'Edit Item' : 'Add Item'}</DialogTitle>
+            <DialogTitle>
+              {editingItem ? 'Edit Item' : 'Add Item'}
+            </DialogTitle>
           </DialogHeader>
+
           <div className="space-y-4">
             <div>
-              <Label className="text-gray-300">Name *</Label>
-              <Input value={itemForm.name} onChange={e => setItemForm({ ...itemForm, name: e.target.value })} className="bg-gray-800 border-gray-700 text-white mt-1" />
+              <Label>Item Name *</Label>
+              <Input
+                value={itemForm.name}
+                onChange={(event) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+              />
             </div>
+
             <div>
-              <Label className="text-gray-300">Description</Label>
-              <Textarea value={itemForm.description} onChange={e => setItemForm({ ...itemForm, description: e.target.value })} className="bg-gray-800 border-gray-700 text-white mt-1" rows={2} />
+              <Label>Description</Label>
+              <Textarea
+                value={itemForm.description}
+                onChange={(event) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+                rows={2}
+              />
             </div>
+
             <div>
-              <Label className="text-gray-300">Item Image</Label>
+              <Label>Item Image</Label>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleImageUpload(file);
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void handleImageUpload(file);
                 }}
               />
-              <div className="mt-1 flex items-center gap-3">
+
+              <div className="mt-2 flex items-center gap-3">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  className="border-gray-700 text-gray-300 hover:text-white cursor-pointer"
+                  className="border-gray-700 text-gray-300"
                 >
-                  {uploading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                  {uploading ? 'Uploading...' : 'Upload Image'}
+                  {uploading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-2" />
+                  )}
+                  {uploading ? 'Processing...' : 'Upload Image'}
                 </Button>
+
                 {itemForm.image_url && (
-                  <img src={itemForm.image_url} alt="Preview" className="w-16 h-16 rounded-lg object-cover" />
+                  <img
+                    src={itemForm.image_url}
+                    alt="Preview"
+                    className="w-16 h-16 rounded-lg object-cover"
+                  />
                 )}
               </div>
+
               <Input
                 value={itemForm.image_url}
-                onChange={e => setItemForm({ ...itemForm, image_url: e.target.value })}
-                placeholder="Or paste image URL here"
-                className="bg-gray-800 border-gray-700 text-white mt-2 text-xs"
+                onChange={(event) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    image_url: event.target.value,
+                  }))
+                }
+                placeholder="Ya image URL paste karein"
+                className="bg-gray-800 border-gray-700 mt-2 text-xs"
               />
+
+              <p className="text-gray-500 text-xs mt-1">
+                Cloudinary set na ho tab bhi image compress hokar save hogi.
+              </p>
             </div>
+
             <div>
-              <Label className="text-gray-300">Category</Label>
-              <Select value={String(itemForm.category_id)} onValueChange={v => setItemForm({ ...itemForm, category_id: Number(v) })}>
-                <SelectTrigger className="bg-gray-800 border-gray-700 text-white mt-1">
+              <Label>Category</Label>
+              <Select
+                value={String(itemForm.category_id)}
+                onValueChange={(value) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    category_id: Number(value),
+                  }))
+                }
+              >
+                <SelectTrigger className="bg-gray-800 border-gray-700 mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-gray-900 border-gray-700">
-                  {categories.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+                  {categories.map((category) => (
+                    <SelectItem
+                      key={category.id}
+                      value={String(category.id)}
+                    >
+                      {category.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Has Extras Toggle */}
             <div className="flex items-center justify-between p-3 rounded-xl border border-gray-700">
               <div>
-                <Label className="text-gray-300">Allow Extra Toppings</Label>
-                <p className="text-gray-500 text-xs mt-0.5">Show extras/toppings selection for this item</p>
+                <Label>Allow Extras</Label>
+                <p className="text-gray-500 text-xs">
+                  Customer toppings/extras select kar sake.
+                </p>
               </div>
               <button
                 type="button"
-                onClick={() => setItemForm({ ...itemForm, has_extras: !itemForm.has_extras })}
-                className="cursor-pointer"
-              >
-                {itemForm.has_extras
-                  ? <ToggleRight className="w-6 h-6 text-green-500" />
-                  : <ToggleLeft className="w-6 h-6 text-gray-500" />
+                onClick={() =>
+                  setItemForm((current) => ({
+                    ...current,
+                    has_extras: !current.has_extras,
+                  }))
                 }
-              </button>
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-gray-800 border border-gray-700">
-              <div>
-                <Label className="text-gray-300">⭐ Mark as Popular</Label>
-                <p className="text-gray-500 text-xs mt-0.5">Show this item in Popular section on homepage</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setItemForm({ ...itemForm, is_popular: !itemForm.is_popular })}
-                className="cursor-pointer"
               >
-                {itemForm.is_popular
-                  ? <ToggleRight className="w-6 h-6 text-orange-500" />
-                  : <ToggleLeft className="w-6 h-6 text-gray-500" />
-                }
+                {itemForm.has_extras ? (
+                  <ToggleRight className="w-7 h-7 text-green-500" />
+                ) : (
+                  <ToggleLeft className="w-7 h-7 text-gray-500" />
+                )}
               </button>
             </div>
 
-            {/* Custom Size Options */}
+            <div className="flex items-center justify-between p-3 rounded-xl border border-gray-700">
+              <div>
+                <Label>⭐ Popular Item</Label>
+                <p className="text-gray-500 text-xs">
+                  Customer homepage par show hoga.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setItemForm((current) => ({
+                    ...current,
+                    is_popular: !current.is_popular,
+                  }))
+                }
+              >
+                {itemForm.is_popular ? (
+                  <ToggleRight className="w-7 h-7 text-yellow-500" />
+                ) : (
+                  <ToggleLeft className="w-7 h-7 text-gray-500" />
+                )}
+              </button>
+            </div>
+
             <div>
               <div className="flex items-center justify-between mb-2">
-                <Label className="text-gray-300">Size Options & Prices *</Label>
-                <Button size="sm" variant="ghost" onClick={addSizeOption} className="text-green-400 hover:text-green-300 text-xs cursor-pointer">
-                  <Plus className="w-3 h-3 mr-1" /> Add Size
+                <Label>Sizes & Prices *</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={addSizeOption}
+                  className="text-green-400"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add Size
                 </Button>
               </div>
-              <p className="text-gray-500 text-xs mb-2">Add one or more sizes. Even if item has only one size, add it here (e.g. "Regular" with its price).</p>
+
               <div className="space-y-2">
-                {sizeOptions.map((size, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
+                {sizeOptions.map((size, index) => (
+                  <div
+                    key={`${index}-${size.name}`}
+                    className="flex items-center gap-2"
+                  >
                     <Input
                       value={size.name}
-                      onChange={e => updateSizeOption(idx, 'name', e.target.value)}
-                      placeholder="Size name (e.g. Small, Medium, Large, Family)"
-                      className="bg-gray-800 border-gray-700 text-white flex-1"
+                      onChange={(event) =>
+                        updateSizeOption(
+                          index,
+                          'name',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Small / Medium / Large"
+                      className="bg-gray-800 border-gray-700 flex-1"
                     />
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-500 text-xs">AED</span>
-                      <Input
-                        type="number"
-                        value={size.price || ''}
-                        onChange={e => updateSizeOption(idx, 'price', Number(e.target.value))}
-                        placeholder="0"
-                        className="bg-gray-800 border-gray-700 text-white w-20"
-                      />
-                    </div>
-                    <button onClick={() => removeSizeOption(idx)} className="text-red-400 hover:text-red-300 cursor-pointer p-1">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={size.price || ''}
+                      onChange={(event) =>
+                        updateSizeOption(
+                          index,
+                          'price',
+                          Number(event.target.value),
+                        )
+                      }
+                      placeholder="AED"
+                      className="bg-gray-800 border-gray-700 w-24"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSizeOption(index)}
+                      className="text-red-400 p-1"
+                    >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -658,163 +1163,248 @@ export default function AdminMenu() {
               </div>
             </div>
 
-            {/* Per-item Discount */}
             <div className="rounded-xl border border-green-700/40 bg-green-950/20 p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-green-300 flex items-center gap-2">
-                    <Tag className="w-4 h-4" /> Item Discount
+                  <Label className="flex items-center gap-2 text-green-300">
+                    <Tag className="w-4 h-4" />
+                    Item Discount
                   </Label>
-                  <p className="text-gray-500 text-xs mt-1">
-                    Discount applies only to this item's base price. Extras and fees stay unchanged.
+                  <p className="text-green-300/60 text-xs mt-1">
+                    Sirf food price par lagega. Extras aur fees discount nahi hongi.
                   </p>
                 </div>
+
                 <button
                   type="button"
-                  onClick={() => setItemForm({ ...itemForm, discount_enabled: !itemForm.discount_enabled })}
-                  className="cursor-pointer"
+                  onClick={() =>
+                    setItemForm((current) => ({
+                      ...current,
+                      discount_enabled:
+                        !current.discount_enabled,
+                    }))
+                  }
                 >
-                  {itemForm.discount_enabled
-                    ? <ToggleRight className="w-7 h-7 text-green-500" />
-                    : <ToggleLeft className="w-7 h-7 text-gray-500" />}
+                  {itemForm.discount_enabled ? (
+                    <ToggleRight className="w-8 h-8 text-green-500" />
+                  ) : (
+                    <ToggleLeft className="w-8 h-8 text-gray-500" />
+                  )}
                 </button>
               </div>
 
               {itemForm.discount_enabled && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-gray-300">Discount Type</Label>
-                      <Select
-                        value={itemForm.discount_type}
-                        onValueChange={(value) =>
-                          setItemForm({ ...itemForm, discount_type: value as 'percentage' | 'fixed' })
-                        }
-                      >
-                        <SelectTrigger className="bg-gray-800 border-gray-700 text-white mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-gray-900 border-gray-700">
-                          <SelectItem value="percentage">Percentage %</SelectItem>
-                          <SelectItem value="fixed">Fixed AED</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-gray-300">
-                        {itemForm.discount_type === 'percentage' ? 'Discount %' : 'Discount AED'}
-                      </Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        max={itemForm.discount_type === 'percentage' ? 100 : undefined}
-                        step="0.01"
-                        value={itemForm.discount_value || ''}
-                        onChange={e => setItemForm({ ...itemForm, discount_value: Number(e.target.value) })}
-                        placeholder="0"
-                        className="bg-gray-800 border-gray-700 text-white mt-1"
-                      />
-                    </div>
+                <>
+                  <div>
+                    <Label>Discount Type</Label>
+                    <Select
+                      value={itemForm.discount_type}
+                      onValueChange={(value: DiscountType) =>
+                        setItemForm((current) => ({
+                          ...current,
+                          discount_type: value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="bg-gray-800 border-gray-700 mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-gray-900 border-gray-700">
+                        <SelectItem value="percentage">
+                          Percentage %
+                        </SelectItem>
+                        <SelectItem value="fixed">
+                          Fixed AED
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label>
+                      {itemForm.discount_type === 'fixed'
+                        ? 'Discount AED'
+                        : 'Discount Percentage'}
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max={
+                        itemForm.discount_type === 'percentage'
+                          ? 100
+                          : undefined
+                      }
+                      step="0.01"
+                      value={itemForm.discount_value || ''}
+                      onChange={(event) =>
+                        setItemForm((current) => ({
+                          ...current,
+                          discount_value: Number(
+                            event.target.value,
+                          ),
+                        }))
+                      }
+                      placeholder={
+                        itemForm.discount_type === 'fixed'
+                          ? 'Example: 3'
+                          : 'Example: 10'
+                      }
+                      className="bg-gray-800 border-gray-700 mt-1"
+                    />
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <Label className="text-gray-300">Start Date & Time (optional)</Label>
+                      <Label>Start (optional)</Label>
                       <Input
                         type="datetime-local"
                         value={itemForm.discount_start_at}
-                        onChange={e => setItemForm({ ...itemForm, discount_start_at: e.target.value })}
-                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                        onChange={(event) =>
+                          setItemForm((current) => ({
+                            ...current,
+                            discount_start_at:
+                              event.target.value,
+                          }))
+                        }
+                        className="bg-gray-800 border-gray-700 mt-1"
                       />
                     </div>
                     <div>
-                      <Label className="text-gray-300">End Date & Time (optional)</Label>
+                      <Label>End (optional)</Label>
                       <Input
                         type="datetime-local"
                         value={itemForm.discount_end_at}
-                        onChange={e => setItemForm({ ...itemForm, discount_end_at: e.target.value })}
-                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                        onChange={(event) =>
+                          setItemForm((current) => ({
+                            ...current,
+                            discount_end_at:
+                              event.target.value,
+                          }))
+                        }
+                        className="bg-gray-800 border-gray-700 mt-1"
                       />
                     </div>
                   </div>
 
-                  {itemForm.discount_value > 0 && (
-                    <div className="rounded-lg bg-gray-900 border border-gray-800 p-3">
-                      <p className="text-gray-400 text-xs mb-2">Customer price preview</p>
-                      <div className="space-y-1">
-                        {sizeOptions.filter(size => size.name.trim() && size.price > 0).map((size, index) => {
-                          const previewItem = {
-                            ...(editingItem || {}),
-                            discount_enabled: true,
-                            discount_type: itemForm.discount_type,
-                            discount_value: itemForm.discount_value,
-                            discount_start_at: '',
-                            discount_end_at: '',
-                          } as MenuItem;
-                          const price = getItemPriceBreakdown(previewItem, size.price);
-                          return (
-                            <div key={`${size.name}-${index}`} className="flex items-center justify-between text-sm">
-                              <span className="text-gray-300">{size.name}</span>
-                              <span>
-                                <span className="text-gray-500 line-through mr-2">AED {price.originalPrice.toFixed(2)}</span>
-                                <span className="text-green-400 font-bold">AED {price.finalPrice.toFixed(2)}</span>
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  <div className="rounded-lg bg-gray-900 border border-gray-700 p-3 text-xs">
+                    <p className="text-gray-400">
+                      Customer ko old price cut, new price aur saving show hogi.
+                    </p>
+                  </div>
+                </>
               )}
             </div>
 
-            <Button onClick={saveItem} className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              {editingItem ? 'Update Item' : 'Add Item'}
+            <Button
+              type="button"
+              onClick={() => void saveItem()}
+              disabled={savingItem}
+              className="w-full bg-green-600 hover:bg-green-700 text-white"
+            >
+              {savingItem
+                ? 'Saving...'
+                : editingItem
+                  ? 'Update Item'
+                  : 'Add Item'}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Category Dialog */}
-      <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+      <Dialog
+        open={categoryDialogOpen}
+        onOpenChange={setCategoryDialogOpen}
+      >
         <DialogContent className="bg-gray-900 border-gray-700 text-white">
           <DialogHeader>
-            <DialogTitle>{editingCategory ? 'Edit Category' : 'Add Category'}</DialogTitle>
+            <DialogTitle>
+              {editingCategory ? 'Edit Category' : 'Add Category'}
+            </DialogTitle>
           </DialogHeader>
+
           <div className="space-y-4">
             <div>
-              <Label className="text-gray-300">Name</Label>
-              <Input value={categoryForm.name} onChange={e => setCategoryForm({ ...categoryForm, name: e.target.value })} className="bg-gray-800 border-gray-700 text-white mt-1" />
+              <Label>Name</Label>
+              <Input
+                value={categoryForm.name}
+                onChange={(event) =>
+                  setCategoryForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+              />
             </div>
             <div>
-              <Label className="text-gray-300">Sort Order</Label>
-              <Input type="number" value={categoryForm.sort_order} onChange={e => setCategoryForm({ ...categoryForm, sort_order: Number(e.target.value) })} className="bg-gray-800 border-gray-700 text-white mt-1" />
+              <Label>Sort Order</Label>
+              <Input
+                type="number"
+                value={categoryForm.sort_order}
+                onChange={(event) =>
+                  setCategoryForm((current) => ({
+                    ...current,
+                    sort_order: Number(event.target.value),
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+              />
             </div>
-            <Button onClick={saveCategory} className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              {editingCategory ? 'Update Category' : 'Add Category'}
+            <Button
+              type="button"
+              onClick={() => void saveCategory()}
+              className="w-full bg-green-600 hover:bg-green-700"
+            >
+              Save Category
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Extra Dialog */}
       <Dialog open={extraDialogOpen} onOpenChange={setExtraDialogOpen}>
         <DialogContent className="bg-gray-900 border-gray-700 text-white">
           <DialogHeader>
-            <DialogTitle>{editingExtra ? 'Edit Extra/Topping' : 'Add Extra/Topping'}</DialogTitle>
+            <DialogTitle>
+              {editingExtra ? 'Edit Extra' : 'Add Extra'}
+            </DialogTitle>
           </DialogHeader>
+
           <div className="space-y-4">
             <div>
-              <Label className="text-gray-300">Name</Label>
-              <Input value={extraForm.name} onChange={e => setExtraForm({ ...extraForm, name: e.target.value })} className="bg-gray-800 border-gray-700 text-white mt-1" />
+              <Label>Name</Label>
+              <Input
+                value={extraForm.name}
+                onChange={(event) =>
+                  setExtraForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+              />
             </div>
             <div>
-              <Label className="text-gray-300">Price (AED)</Label>
-              <Input type="number" value={extraForm.price} onChange={e => setExtraForm({ ...extraForm, price: Number(e.target.value) })} className="bg-gray-800 border-gray-700 text-white mt-1" />
+              <Label>Price AED</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={extraForm.price || ''}
+                onChange={(event) =>
+                  setExtraForm((current) => ({
+                    ...current,
+                    price: Number(event.target.value),
+                  }))
+                }
+                className="bg-gray-800 border-gray-700 mt-1"
+              />
             </div>
-            <Button onClick={saveExtra} className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              {editingExtra ? 'Update Extra' : 'Add Extra'}
+            <Button
+              type="button"
+              onClick={() => void saveExtra()}
+              className="w-full bg-green-600 hover:bg-green-700"
+            >
+              Save Extra
             </Button>
           </div>
         </DialogContent>
