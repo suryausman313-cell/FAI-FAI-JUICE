@@ -1,16 +1,18 @@
 import { useEffect, useState, useCallback } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { ShoppingBag, Clock, Phone, MapPin, ChevronRight, Tag, MessageSquare, Star, Package } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
+import { MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
 import { getItemPriceBreakdown, isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
+import { getAPIBaseURL } from '@/lib/config';
 
-const CACHE_KEY = 'fai_home_cache_v6';
+const CACHE_KEY = 'fai_home_cache_render_v7';
 const CACHE_TTL = 120000; // 2 minutes
 
 interface CachedData {
@@ -54,33 +56,69 @@ export default function Index() {
 
   const loadData = useCallback(async () => {
     try {
-      const [settingsRes, itemsRes, catRes, offersRes, popularRes] = await Promise.all([
-        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
-        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
-        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
-        client.entities.offers.query({ query: { is_active: true }, limit: 100 }),
-        client.apiCall.invoke({ url: '/api/v1/public/popular-items', method: 'GET' }).catch(() => null),
-      ]);
-      const settingsData = settingsRes?.data?.items?.[0] || null;
-      const allItems = itemsRes?.data?.items || [];
-      const popularItems = popularRes?.data?.items || [];
-      const maxPopular = Math.max(2, Math.min(12, Number((settingsData as any)?.popular_max_items || 6)));
-      const items = popularItems.length > 0 ? popularItems.slice(0, maxPopular) : allItems.slice(0, maxPopular);
-      const cats = catRes?.data?.items || [];
-      const offersList = (offersRes?.data?.items || []).filter((offer: Offer) => isPromoOfferCurrentlyActive(offer));
+      const base = getAPIBaseURL().replace(/\/$/, '');
+      const activeQuery = JSON.stringify({ is_active: true });
+
+      const [settingsRes, itemsRes, catRes, offersRes, popularRes] =
+        await Promise.all([
+          axios.get(`${base}/api/v1/entities/restaurant_settings`, {
+            params: { limit: 1 },
+            timeout: 20000,
+          }),
+          axios.get(`${base}/api/v1/entities/menu_items`, {
+            params: { query: activeQuery, sort: 'sort_order', limit: 500 },
+            timeout: 20000,
+          }),
+          axios.get(`${base}/api/v1/entities/categories`, {
+            params: { query: activeQuery, sort: 'sort_order', limit: 100 },
+            timeout: 20000,
+          }),
+          axios.get(`${base}/api/v1/entities/offers`, {
+            params: { query: activeQuery, sort: '-id', limit: 100 },
+            timeout: 20000,
+          }),
+          axios
+            .get(`${base}/api/v1/public/popular-items`, {
+              timeout: 20000,
+            })
+            .catch(() => null),
+        ]);
+
+      const settingsData =
+        (settingsRes.data?.items?.[0] || null) as RestaurantSettings | null;
+      const allItems = (itemsRes.data?.items || []) as MenuItem[];
+      const popularItems =
+        ((popularRes?.data?.items || []) as MenuItem[]);
+      const maxPopular = Math.max(
+        2,
+        Math.min(
+          12,
+          Number((settingsData as any)?.popular_max_items || 6),
+        ),
+      );
+      const items =
+        popularItems.length > 0
+          ? popularItems.slice(0, maxPopular)
+          : allItems.slice(0, maxPopular);
+      const cats = (catRes.data?.items || []) as Category[];
+      const offersList = ((offersRes.data?.items || []) as Offer[]).filter(
+        (offer) => isPromoOfferCurrentlyActive(offer),
+      );
 
       setSettings(settingsData);
       setFeaturedItems(items);
       setCategories(cats);
       setOffers(offersList);
+      setCachedData({
+        settings: settingsData,
+        featuredItems: items,
+        categories: cats,
+        offers: offersList,
+      });
 
-      // Cache for next visit
-      setCachedData({ settings: settingsData, featuredItems: items, categories: cats, offers: offersList });
-
-      // Auto-schedule check
       if (settingsData) checkAutoSchedule(settingsData);
-    } catch (e) {
-      console.error('Failed to load data:', e);
+    } catch (error) {
+      console.error('Failed to load home data from Render:', error);
     } finally {
       setLoading(false);
     }
@@ -126,12 +164,22 @@ export default function Index() {
       const desiredStatus = shouldBeOpen ? 'open' : 'closed';
 
       if (currentStatus !== 'busy' && currentStatus !== desiredStatus) {
-        client.entities.restaurant_settings.update({
-          id: String(currentSettings.id),
-          data: { restaurant_status: desiredStatus },
-        }).then(() => {
-          setSettings(prev => prev ? { ...prev, restaurant_status: desiredStatus } : prev);
-        }).catch(() => { /* ignore */ });
+        axios
+          .put(
+            `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/entities/restaurant_settings/${currentSettings.id}`,
+            { restaurant_status: desiredStatus },
+            { timeout: 20000 },
+          )
+          .then(() => {
+            setSettings((previous) =>
+              previous
+                ? { ...previous, restaurant_status: desiredStatus }
+                : previous,
+            );
+          })
+          .catch(() => {
+            // Auto schedule is best-effort only.
+          });
       }
     } catch { /* ignore */ }
   }
