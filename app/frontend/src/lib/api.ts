@@ -66,8 +66,23 @@ export interface Order {
   estimated_time: string;
   order_notes: string;
   payment_method: string;
+  order_type?: 'pickup' | 'delivery';
+  customer_lat?: number | null;
+  customer_lng?: number | null;
+  customer_address?: string;
   status: string;
   total_amount: number;
+  subtotal_amount?: number;
+  promo_code?: string;
+  discount_type?: 'percentage' | 'fixed' | '';
+  discount_percent?: number;
+  discount_amount?: number;
+  service_fee?: number;
+  small_order_fee?: number;
+  delivery_charge?: number;
+  tax_amount?: number;
+  tip_amount?: number;
+  tip_type?: string;
   items_json: string;
   created_at: string;
   updated_at: string;
@@ -105,13 +120,32 @@ export interface RestaurantSettings {
   card_enabled_pickup: boolean;
   cash_enabled_delivery: boolean;
   card_enabled_delivery: boolean;
+  show_status_banner?: boolean;
+  show_offers?: boolean;
+  show_quick_actions?: boolean;
+  show_popular_items?: boolean;
+  show_reviews?: boolean;
+  blog_enabled?: boolean;
+  show_restaurant_info?: boolean;
+  show_bottom_nav?: boolean;
+  popular_auto_enabled?: boolean;
+  popular_manual_enabled?: boolean;
+  popular_max_items?: number;
+  checkout_flow?: 'two_step' | 'direct';
+  tax_percent?: number;
+  banner_text?: string;
+  offer_text?: string;
 }
 
 export interface Offer {
   id: number;
   title: string;
   description: string;
+  discount_type?: 'percentage' | 'fixed';
   discount_percent: number;
+  fixed_discount_amount?: number;
+  minimum_order_amount?: number;
+  maximum_discount_amount?: number;
   promo_code: string;
   banner_image_url: string;
   is_active: boolean;
@@ -119,6 +153,7 @@ export interface Offer {
   end_date: string;
   first_order_only: boolean;
   usage_limit_per_customer: number;
+  total_usage_limit?: number;
 }
 
 export interface Notification {
