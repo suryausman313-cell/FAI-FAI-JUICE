@@ -160,7 +160,7 @@ export default function AdminOrders() {
       if (search) params.search = search;
 
       const payload = await adminRequest<{ items?: AdminOrder[] }>(
-        '/api/v1/admin/orders',
+        '/api/v1/admin/kitchen/orders',
         'GET',
         undefined,
         params,
