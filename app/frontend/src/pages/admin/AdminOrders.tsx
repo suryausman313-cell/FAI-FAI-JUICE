@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -19,13 +20,26 @@ type AdminOrder = Order & {
   tip_type?: string;
 };
 
-function adminHeaders() {
+function getSavedKitchenPin(): string {
+  return String(localStorage.getItem('kitchen_pin') || '').trim();
+}
+
+function saveKitchenPin(pin: string): void {
+  localStorage.setItem('kitchen_pin', pin.trim());
+}
+
+function adminHeaders(pinOverride?: string) {
   const adminToken =
     localStorage.getItem('fai_fai_admin_token') || '';
+  const kitchenPin = String(
+    pinOverride ?? getSavedKitchenPin(),
+  ).trim();
 
   return {
     'Content-Type': 'application/json',
-    'X-Kitchen-Pin': '1122',
+    ...(kitchenPin
+      ? { 'X-Kitchen-Pin': kitchenPin }
+      : {}),
     ...(adminToken
       ? { Authorization: `Bearer ${adminToken}` }
       : {}),
@@ -37,55 +51,44 @@ async function adminRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
   data?: unknown,
   params?: Record<string, unknown>,
+  allowPinRetry = true,
 ): Promise<T> {
-  const apiBase = getAPIBaseURL().replace(/\/$/, '');
-  const url = new URL(`${apiBase}${path}`);
-
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        url.searchParams.set(key, String(value));
-      }
+  try {
+    const response = await axios.request<T>({
+      url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+      method,
+      data,
+      params,
+      headers: adminHeaders(),
+      timeout: 20000,
     });
-  }
+    return response.data;
+  } catch (error: any) {
+    const status = error?.response?.status;
 
-  const response = await fetch(url.toString(), {
-    method,
-    headers: adminHeaders(),
-    body:
-      method === 'GET' || data === undefined
-        ? undefined
-        : JSON.stringify(data),
-    cache: 'no-store',
-  });
+    if (status === 401 && allowPinRetry) {
+      const entered = window.prompt(
+        'Admin Orders ke liye wahi Kitchen PIN enter karein jo Kitchen login me use hota hai.',
+        getSavedKitchenPin(),
+      );
+      const pin = String(entered || '').trim();
 
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const error = new Error(
-      payload?.detail ||
-        payload?.message ||
-        `Request failed with status ${response.status}`,
-    ) as Error & {
-      status?: number;
-      data?: unknown;
-      response?: {
-        status: number;
-        data: unknown;
-      };
-    };
-
-    error.status = response.status;
-    error.data = payload;
-    error.response = {
-      status: response.status,
-      data: payload,
-    };
+      if (pin) {
+        saveKitchenPin(pin);
+        const response = await axios.request<T>({
+          url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+          method,
+          data,
+          params,
+          headers: adminHeaders(pin),
+          timeout: 20000,
+        });
+        return response.data;
+      }
+    }
 
     throw error;
   }
-
-  return payload as T;
 }
 
 function isDeliveryOrder(order: AdminOrder): boolean {
@@ -126,7 +129,6 @@ const TIME_OPTIONS = [
 ];
 
 export default function AdminOrders() {
-  console.info('AdminOrders build: direct-fetch-1122-v1');
   const navigate = useNavigate();
   const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -202,7 +204,7 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Admin session expired or Kitchen PIN was rejected. Logout and login again.');
+        toast.error('Orders load nahi hue. Kitchen PIN check karke Refresh dabayein.');
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
