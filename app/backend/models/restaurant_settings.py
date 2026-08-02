@@ -63,5 +63,9 @@ class Restaurant_settings(Base):
     popular_manual_enabled = Column(Boolean, nullable=True, default=True, server_default='true')
     popular_max_items = Column(Integer, nullable=True, default=6, server_default='6')
 
+    # Admin Orders page can enable automatic rider assignment. Default OFF so
+    # existing shops keep manual control until Admin explicitly turns it on.
+    auto_assign_rider_enabled = Column(Boolean, nullable=True, default=False, server_default='false')
+
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)
