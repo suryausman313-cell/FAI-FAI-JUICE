@@ -27,19 +27,38 @@ KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
 async def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
     db: AsyncSession = Depends(get_db),
 ) -> bool:
-    """Allow a correct Kitchen PIN or a valid Fai Fai Admin login token."""
-    if x_kitchen_pin and x_kitchen_pin == KITCHEN_PIN:
+    """Allow a correct Kitchen PIN or a valid Fai Fai Admin login token.
+
+    X-Admin-Token is accepted as a compatibility fallback for browsers/proxies
+    that do not forward the Authorization header from the Admin Orders page.
+    """
+    supplied_pin = str(x_kitchen_pin or "").strip()
+    if supplied_pin and supplied_pin == KITCHEN_PIN:
         return True
 
-    if authorization and authorization.lower().startswith("bearer "):
-        identity = await get_current_admin(authorization=authorization, db=db)
-        if identity.role == "super_admin" or identity.permissions.get("orders") or identity.permissions.get("kitchen"):
+    token_header = str(authorization or "").strip()
+    fallback_token = str(x_admin_token or "").strip()
+    if not token_header and fallback_token:
+        token_header = (
+            fallback_token
+            if fallback_token.lower().startswith("bearer ")
+            else f"Bearer {fallback_token}"
+        )
+
+    if token_header.lower().startswith("bearer "):
+        identity = await get_current_admin(authorization=token_header, db=db)
+        if (
+            identity.role == "super_admin"
+            or identity.permissions.get("orders")
+            or identity.permissions.get("kitchen")
+        ):
             return True
         raise HTTPException(status_code=403, detail="Orders permission required")
 
-    raise HTTPException(status_code=401, detail="Admin login or valid kitchen PIN required")
+    raise HTTPException(status_code=401, detail="Admin login required")
 
 
 def is_delivery_order(order: Orders) -> bool:
