@@ -80,6 +80,11 @@ type ParsedItem = {
 
 const TIME_OPTIONS = [10, 15, 20, 30, 45];
 const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
+const DELIVERY_PENDING_STATUSES = new Set([
+  'out_for_delivery',
+  'picked_up',
+  'on_the_way',
+]);
 
 function money(value: unknown): string {
   const amount = Number(value);
@@ -586,7 +591,12 @@ export default function KitchenOrders() {
   );
 
   const terminalOrders = useMemo(
-    () => orders.filter((order) => ['completed', 'cancelled'].includes(order.status)),
+    () =>
+      orders.filter(
+        (order) =>
+          ['completed', 'cancelled'].includes(order.status) ||
+          DELIVERY_PENDING_STATUSES.has(order.status)
+      ),
     [orders]
   );
 
@@ -803,15 +813,34 @@ export default function KitchenOrders() {
 
         {section === 'ready' && (
           <div className="grid grid-cols-2 gap-2">
-            <Button
-              onClick={() => void updateOrderStatus(order, 'completed')}
-              className="bg-gray-700 hover:bg-gray-600"
-            >
-              Completed
-            </Button>
+            {isDeliveryOrder(order) ? (
+              <Button
+                type="button"
+                disabled
+                className="bg-blue-950 text-blue-300 border border-blue-700/50 disabled:opacity-100"
+              >
+                Waiting for Rider
+              </Button>
+            ) : (
+              <Button
+                onClick={() => void updateOrderStatus(order, 'completed')}
+                className="bg-gray-700 hover:bg-gray-600"
+              >
+                Completed
+              </Button>
+            )}
+
             <Button variant="outline" onClick={() => printReceipt(order, true)}>
               <Printer className="w-4 h-4 mr-1" /> Reprint
             </Button>
+
+            {isDeliveryOrder(order) && (
+              <p className="col-span-2 text-[11px] text-blue-300 bg-blue-600/10 border border-blue-600/20 rounded-lg px-2 py-1.5">
+                Rider Picked Up karega to order Kitchen se hat kar Today me
+                Delivery Pending show hoga. Sirf Rider Delivered karega to
+                Completed hoga.
+              </p>
+            )}
           </div>
         )}
       </Card>
@@ -838,7 +867,7 @@ export default function KitchenOrders() {
 
         {historyOrders.length === 0 ? (
           <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
-            Is din koi completed/cancelled order nahi hai.
+            Is din koi completed, delivery pending ya cancelled order nahi hai.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -848,10 +877,20 @@ export default function KitchenOrders() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-white text-lg font-black">#{order.id}</span>
-                      <Badge className={order.status === 'completed'
-                        ? 'bg-green-600/20 text-green-300 border-green-600/30'
-                        : 'bg-red-600/20 text-red-300 border-red-600/30'}>
-                        {order.status === 'completed' ? 'Completed' : 'Cancelled'}
+                      <Badge
+                        className={
+                          order.status === 'completed'
+                            ? 'bg-green-600/20 text-green-300 border-green-600/30'
+                            : DELIVERY_PENDING_STATUSES.has(order.status)
+                              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
+                              : 'bg-red-600/20 text-red-300 border-red-600/30'
+                        }
+                      >
+                        {order.status === 'completed'
+                          ? 'Completed'
+                          : DELIVERY_PENDING_STATUSES.has(order.status)
+                            ? 'Delivery Pending'
+                            : 'Cancelled'}
                       </Badge>
                     </div>
                     <p className="text-gray-500 text-xs mt-1">
