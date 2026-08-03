@@ -1,6 +1,133 @@
 import { createClient } from '@metagptx/web-sdk';
+import { getAPIBaseURL } from './config';
 
-export const client = createClient();
+const atomsClient = createClient();
+
+type EntityRequest = {
+  id?: string;
+  data?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+  sort?: string;
+  skip?: number;
+  limit?: number;
+  fields?: string;
+};
+
+const FAI_FAI_MENU_IMAGES: Record<string, string> = {
+  watermelon: 'watermelon.webp',
+  shining: 'shining.webp',
+  orange: 'orange.webp',
+  fadeetk: 'fadeetk.webp',
+  melon: 'melon.webp',
+  hibiscus: 'hibiscus.webp',
+  'cocktail juice': 'cocktail.webp',
+  'orange passion': 'orange-passion-fruit.webp',
+  avocado: 'avocado.webp',
+  'lemon mint': 'lemon-mint.webp',
+  'strawberry smoothie': 'strawberry-smoothie.webp',
+  'juice bottle 1.5 l': 'juice-box.webp',
+  'hambana box 20 pcs': 'mini-juice-box.webp',
+  'juices box': 'juice-box.webp',
+  hambana: 'fai-fai-special.webp',
+  'mix fruit': 'cocktail.webp',
+  'watermelon with cheese': 'watermelon.webp',
+  acai: 'acai.webp',
+  'smoothie acai': 'smoothie-acai.webp',
+  'strawberry mojito': 'strawberry-mojito.webp',
+  'blue mojito': 'blue-mojito.webp',
+  'mojito green apple': 'green-apple-mojito.webp',
+  'mojito passion fruit': 'passion-fruit-mojito.webp',
+  'caramel ice cream': 'caramel-ice-cream.webp',
+  'lemon mint ice cream': 'lemon-mint-ice-cream.webp',
+  'mix berry ice cream': 'mix-berry-ice-cream.webp',
+  'strawberry cheesecake ice cream': 'strawberry-cheesecake-ice-cream.webp',
+  'einstein milkshake': 'einstein.webp',
+  'nutella milkshake': 'nutella.webp',
+  'strawberry milkshake': 'strawberry-milkshake.webp',
+  'chocolate milkshake': 'chocolate-milkshake.webp',
+  'oreo milkshake': 'oreo-milkshake.webp',
+  'kinder milkshake': 'chocolate-milkshake.webp',
+};
+
+function restoreMenuImages(payload: any) {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  items.forEach((item: any) => {
+    if (String(item?.image_url || '').trim()) return;
+    const file = FAI_FAI_MENU_IMAGES[String(item?.name || '').trim().toLowerCase()];
+    if (file) item.image_url = `/menu/fai-fai-v1/${file}`;
+  });
+  return payload;
+}
+
+async function backendRequest(
+  path: string,
+  method = 'GET',
+  data?: unknown,
+  params?: Record<string, unknown>,
+) {
+  const url = new URL(`${getAPIBaseURL().replace(/\/$/, '')}${path}`);
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    url.searchParams.set(
+      key,
+      key === 'query' && typeof value === 'object'
+        ? JSON.stringify(value)
+        : String(value),
+    );
+  });
+
+  const response = await fetch(url.toString(), {
+    method,
+    headers: data === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+
+  let payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.detail || payload?.message || `Request failed (${response.status})`);
+  }
+  if (path === '/api/v1/entities/menu_items') {
+    payload = restoreMenuImages(payload);
+  }
+  return { data: payload };
+}
+
+function entityApi(entity: string) {
+  const basePath = `/api/v1/entities/${entity}`;
+  return {
+    query: (options: EntityRequest = {}) =>
+      backendRequest(basePath, 'GET', undefined, {
+        query: options.query,
+        sort: options.sort,
+        skip: options.skip,
+        limit: options.limit,
+        fields: options.fields,
+      }),
+    create: (options: EntityRequest) =>
+      backendRequest(basePath, 'POST', options.data || {}),
+    update: (options: EntityRequest) =>
+      backendRequest(`${basePath}/${options.id}`, 'PUT', options.data || {}),
+    delete: (options: EntityRequest) =>
+      backendRequest(`${basePath}/${options.id}`, 'DELETE'),
+  };
+}
+
+// The exported app runs on Cloudflare/Render, so entity and API requests must
+// use the configured Render backend instead of the old Atoms project database.
+const entities = new Proxy(
+  {},
+  { get: (_target, entity: string) => entityApi(entity) },
+) as any;
+
+export const client = {
+  ...atomsClient,
+  entities,
+  apiCall: {
+    invoke: ({ url, method = 'GET', data, params }: any) =>
+      backendRequest(url, method, data, params),
+  },
+} as any;
 
 // Types
 export interface Category {
