@@ -32,8 +32,6 @@ router = APIRouter(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_ADMIN_USERNAME = "faifaiadmin"
-DEFAULT_ADMIN_PASSWORD = "FaiFai@2026"
 TOKEN_TTL_SECONDS = 12 * 60 * 60
 PBKDF2_ITERATIONS = 240_000
 
@@ -316,7 +314,18 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
 
     existing = await db.execute(text("SELECT id FROM admin_security WHERE id = 1"))
     if existing.first() is None:
-        salt, password_hash = _new_password_record(DEFAULT_ADMIN_PASSWORD)
+        initial_username = os.getenv("INITIAL_ADMIN_USERNAME", "").strip()
+        initial_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+        if len(initial_username) < 3 or len(initial_password) < 8:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Set INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD "
+                    "in Render Environment for first-time Admin setup."
+                ),
+            )
+
+        salt, password_hash = _new_password_record(initial_password)
         await db.execute(
             text(
                 """
@@ -327,7 +336,7 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
                 """
             ),
             {
-                "username": DEFAULT_ADMIN_USERNAME,
+                "username": initial_username,
                 "password_hash": password_hash,
                 "salt": salt,
             },

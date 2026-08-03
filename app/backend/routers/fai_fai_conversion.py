@@ -375,9 +375,10 @@ async def apply_conversion(
             "receipt_settings_updated": receipt_updated,
             **menu_result,
             **scrub_result,
-            "admin_username": "faifaiadmin",
-            "admin_password": "FaiFai@2026",
-            "kitchen_pin": "1122",
+            "credentials_note": (
+                "Configure INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD "
+                "and KITCHEN_PIN in Render Environment"
+            ),
             **(await conversion_summary(db)),
         }
     except HTTPException:

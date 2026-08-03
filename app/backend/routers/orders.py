@@ -2,7 +2,7 @@
 # @Desc: Customer-facing order placement API
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
@@ -13,6 +13,11 @@ from models.orders import Orders
 from models.menu_items import Menu_items
 from models.offers import Offers
 from services.rider_assignment import auto_assign_order
+from routers.customer_auth import (
+    decode_customer_token,
+    get_bearer_token,
+    normalize_phone,
+)
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 
@@ -64,13 +69,27 @@ class PlaceOrderFullRequest(PlaceOrderRequest):
 @router.post("/place")
 async def place_order(
     data: PlaceOrderFullRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """Place a new order with duplicate prevention, menu validation, shop-closed check, and zone validation"""
     try:
         from datetime import datetime, timezone, timedelta
 
-        guest_user_id = get_guest_user_id(data.session_id)
+        customer_payload = decode_customer_token(get_bearer_token(authorization))
+        account_phone = normalize_phone(str(customer_payload.get("phone") or ""))
+        submitted_phone = normalize_phone(data.customer_phone)
+        if account_phone != submitted_phone:
+            raise HTTPException(
+                status_code=403,
+                detail="Order mobile number must match the logged-in customer account",
+            )
+
+        guest_user_id = f"customer:{customer_payload.get('sub', '')}"
+        data.customer_phone = account_phone
+        data.customer_name = str(
+            customer_payload.get("customer_name") or data.customer_name
+        ).strip()
 
         # ===== SHOP OPEN/CLOSED CHECK =====
         from models.restaurant_settings import Restaurant_settings
@@ -533,13 +552,19 @@ class CancelOrderRequest(BaseModel):
 async def cancel_order(
     order_id: int,
     data: CancelOrderRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Customer cancels their own guest order (if allowed by admin settings)."""
+    """Customer cancels only an order owned by their logged-in account/device."""
     try:
+        customer_payload = decode_customer_token(get_bearer_token(authorization))
+        customer_user_id = f"customer:{customer_payload.get('sub', '')}"
         guest_user_id = get_guest_user_id(data.session_id)
         result = await db.execute(
-            select(Orders).where(Orders.id == order_id, Orders.user_id == guest_user_id)
+            select(Orders).where(
+                Orders.id == order_id,
+                Orders.user_id.in_([customer_user_id, guest_user_id]),
+            )
         )
         order = result.scalar_one_or_none()
 
@@ -597,18 +622,22 @@ async def cancel_order(
 
 @router.get("/my-orders")
 async def get_my_orders(
-    session_id: str = Query(..., min_length=8, max_length=120),
+    session_id: Optional[str] = Query(default=None, min_length=8, max_length=120),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get orders for the current guest session, including delivery/rider info."""
+    """Get orders owned by the logged-in account plus this device's older orders."""
     try:
-        guest_user_id = get_guest_user_id(session_id)
+        customer_payload = decode_customer_token(get_bearer_token(authorization))
+        owner_ids = [f"customer:{customer_payload.get('sub', '')}"]
+        if session_id:
+            owner_ids.append(get_guest_user_id(session_id))
         from models.delivery_assignments import Delivery_assignments
         from models.riders import Riders
 
         result = await db.execute(
             select(Orders)
-            .where(Orders.user_id == guest_user_id)
+            .where(Orders.user_id.in_(owner_ids))
             .order_by(desc(Orders.created_at))
             .limit(50)
         )

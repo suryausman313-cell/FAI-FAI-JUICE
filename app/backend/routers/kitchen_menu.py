@@ -19,9 +19,6 @@ router = APIRouter(
     tags=["kitchen-menu"],
 )
 
-KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122")
-
-
 def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(
         default=None,
@@ -29,7 +26,10 @@ def verify_kitchen_pin(
     ),
 ) -> bool:
     """Only a logged-in Kitchen screen may change menu availability."""
-    if not x_kitchen_pin or x_kitchen_pin != KITCHEN_PIN:
+    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
+    if len(expected_pin) < 4:
+        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
+    if not x_kitchen_pin or x_kitchen_pin != expected_pin:
         raise HTTPException(
             status_code=401,
             detail="Invalid kitchen PIN",

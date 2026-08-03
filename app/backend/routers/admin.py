@@ -10,17 +10,15 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 from core.database import get_db
-from dependencies.auth import get_current_user
-from routers.fai_fai_admin_control import get_current_admin
-from schemas.auth import UserResponse
+from routers.customer_auth import decode_customer_token, get_bearer_token
+from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 # Kitchen panel uses its own PIN header instead of an admin JWT.
-# On Render, you can set KITCHEN_PIN as an environment variable.
-KITCHEN_PIN = os.getenv("KITCHEN_PIN", "1122").strip()
+# On Render, KITCHEN_PIN is required as an environment variable.
 
 
 async def verify_kitchen_pin(
@@ -29,8 +27,9 @@ async def verify_kitchen_pin(
     db: AsyncSession = Depends(get_db),
 ) -> bool:
     """Allow a valid Fai Fai Admin token or the Kitchen PIN."""
+    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
     supplied_pin = (x_kitchen_pin or "").strip()
-    if supplied_pin and supplied_pin == KITCHEN_PIN:
+    if len(expected_pin) >= 4 and supplied_pin and supplied_pin == expected_pin:
         return True
 
     if authorization and authorization.lower().startswith("bearer "):
@@ -43,10 +42,13 @@ async def verify_kitchen_pin(
             return True
         raise HTTPException(status_code=403, detail="Orders permission required")
 
-    raise HTTPException(
-        status_code=401,
-        detail="Admin login or valid kitchen PIN required",
-    )
+    if len(expected_pin) < 4 and not authorization:
+        raise HTTPException(
+            status_code=503,
+            detail="Set KITCHEN_PIN in Render Environment first",
+        )
+
+    raise HTTPException(status_code=401, detail="Admin login or valid kitchen PIN required")
 
 
 def is_delivery_order(order: Orders) -> bool:
@@ -389,7 +391,7 @@ async def update_order_status(
 async def get_customers(
     search: Optional[str] = None,
     limit: int = 100,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Get customer list with order stats"""
@@ -443,14 +445,19 @@ class CustomerHeartbeatRequest(BaseModel):
 @router.post("/customer-heartbeat")
 async def customer_heartbeat(
     data: CustomerHeartbeatRequest,
-    current_user: UserResponse = Depends(get_current_user),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """Track customer online activity - called every 30s from the app (authenticated users)"""
     try:
-        user_id = current_user.id
+        payload = decode_customer_token(get_bearer_token(authorization))
+        user_id = f"customer:{payload.get('sub', '')}"
+        customer_phone = str(payload.get("phone") or data.customer_phone or "")
         result = await db.execute(
-            select(Customer_sessions).where(Customer_sessions.user_id == user_id)
+            select(Customer_sessions)
+            .where(Customer_sessions.customer_phone == customer_phone)
+            .order_by(desc(Customer_sessions.id))
+            .limit(1)
         )
         session = result.scalar_one_or_none()
 
@@ -468,7 +475,7 @@ async def customer_heartbeat(
                 user_id=user_id,
                 customer_name=data.customer_name or "Unknown",
                 customer_email=data.customer_email,
-                customer_phone=data.customer_phone,
+                customer_phone=customer_phone,
                 last_active=now,
                 first_seen=now,
             )
@@ -476,6 +483,8 @@ async def customer_heartbeat(
 
         await db.commit()
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Failed to update customer heartbeat: {e}")
         await db.rollback()
@@ -539,7 +548,7 @@ async def get_customers_enhanced(
     search: Optional[str] = None,
     filter_status: Optional[str] = None,
     limit: int = 100,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Get enhanced customer list with online status and activity tracking.

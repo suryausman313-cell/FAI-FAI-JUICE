@@ -32,7 +32,9 @@ class OrderStatusUpdate(BaseModel):
 def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
 ) -> bool:
-    expected = os.getenv("KITCHEN_PIN", "1122").strip()
+    expected = os.getenv("KITCHEN_PIN", "").strip()
+    if len(expected) < 4:
+        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
     supplied = (x_kitchen_pin or "").strip()
     if not supplied or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid kitchen PIN")

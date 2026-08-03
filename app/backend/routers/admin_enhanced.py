@@ -10,8 +10,7 @@ from sqlalchemy import select, desc, delete
 from typing import Optional
 
 from core.database import get_db
-from dependencies.auth import get_current_user
-from schemas.auth import UserResponse
+from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
 from models.orders import Orders
 from models.feedbacks import Feedbacks
 from models.activity_logs import Activity_logs
@@ -78,7 +77,7 @@ async def log_activity(
 @router.delete("/orders/{order_id}")
 async def delete_order(
     order_id: int,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Permanently delete an order"""
@@ -104,7 +103,7 @@ async def delete_order(
         # Log the deletion
         await log_activity(
             db=db,
-            user_id=current_user.id,
+            user_id=current_user.subject,
             action_type="order_delete",
             entity_type="order",
             entity_id=str(order_id),
@@ -124,13 +123,13 @@ async def delete_order(
 @router.post("/activity-log")
 async def create_activity_log(
     data: ActivityLogCreate,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Create an activity log entry"""
     try:
         log_entry = Activity_logs(
-            user_id=current_user.id,
+            user_id=current_user.subject,
             action_type=data.action_type,
             entity_type=data.entity_type,
             entity_id=data.entity_id or "",
@@ -153,7 +152,7 @@ async def get_activity_logs(
     action_type: Optional[str] = None,
     limit: int = 50,
     skip: int = 0,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Get paginated activity logs"""
@@ -189,7 +188,7 @@ async def get_activity_logs(
 async def reply_to_feedback(
     feedback_id: int,
     data: FeedbackReply,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin reply to a customer feedback"""
@@ -220,7 +219,7 @@ async def reply_to_feedback(
         # Log the reply
         await log_activity(
             db=db,
-            user_id=current_user.id,
+            user_id=current_user.subject,
             action_type="feedback_reply",
             entity_type="feedback",
             entity_id=str(feedback_id),
@@ -241,7 +240,7 @@ async def reply_to_feedback(
 async def add_staff_note(
     order_id: int,
     data: StaffNote,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Add internal staff note to an order"""
@@ -263,7 +262,7 @@ async def add_staff_note(
         # Log the action
         await log_activity(
             db=db,
-            user_id=current_user.id,
+            user_id=current_user.subject,
             action_type="staff_note",
             entity_type="order",
             entity_id=str(order_id),
@@ -283,7 +282,7 @@ async def add_staff_note(
 @router.put("/menu/{item_id}/toggle-popular")
 async def toggle_popular(
     item_id: int,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Toggle is_popular flag on a menu item"""
@@ -329,7 +328,7 @@ async def get_popular_items(
 
 @router.post("/reset-data")
 async def reset_all_data(
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Reset all test data - deletes orders, delivery assignments, customer sessions,
@@ -358,7 +357,7 @@ async def reset_all_data(
 @router.post("/reset-selective")
 async def reset_selective_data(
     data: SelectiveResetRequest,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Selectively reset specific data categories"""

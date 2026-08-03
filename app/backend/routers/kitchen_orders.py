@@ -28,7 +28,9 @@ class KitchenOrderStatusUpdate(BaseModel):
 def verify_kitchen_pin(
     x_kitchen_pin: str = Header(default="", alias="X-Kitchen-Pin"),
 ) -> str:
-    expected_pin = os.getenv("KITCHEN_PIN", "1122").strip()
+    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
+    if len(expected_pin) < 4:
+        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
     supplied = (x_kitchen_pin or "").strip()
     if not supplied or not secrets.compare_digest(supplied, expected_pin):
         raise HTTPException(

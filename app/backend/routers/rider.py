@@ -337,7 +337,7 @@ async def update_delivery_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Admin endpoints for rider management - no Atoms auth required
+# Admin endpoints for rider management; protected by Fai Fai admin middleware.
 # (admin uses localStorage PIN-based auth in frontend)
 @router.post("/admin/create")
 async def create_rider(
@@ -369,7 +369,7 @@ async def create_rider(
 async def list_riders(
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin gets all riders - no Atoms auth required (admin uses PIN auth)"""
+    """Admin gets all riders; Kitchen can use its configured PIN for reads."""
     try:
         result = await db.execute(select(Riders).order_by(desc(Riders.created_at)))
         riders = result.scalars().all()
