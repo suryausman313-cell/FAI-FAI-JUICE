@@ -81,6 +81,10 @@ const AdminSettings = lazy(
   () => import('./pages/admin/AdminSettings')
 );
 
+const AdminBrandSettings = lazy(
+  () => import('./pages/admin/AdminBrandSettings')
+);
+
 const AdminRestaurantSettings = lazy(
   () => import('./pages/admin/AdminRestaurantSettings')
 );
@@ -107,6 +111,10 @@ const AdminFeesSettings = lazy(
 
 const AdminPromotionSettings = lazy(
   () => import('./pages/admin/AdminPromotionSettings')
+);
+
+const AdminReceiptSettings = lazy(
+  () => import('./pages/admin/AdminReceiptSettings')
 );
 
 const AdminSecuritySettings = lazy(
@@ -368,6 +376,11 @@ const AppRoutes = () => (
       />
 
       <Route
+        path="/admin/settings/brand"
+        element={<AdminBrandSettings />}
+      />
+
+      <Route
         path="/admin/settings/restaurant"
         element={<AdminRestaurantSettings />}
       />
@@ -400,6 +413,11 @@ const AppRoutes = () => (
       <Route
         path="/admin/settings/promotions"
         element={<AdminPromotionSettings />}
+      />
+
+      <Route
+        path="/admin/settings/receipt"
+        element={<AdminReceiptSettings />}
       />
 
       <Route
