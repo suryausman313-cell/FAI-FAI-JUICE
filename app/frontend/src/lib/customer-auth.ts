@@ -11,7 +11,8 @@ export interface Customer {
 }
 
 interface AuthResponse {
-  token: string;
+  token?: string;
+  access_token?: string;
   token_type: string;
   customer: Customer;
 }
@@ -26,7 +27,9 @@ const api = axios.create({
 });
 
 function getAuthHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem(TOKEN_KEY);
+  const token =
+    localStorage.getItem(TOKEN_KEY) ||
+    sessionStorage.getItem(TOKEN_KEY);
 
   if (!token) {
     return {};
@@ -38,11 +41,16 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 function saveSession(data: AuthResponse) {
-  sessionStorage.setItem(TOKEN_KEY, data.token);
-  sessionStorage.setItem(
-    CUSTOMER_KEY,
-    JSON.stringify(data.customer)
-  );
+  const token = String(data.access_token || data.token || '').trim();
+  const customer = JSON.stringify(data.customer);
+
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.setItem(TOKEN_KEY, token);
+  }
+
+  localStorage.setItem(CUSTOMER_KEY, customer);
+  sessionStorage.setItem(CUSTOMER_KEY, customer);
 }
 
 function clearSession() {
@@ -116,7 +124,9 @@ export const customerAuthApi = {
   },
 
   async getCurrentCustomer() {
-    const token = sessionStorage.getItem(TOKEN_KEY);
+    const token =
+      localStorage.getItem(TOKEN_KEY) ||
+      sessionStorage.getItem(TOKEN_KEY);
 
     if (!token) {
       clearSession();
@@ -124,19 +134,15 @@ export const customerAuthApi = {
     }
 
     try {
-      const response = await api.get<Customer>(
+      const response = await api.get<AuthResponse>(
         `${getAPIBaseURL()}/api/v1/customer-auth/me`,
         {
           headers: getAuthHeaders(),
         }
       );
 
-      sessionStorage.setItem(
-        CUSTOMER_KEY,
-        JSON.stringify(response.data)
-      );
-
-      return response.data;
+      saveSession(response.data);
+      return response.data.customer;
     } catch {
       clearSession();
       return null;
@@ -168,7 +174,9 @@ export const customerAuthApi = {
   },
 
   getSavedCustomer(): Customer | null {
-    const saved = sessionStorage.getItem(CUSTOMER_KEY);
+    const saved =
+      localStorage.getItem(CUSTOMER_KEY) ||
+      sessionStorage.getItem(CUSTOMER_KEY);
 
     if (!saved) {
       return null;
@@ -183,7 +191,10 @@ export const customerAuthApi = {
   },
 
   getToken() {
-    return sessionStorage.getItem(TOKEN_KEY);
+    return (
+      localStorage.getItem(TOKEN_KEY) ||
+      sessionStorage.getItem(TOKEN_KEY)
+    );
   },
 
   logout() {

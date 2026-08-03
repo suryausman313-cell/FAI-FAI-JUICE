@@ -1,7 +1,4 @@
-import { createClient } from '@metagptx/web-sdk';
 import { getAPIBaseURL } from './config';
-
-const atomsClient = createClient();
 
 type EntityRequest = {
   id?: string;
@@ -77,9 +74,24 @@ async function backendRequest(
     );
   });
 
+  const adminToken = localStorage.getItem('fai_fai_admin_token') || '';
+  const customerToken = localStorage.getItem('vita_customer_token') || '';
+  const bearerToken = path === '/api/v1/admin/customer-heartbeat'
+    ? customerToken
+    : adminToken || customerToken;
+
   const response = await fetch(url.toString(), {
     method,
-    headers: data === undefined ? undefined : { 'Content-Type': 'application/json' },
+    headers: {
+      ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(
+        bearerToken
+          ? {
+              Authorization: `Bearer ${bearerToken}`,
+            }
+          : {}
+      ),
+    },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 
@@ -113,15 +125,14 @@ function entityApi(entity: string) {
   };
 }
 
-// The exported app runs on Cloudflare/Render, so entity and API requests must
-// use the configured Render backend instead of the old Atoms project database.
+// The exported app runs on Cloudflare/Render, so every entity and API request
+// uses the configured Render backend directly.
 const entities = new Proxy(
   {},
   { get: (_target, entity: string) => entityApi(entity) },
 ) as any;
 
 export const client = {
-  ...atomsClient,
   entities,
   apiCall: {
     invoke: ({ url, method = 'GET', data, params }: any) =>
@@ -351,6 +362,3 @@ export interface Feedback {
   is_visible: boolean;
   created_at: string;
 }
-
-// Menu images bucket name
-export const MENU_IMAGES_BUCKET = 'menu-images';
