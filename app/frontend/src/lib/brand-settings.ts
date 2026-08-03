@@ -59,6 +59,35 @@ export const DEFAULT_BRAND_SETTINGS: BrandSettings = {
   receipt_footer: 'Thank you for ordering from Fai Fai Juice!',
 };
 
+function brandErrorMessage(payload: any, status: number): string {
+  const detail = payload?.detail;
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item: any) => {
+        const field = Array.isArray(item?.loc)
+          ? item.loc.filter((part: unknown) => part !== 'body').join('.')
+          : '';
+        const message = String(item?.msg || '').trim();
+        if (!message) return '';
+        return field ? `${field}: ${message}` : message;
+      })
+      .filter(Boolean);
+
+    if (messages.length > 0) return messages.join(' · ');
+  }
+
+  if (detail && typeof detail === 'object') {
+    return String(detail.message || payload?.message || `Save failed (${status})`);
+  }
+
+  return String(payload?.message || `Save failed (${status})`);
+}
+
 export async function loadBrandSettings(): Promise<BrandSettings> {
   try {
     const response = await fetch(
@@ -117,11 +146,7 @@ export async function saveBrandSettings(
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(
-      payload?.detail ||
-        payload?.message ||
-        `Save failed (${response.status})`,
-    );
+    throw new Error(brandErrorMessage(payload, response.status));
   }
 
   const saved = {
@@ -159,11 +184,7 @@ export async function replaceWithFaiFaiMenu(
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(
-      payload?.detail ||
-        payload?.message ||
-        `Menu replacement failed (${response.status})`,
-    );
+    throw new Error(brandErrorMessage(payload, response.status));
   }
 
   return payload as Record<string, unknown>;
