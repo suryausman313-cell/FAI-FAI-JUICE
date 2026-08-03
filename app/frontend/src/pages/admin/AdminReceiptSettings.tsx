@@ -26,6 +26,34 @@ function endpoint(): string {
   return `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/receipt-settings`;
 }
 
+function receiptSettingsErrorMessage(payload: any): string {
+  const detail = payload?.detail;
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map(item => {
+        const location = Array.isArray(item?.loc)
+          ? item.loc.filter((part: unknown) => part !== 'body').join('.')
+          : '';
+        const message = String(item?.msg || '').trim();
+
+        if (!message) return '';
+        return location ? `${location}: ${message}` : message;
+      })
+      .filter(Boolean);
+
+    if (messages.length) {
+      return messages.join(', ');
+    }
+  }
+
+  return 'Could not save receipt settings';
+}
+
 export default function AdminReceiptSettings() {
   const [form, setForm] = useState<ReceiptSettings>({
     ...DEFAULT_RECEIPT_SETTINGS,
@@ -82,7 +110,7 @@ export default function AdminReceiptSettings() {
       const payload = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(payload?.detail || 'Could not save settings');
+        throw new Error(receiptSettingsErrorMessage(payload));
       }
 
       setForm({
