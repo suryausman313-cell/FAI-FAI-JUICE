@@ -219,7 +219,9 @@ async def update_kitchen_order_status(
         order.status = new_status
 
         if data.estimated_minutes is not None:
-            order.pickup_time = f"{data.estimated_minutes} min"
+            safe_minutes = max(1, min(240, int(data.estimated_minutes)))
+            deadline = datetime.now(timezone.utc) + timedelta(minutes=safe_minutes)
+            order.pickup_time = f"{safe_minutes} min|{deadline.isoformat()}"
 
         if new_status == "cancelled" and data.cancel_reason:
             existing_notes = order.order_notes or ""
@@ -365,7 +367,9 @@ async def update_order_status(
 
         order.status = new_status
         if data.estimated_minutes is not None:
-            order.pickup_time = f"{data.estimated_minutes} min"
+            safe_minutes = max(1, min(240, int(data.estimated_minutes)))
+            deadline = datetime.now(timezone.utc) + timedelta(minutes=safe_minutes)
+            order.pickup_time = f"{safe_minutes} min|{deadline.isoformat()}"
         # Append cancel reason to notes if cancelling
         if new_status == 'cancelled' and data.cancel_reason:
             existing_notes = order.order_notes or ''

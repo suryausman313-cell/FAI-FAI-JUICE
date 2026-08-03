@@ -976,10 +976,13 @@ async def get_delivery_eta(
     try:
         # Find assignment for this order
         result = await db.execute(
-            select(Delivery_assignments).where(
+            select(Delivery_assignments)
+            .where(
                 Delivery_assignments.order_id == order_id,
                 Delivery_assignments.status.notin_(["delivered", "rejected"]),
             )
+            .order_by(desc(Delivery_assignments.updated_at), desc(Delivery_assignments.id))
+            .limit(1)
         )
         assignment = result.scalar_one_or_none()
 
@@ -995,41 +998,91 @@ async def get_delivery_eta(
                 return {"status": "delivered", "eta_minutes": 0, "rider_name": None}
             return {"status": "no_rider", "eta_minutes": None, "rider_name": None}
 
+        order_result = await db.execute(select(Orders).where(Orders.id == order_id))
+        order = order_result.scalar_one_or_none()
+
         # Get rider info
         rider_result = await db.execute(
             select(Riders).where(Riders.id == assignment.rider_id)
         )
         rider = rider_result.scalar_one_or_none()
 
-        # Calculate ETA based on status
-        eta_minutes = None
-        if assignment.status in ("assigned", "accepted"):
-            eta_minutes = 30  # Default: 30 min from assignment
-        elif assignment.status == "picked_up":
-            eta_minutes = 20  # Picked up, ~20 min
-        elif assignment.status == "on_the_way":
-            eta_minutes = 10  # On the way, ~10 min
+        # Live GPS ETA. Kitchen preparation time is included until the order is Ready;
+        # after pickup the estimate is rider-to-customer only.
+        import math
 
-        # If rider has GPS and customer has GPS, calculate distance-based ETA
-        if rider and rider.current_lat and rider.current_lng and assignment.customer_lat and assignment.customer_lng:
-            import math
-            lat1, lng1 = math.radians(rider.current_lat), math.radians(rider.current_lng)
-            lat2, lng2 = math.radians(assignment.customer_lat), math.radians(assignment.customer_lng)
+        eta_seconds = None
+        distance_km = None
+        if (
+            rider
+            and rider.current_lat is not None
+            and rider.current_lng is not None
+            and assignment.customer_lat is not None
+            and assignment.customer_lng is not None
+        ):
+            lat1, lng1 = math.radians(float(rider.current_lat)), math.radians(float(rider.current_lng))
+            lat2, lng2 = math.radians(float(assignment.customer_lat)), math.radians(float(assignment.customer_lng))
             dlat = lat2 - lat1
             dlng = lng2 - lng1
             a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng/2)**2
             c = 2 * math.asin(math.sqrt(a))
             distance_km = 6371 * c
-            # Assume 30 km/h average speed in city
-            time_minutes = int((distance_km / 30) * 60)
-            if assignment.status == "on_the_way":
-                eta_minutes = max(time_minutes, 3)  # At least 3 min
-            elif assignment.status == "picked_up":
-                eta_minutes = time_minutes + 5  # +5 min for prep
+
+            # Fujairah city delivery estimate: live road-speed approximation plus
+            # a small stop/parking buffer. It is recalculated on every poll.
+            eta_seconds = max(3 * 60, min(90 * 60, int((distance_km / 30) * 3600) + 2 * 60))
+
+        normalized_status = str(assignment.status or "assigned").lower()
+        order_status = str(getattr(order, "status", "") or "").lower()
+
+        # Before Ready, add the remaining Kitchen countdown to the delivery ETA.
+        if order and order_status not in ("ready", "out_for_delivery", "completed"):
+            raw_ready_time = str(getattr(order, "pickup_time", "") or "")
+            label, separator, deadline_text = raw_ready_time.partition("|")
+            remaining_prep_seconds = 0
+            if separator and deadline_text:
+                try:
+                    deadline = datetime.fromisoformat(deadline_text.replace("Z", "+00:00"))
+                    if deadline.tzinfo is None:
+                        deadline = deadline.replace(tzinfo=timezone.utc)
+                    remaining_prep_seconds = max(
+                        0,
+                        int((deadline - datetime.now(timezone.utc)).total_seconds()),
+                    )
+                except (TypeError, ValueError):
+                    remaining_prep_seconds = 0
+            elif label:
+                import re
+                match = re.search(r"(\d+)", label)
+                if match and getattr(order, "updated_at", None):
+                    deadline = order.updated_at
+                    if deadline.tzinfo is None:
+                        deadline = deadline.replace(tzinfo=timezone.utc)
+                    deadline += timedelta(minutes=int(match.group(1)))
+                    remaining_prep_seconds = max(
+                        0,
+                        int((deadline - datetime.now(timezone.utc)).total_seconds()),
+                    )
+            if eta_seconds is not None:
+                eta_seconds += remaining_prep_seconds
+
+        if normalized_status == "delivered":
+            eta_seconds = 0
+
+        eta_minutes = (
+            None
+            if eta_seconds is None
+            else (0 if eta_seconds == 0 else max(1, math.ceil(eta_seconds / 60)))
+        )
+        calculated_at = datetime.now(timezone.utc).isoformat()
 
         return {
             "status": assignment.status,
             "eta_minutes": eta_minutes,
+            "eta_seconds": eta_seconds,
+            "calculated_at": calculated_at,
+            "distance_km": round(distance_km, 2) if distance_km is not None else None,
+            "gps_available": distance_km is not None,
             "rider_name": rider.name if rider else None,
             "rider_phone": rider.phone if rider else None,
             "rider_lat": rider.current_lat if rider else None,
