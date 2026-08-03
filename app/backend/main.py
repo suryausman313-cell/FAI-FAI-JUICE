@@ -98,6 +98,10 @@ configured_origins = [
     if origin.strip()
 ]
 
+# Keep Admin security inside CORS so expired/invalid Admin sessions return a
+# readable JSON error to the Cloudflare frontend instead of "Failed to fetch".
+app.middleware("http")(admin_security_middleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=configured_origins or default_origins,
@@ -107,7 +111,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
-app.middleware("http")(admin_security_middleware)
 # MODULE_MIDDLEWARE_END
 
 
