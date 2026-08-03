@@ -162,15 +162,6 @@ const AdminRiders = lazy(
   () => import('./pages/admin/AdminRiders')
 );
 
-// Old auth pages
-const AuthCallback = lazy(
-  () => import('./pages/AuthCallback')
-);
-
-const AuthError = lazy(
-  () => import('./pages/AuthError')
-);
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -476,15 +467,6 @@ const AppRoutes = () => (
         element={<KitchenShell />}
       />
 
-      <Route
-        path="/auth/callback"
-        element={<AuthCallback />}
-      />
-
-      <Route
-        path="/auth/error"
-        element={<AuthError />}
-      />
     </Routes>
   </Suspense>
 );
