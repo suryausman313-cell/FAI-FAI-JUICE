@@ -134,7 +134,7 @@ async def update_workflow_order_status(
     if new_status == "completed" and is_delivery_order(order):
         raise HTTPException(
             status_code=400,
-            detail="Delivery order sirf Rider ke Delivered button se complete hoga.",
+            detail="A delivery order can only be completed with the Rider's Delivered button.",
         )
 
     if new_status not in transitions.get(current_status, set()):

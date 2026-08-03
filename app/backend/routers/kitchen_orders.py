@@ -140,8 +140,8 @@ async def update_kitchen_order_status(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Delivery order Kitchen se complete nahi ho sakta. "
-                "Rider customer ko deliver karke Delivered karega."
+                "A delivery order cannot be completed from the Kitchen. "
+                "The rider must deliver it to the customer and mark it Delivered."
             ),
         )
 
