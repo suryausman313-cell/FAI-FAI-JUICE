@@ -258,9 +258,15 @@ export interface RestaurantSettings {
   card_enabled_pickup: boolean;
   cash_enabled_delivery: boolean;
   card_enabled_delivery: boolean;
+  show_branding?: boolean;
+  show_notifications?: boolean;
   show_status_banner?: boolean;
   show_offers?: boolean;
   show_quick_actions?: boolean;
+  show_menu_action?: boolean;
+  show_deals_action?: boolean;
+  show_orders_action?: boolean;
+  show_contact_action?: boolean;
   show_popular_items?: boolean;
   show_reviews?: boolean;
   blog_enabled?: boolean;

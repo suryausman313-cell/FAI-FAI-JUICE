@@ -40,9 +40,15 @@ export interface ExtendedSettings {
   order_accept_timeout_minutes: string;
   order_expire_timeout_minutes: string;
   checkout_flow: 'two_step' | 'direct';
+  show_branding: boolean;
+  show_notifications: boolean;
   show_status_banner: boolean;
   show_offers: boolean;
   show_quick_actions: boolean;
+  show_menu_action: boolean;
+  show_deals_action: boolean;
+  show_orders_action: boolean;
+  show_contact_action: boolean;
   show_popular_items: boolean;
   show_reviews: boolean;
   show_restaurant_info: boolean;
@@ -92,9 +98,15 @@ export const DEFAULT_EXTENDED_SETTINGS: ExtendedSettings = {
   order_accept_timeout_minutes: '5',
   order_expire_timeout_minutes: '15',
   checkout_flow: 'two_step',
+  show_branding: true,
+  show_notifications: true,
   show_status_banner: true,
   show_offers: true,
   show_quick_actions: true,
+  show_menu_action: true,
+  show_deals_action: true,
+  show_orders_action: true,
+  show_contact_action: true,
   show_popular_items: true,
   show_reviews: true,
   show_restaurant_info: true,
