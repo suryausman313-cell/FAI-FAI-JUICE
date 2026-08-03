@@ -52,9 +52,15 @@ class Restaurant_settings(Base):
     offer_text = Column(String, nullable=True, default='', server_default='')
 
     # Customer homepage controls (database-backed; shared by every device).
+    show_branding = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_notifications = Column(Boolean, nullable=True, default=True, server_default='true')
     show_status_banner = Column(Boolean, nullable=True, default=True, server_default='true')
     show_offers = Column(Boolean, nullable=True, default=True, server_default='true')
     show_quick_actions = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_menu_action = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_deals_action = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_orders_action = Column(Boolean, nullable=True, default=True, server_default='true')
+    show_contact_action = Column(Boolean, nullable=True, default=True, server_default='true')
     show_popular_items = Column(Boolean, nullable=True, default=True, server_default='true')
     show_reviews = Column(Boolean, nullable=True, default=True, server_default='true')
     show_restaurant_info = Column(Boolean, nullable=True, default=True, server_default='true')
