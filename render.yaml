@@ -6,12 +6,24 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /database/health
-    plan: starter
+    plan: free
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET_KEY
         generateValue: true
+      - key: CUSTOMER_JWT_SECRET
+        generateValue: true
+      - key: FAI_FAI_SETTINGS_KEY
+        sync: false
+      - key: INITIAL_ADMIN_USERNAME
+        sync: false
+      - key: INITIAL_ADMIN_PASSWORD
+        sync: false
+      - key: KITCHEN_PIN
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://fai-fai-juice.pages.dev
       - key: PYTHON_BACKEND_URL
         value: https://vita-napoli-backend.onrender.com
       - key: MGX_IGNORE_INIT_DATA
