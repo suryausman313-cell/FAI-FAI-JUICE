@@ -89,17 +89,29 @@ function formatDate(value: string | null): string {
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('fai_fai_admin_token') || '';
+  if (!token) {
+    localStorage.removeItem('admin_auth');
+    window.location.replace('/admin');
+    throw new Error('Admin login required');
+  }
+
   const response = await fetch(`${getAPIBaseURL()}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('fai_fai_admin_token') || ''}`,
+      Authorization: `Bearer ${token}`,
       ...(options?.headers || {}),
     },
   });
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('fai_fai_admin_token');
+      localStorage.removeItem('admin_auth');
+      window.location.replace('/admin');
+    }
     throw new Error(data?.detail || data?.message || 'Admin finance request failed');
   }
   return data as T;

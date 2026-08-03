@@ -300,7 +300,6 @@ export default function KitchenOrders() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'live' | 'today' | 'yesterday' | 'menu'>('live');
   const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatus>('open');
-  const [restaurantSettingsId, setRestaurantSettingsId] = useState<number | null>(null);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [savingRestaurantStatus, setSavingRestaurantStatus] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(
@@ -354,7 +353,6 @@ export default function KitchenOrders() {
       );
       const settings = response.data?.items?.[0];
       if (!settings) return;
-      setRestaurantSettingsId(Number(settings.id));
       const nextStatus = String(settings.restaurant_status || 'open').toLowerCase();
       setRestaurantStatus(
         nextStatus === 'busy' || nextStatus === 'closed' ? nextStatus : 'open',
@@ -365,16 +363,11 @@ export default function KitchenOrders() {
   }, []);
 
   async function updateRestaurantStatus(nextStatus: RestaurantStatus) {
-    if (!restaurantSettingsId) {
-      toast.error('Restaurant settings could not be loaded. Please refresh.');
-      return;
-    }
-
     setSavingRestaurantStatus(true);
     try {
       await axios.put(
-        `${getAPIBaseURL()}/api/v1/entities/restaurant_settings/${restaurantSettingsId}`,
-        { restaurant_status: nextStatus },
+        `${getAPIBaseURL()}/api/v1/kitchen/restaurant-status`,
+        { status: nextStatus },
         { headers: kitchenHeaders(), timeout: 15000 },
       );
       setRestaurantStatus(nextStatus);
