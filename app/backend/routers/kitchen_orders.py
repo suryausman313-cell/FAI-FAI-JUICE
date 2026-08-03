@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from models.orders import Orders
+from models.restaurant_settings import Restaurant_settings
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ class KitchenOrderStatusUpdate(BaseModel):
     status: str
     estimated_minutes: Optional[int] = None
     cancel_reason: Optional[str] = None
+
+
+class KitchenRestaurantStatusUpdate(BaseModel):
+    status: str
 
 
 def verify_kitchen_pin(
@@ -58,6 +63,36 @@ def is_delivery_order(order: Orders) -> bool:
         or "cash on delivery" in payment
         or "card on delivery" in payment
     )
+
+
+@router.put("/restaurant-status")
+async def update_restaurant_status(
+    data: KitchenRestaurantStatusUpdate,
+    _pin: str = Depends(verify_kitchen_pin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allow Kitchen to change only the public open/busy/closed status."""
+    new_status = str(data.status or "").lower().strip()
+    if new_status not in {"open", "busy", "closed"}:
+        raise HTTPException(status_code=400, detail="Invalid shop status")
+
+    result = await db.execute(
+        select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
+    )
+    settings = result.scalar_one_or_none()
+    if not settings:
+        raise HTTPException(status_code=404, detail="Restaurant settings not found")
+
+    settings.restaurant_status = new_status
+    try:
+        await db.commit()
+        await db.refresh(settings)
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("Kitchen could not update restaurant status")
+        raise HTTPException(status_code=500, detail="Shop status could not be saved") from exc
+
+    return {"success": True, "restaurant_status": new_status}
 
 
 def serialize_order(order: Orders) -> dict:
