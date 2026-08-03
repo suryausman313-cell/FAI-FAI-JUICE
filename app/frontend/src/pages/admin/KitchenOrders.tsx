@@ -17,6 +17,8 @@ import {
   Printer,
   RefreshCw,
   Settings,
+  Store,
+  UtensilsCrossed,
   Volume2,
   VolumeX,
   X,
@@ -36,6 +38,7 @@ import {
 import { getAPIBaseURL } from '@/lib/config';
 import { Order } from '@/lib/api';
 import ReadyTimeCountdown, { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
+import KitchenMenuPanel from './KitchenMenuPanel';
 
 declare global {
   interface Window {
@@ -80,6 +83,8 @@ type AssignmentInfo = {
   rider_phone?: string;
   status: string;
 };
+
+type RestaurantStatus = 'open' | 'busy' | 'closed';
 
 type ParsedItem = {
   name: string;
@@ -293,7 +298,11 @@ export default function KitchenOrders() {
   const [customTime, setCustomTime] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'live' | 'today' | 'yesterday'>('live');
+  const [viewMode, setViewMode] = useState<'live' | 'today' | 'yesterday' | 'menu'>('live');
+  const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatus>('open');
+  const [restaurantSettingsId, setRestaurantSettingsId] = useState<number | null>(null);
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [savingRestaurantStatus, setSavingRestaurantStatus] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(
     () => localStorage.getItem('kitchen_sound') !== 'off'
   );
@@ -336,6 +345,47 @@ export default function KitchenOrders() {
       // Defaults remain available; receipt settings failure must never blank Kitchen.
     }
   }, []);
+
+  const loadRestaurantStatus = useCallback(async () => {
+    try {
+      const response = await axios.get(
+        `${getAPIBaseURL()}/api/v1/entities/restaurant_settings`,
+        { params: { limit: 1, sort: '-id' }, timeout: 12000 },
+      );
+      const settings = response.data?.items?.[0];
+      if (!settings) return;
+      setRestaurantSettingsId(Number(settings.id));
+      const nextStatus = String(settings.restaurant_status || 'open').toLowerCase();
+      setRestaurantStatus(
+        nextStatus === 'busy' || nextStatus === 'closed' ? nextStatus : 'open',
+      );
+    } catch (error) {
+      console.error('Restaurant status loading failed:', error);
+    }
+  }, []);
+
+  async function updateRestaurantStatus(nextStatus: RestaurantStatus) {
+    if (!restaurantSettingsId) {
+      toast.error('Restaurant settings load nahi hui. Refresh karein.');
+      return;
+    }
+
+    setSavingRestaurantStatus(true);
+    try {
+      await axios.put(
+        `${getAPIBaseURL()}/api/v1/entities/restaurant_settings/${restaurantSettingsId}`,
+        { restaurant_status: nextStatus },
+        { headers: kitchenHeaders(), timeout: 15000 },
+      );
+      setRestaurantStatus(nextStatus);
+      setStatusDialogOpen(false);
+      toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || 'Shop status save nahi hua');
+    } finally {
+      setSavingRestaurantStatus(false);
+    }
+  }
 
   const loadRiderData = useCallback(async () => {
     try {
@@ -419,8 +469,9 @@ export default function KitchenOrders() {
   useEffect(() => {
     setAuthenticated(localStorage.getItem('kitchen_auth') === 'true');
     void loadReceiptSettings();
+    void loadRestaurantStatus();
     return () => kitchenAlarm.stop();
-  }, [loadReceiptSettings]);
+  }, [loadReceiptSettings, loadRestaurantStatus]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -758,9 +809,9 @@ export default function KitchenOrders() {
             return (
               <div className="mb-3 rounded-lg border border-amber-600/30 bg-amber-600/10 px-2.5 py-2">
                 <p className="text-amber-300 text-sm font-semibold">Waiting Rider</p>
-                <p className="text-amber-200/70 text-xs mt-0.5">Admin rider assign karega. Kitchen se rider select nahi hoga.</p>
+                <p className="text-amber-200/70 text-xs mt-0.5">Rider assignment ka wait ho raha hai.</p>
                 {assignmentStatus === 'rejected' && (
-                  <p className="text-red-300 text-xs mt-1">Previous rider rejected — Admin reassign karega.</p>
+                  <p className="text-red-300 text-xs mt-1">Previous rider rejected — doosra rider assign hoga.</p>
                 )}
               </div>
             );
@@ -1031,7 +1082,15 @@ export default function KitchenOrders() {
               <Menu className="w-5 h-5" />
             </button>
             <ChefHat className="w-6 h-6 text-orange-500 shrink-0" />
-            <h1 className="font-bold truncate">{viewMode === 'live' ? 'Kitchen Orders' : viewMode === 'today' ? 'Today Orders' : 'Yesterday Orders'}</h1>
+            <h1 className="font-bold truncate">
+              {viewMode === 'live'
+                ? 'Kitchen Orders'
+                : viewMode === 'today'
+                  ? 'Today Orders'
+                  : viewMode === 'yesterday'
+                    ? 'Yesterday Orders'
+                    : 'Kitchen Menu'}
+            </h1>
             <div className="relative shrink-0">
               <Bell className="w-5 h-5 text-gray-500" />
               {newOrders.length > 0 && (
@@ -1043,6 +1102,21 @@ export default function KitchenOrders() {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setStatusDialogOpen(true)}
+              className={`h-10 rounded-lg border px-2.5 flex items-center gap-1.5 text-xs font-bold ${
+                restaurantStatus === 'open'
+                  ? 'bg-green-600/20 text-green-400 border-green-600/30'
+                  : restaurantStatus === 'busy'
+                    ? 'bg-amber-600/20 text-amber-400 border-amber-600/30'
+                    : 'bg-red-600/20 text-red-400 border-red-600/30'
+              }`}
+              title="Change shop status"
+            >
+              <Store className="w-4 h-4" />
+              <span className="hidden sm:inline">{restaurantStatus.toUpperCase()}</span>
+            </button>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
@@ -1102,7 +1176,9 @@ export default function KitchenOrders() {
           </div>
         )}
 
-        {viewMode === 'live' ? (
+        {viewMode === 'menu' ? (
+          <KitchenMenuPanel embedded />
+        ) : viewMode === 'live' ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             <Column title="NEW" count={newOrders.length} dotClass="bg-blue-600" emptyText="No new orders">
               {newOrders.map((order) => <OrderCard key={order.id} order={order} section="new" />)}
@@ -1139,7 +1215,7 @@ export default function KitchenOrders() {
               <div className="flex items-center gap-2">
                 <ChefHat className="w-6 h-6 text-orange-500" />
                 <div>
-                  <p className="text-white font-bold">Fai Fai Kitchen <span className="text-[10px] text-emerald-400">ADMIN RIDER FLOW</span></p>
+                  <p className="text-white font-bold">Fai Fai Kitchen</p>
                   <p className="text-gray-500 text-xs">Orders & history</p>
                 </div>
               </div>
@@ -1153,6 +1229,7 @@ export default function KitchenOrders() {
                 { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, count: activeOrders.length, total: null },
                 { key: 'today' as const, label: 'Today Orders', icon: CalendarDays, count: todayHistory.length, total: todayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
                 { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, count: yesterdayHistory.length, total: yesterdayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
+                { key: 'menu' as const, label: 'Menu Availability', icon: UtensilsCrossed, count: null, total: null },
               ].map((item) => {
                 const Icon = item.icon;
                 return (
@@ -1175,8 +1252,9 @@ export default function KitchenOrders() {
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-semibold text-sm">{item.label}</p>
                       <p className="text-gray-500 text-xs">
-                        {item.count} order{item.count === 1 ? '' : 's'}
-                        {item.total !== null ? ` · AED ${money(item.total)}` : ''}
+                        {item.key === 'menu'
+                          ? 'Available / Sold Out'
+                          : `${item.count} order${item.count === 1 ? '' : 's'}${item.total !== null ? ` · AED ${money(item.total)}` : ''}`}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-gray-600" />
@@ -1187,6 +1265,38 @@ export default function KitchenOrders() {
           </aside>
         </div>
       )}
+
+      <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
+        <DialogContent className="bg-gray-950 border-gray-800 text-white max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Store className="w-5 h-5 text-orange-500" /> Shop Status
+            </DialogTitle>
+            <DialogDescription className="text-gray-500">
+              Customer app par shop ka live status foran update hoga.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            {([
+              { key: 'open' as const, label: 'OPEN', note: 'Orders normal receive honge', className: 'border-green-600/40 bg-green-600/10 text-green-400' },
+              { key: 'busy' as const, label: 'BUSY', note: 'Customer ko busy status show hoga', className: 'border-amber-600/40 bg-amber-600/10 text-amber-400' },
+              { key: 'closed' as const, label: 'CLOSED', note: 'Shop closed show hoga', className: 'border-red-600/40 bg-red-600/10 text-red-400' },
+            ]).map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                disabled={savingRestaurantStatus}
+                onClick={() => void updateRestaurantStatus(option.key)}
+                className={`rounded-xl border p-3 text-left disabled:opacity-50 ${option.className} ${restaurantStatus === option.key ? 'ring-2 ring-white/30' : ''}`}
+              >
+                <p className="font-black">{option.label}</p>
+                <p className="text-xs opacity-75 mt-0.5">{option.note}</p>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent className="bg-gray-950 border-gray-800 text-white max-w-sm">

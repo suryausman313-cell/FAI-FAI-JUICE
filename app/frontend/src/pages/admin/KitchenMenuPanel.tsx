@@ -112,7 +112,7 @@ function priceText(item: KitchenMenuItem): string {
   return prices.map((price) => `AED ${price.toFixed(0)}`).join(' / ');
 }
 
-export default function KitchenMenuPanel() {
+export default function KitchenMenuPanel({ embedded = false }: { embedded?: boolean }) {
   const [categories, setCategories] = useState<KitchenCategory[]>([]);
   const [items, setItems] = useState<KitchenMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -275,7 +275,7 @@ export default function KitchenMenuPanel() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-3 py-4 md:px-6">
+    <div className={embedded ? 'bg-gray-950 py-2' : 'min-h-screen bg-gray-950 px-3 py-4 md:px-6'}>
       <div className="max-w-6xl mx-auto">
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>
