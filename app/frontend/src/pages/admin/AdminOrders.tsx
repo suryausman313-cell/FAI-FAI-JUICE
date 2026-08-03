@@ -1,346 +1,965 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Bike, Check, Clock, MapPin, Printer, RefreshCw, X } from 'lucide-react';
-import { toast } from 'sonner';
-
-import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
 
-const ADMIN_PIN = '1122';
-const CONTROL_URL = `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/admin-order-control`;
-
-type RiderAssignment = {
-  id: number;
-  order_id: number;
-  rider_id: number;
-  rider_name: string;
-  rider_phone?: string;
-  status: string;
-};
 
 type AdminOrder = Order & {
   order_type?: string;
   delivery_charge?: number;
-  rider_assignment?: RiderAssignment | null;
+  tip_amount?: number;
+  tip_type?: string;
 };
 
-type Rider = {
+function adminHeaders() {
+  const adminToken =
+    localStorage.getItem('fai_fai_admin_token') || '';
+
+  return {
+    'Content-Type': 'application/json',
+    'X-Kitchen-Pin': '1122',
+    ...(adminToken
+      ? { Authorization: `Bearer ${adminToken}` }
+      : {}),
+  };
+}
+
+async function adminRequest<T>(
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  data?: unknown,
+  params?: Record<string, unknown>,
+): Promise<T> {
+  const response = await axios.request<T>({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+    method,
+    data,
+    params,
+    headers: adminHeaders(),
+    timeout: 20000,
+  });
+  return response.data;
+}
+
+function isDeliveryOrder(order: AdminOrder): boolean {
+  if (String(order.order_type || '').toLowerCase() === 'delivery') return true;
+  const notes = String(order.order_notes || '').toLowerCase();
+  return notes.includes('order type: delivery') || notes.includes('delivery address:');
+}
+
+interface RiderInfo {
   id: number;
   name: string;
   phone: string;
   is_active: boolean;
-  active_deliveries?: number;
   current_lat?: number | null;
   current_lng?: number | null;
-};
+  location_updated_at?: string | null;
+  active_deliveries?: number;
+}
 
 const STATUS_OPTIONS = [
-  { value: 'all', label: 'All Orders' },
-  { value: 'new', label: 'New' },
-  { value: 'accepted', label: 'Accepted' },
-  { value: 'preparing', label: 'Preparing' },
-  { value: 'ready', label: 'Ready' },
-  { value: 'out_for_delivery', label: 'Out for Delivery' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'new', label: 'New Order', color: 'bg-blue-600' },
+  { value: 'accepted', label: 'Accepted', color: 'bg-green-600' },
+  { value: 'preparing', label: 'Preparing', color: 'bg-yellow-600' },
+  { value: 'ready', label: 'Ready', color: 'bg-purple-600' },
+  { value: 'out_for_delivery', label: 'Out for Delivery', color: 'bg-blue-700' },
+  { value: 'completed', label: 'Completed', color: 'bg-gray-600' },
+  { value: 'cancelled', label: 'Cancelled', color: 'bg-red-600' },
 ];
 
-const READY_TIMES = [15, 20, 25, 30, 40, 45, 60];
-
-function isDelivery(order: AdminOrder): boolean {
-  if (String(order.order_type || '').toLowerCase() === 'delivery') return true;
-  const notes = String(order.order_notes || '').toLowerCase();
-  const payment = String(order.payment_method || '').toLowerCase();
-  return notes.includes('delivery') || payment.includes('delivery');
-}
-
-function parseItems(value: unknown): any[] {
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-async function controlPost<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
-  const response = await axios.post<T>(
-    `${CONTROL_URL}/${action}`,
-    { pin: ADMIN_PIN, ...data },
-    { timeout: 20000 },
-  );
-  return response.data;
-}
-
-function errorMessage(error: any): string {
-  return (
-    error?.response?.data?.detail ||
-    error?.message ||
-    'Request failed'
-  );
-}
+const TIME_OPTIONS = [
+  { value: 15, label: '15 min' },
+  { value: 20, label: '20 min' },
+  { value: 25, label: '25 min' },
+  { value: 30, label: '30 min' },
+  { value: 40, label: '40 min' },
+  { value: 45, label: '45 min' },
+  { value: 60, label: '1 hour' },
+];
 
 export default function AdminOrders() {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<AdminOrder[]>([]);
-  const [riders, setRiders] = useState<Rider[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
   const [search, setSearch] = useState('');
-  const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
-  const [selectedRider, setSelectedRider] = useState('');
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [refreshing, setRefreshing] = useState(false);
+  const [prevOrderCount, setPrevOrderCount] = useState(0);
   const [acceptingOrder, setAcceptingOrder] = useState<number | null>(null);
-  const [readyTime, setReadyTime] = useState(20);
+  const [selectedTime, setSelectedTime] = useState<number>(20);
+  const [riders, setRiders] = useState<RiderInfo[]>([]);
+  const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
+  const [selectedRider, setSelectedRider] = useState<string>('');
+  const [deletingOrder, setDeletingOrder] = useState<number | null>(null);
+  const [noteOrder, setNoteOrder] = useState<number | null>(null);
+  const [staffNote, setStaffNote] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
+  const [cancellingOrder, setCancellingOrder] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
+  const [savingAutoAssign, setSavingAutoAssign] = useState(false);
 
-  const loadRiders = useCallback(async () => {
-    try {
-      const payload = await controlPost<{ items?: Rider[] }>('riders');
-      setRiders(Array.isArray(payload.items) ? payload.items : []);
-    } catch (error) {
-      console.error(error);
-      setRiders([]);
-    }
-  }, []);
+  // Track recently updated order IDs to prevent poll from reverting optimistic updates
+  const recentlyUpdatedRef = useRef<Map<number, number>>(new Map());
 
   const loadOrders = useCallback(async (showToast = false) => {
     try {
       setRefreshing(true);
-      const payload = await controlPost<{ items?: AdminOrder[] }>('list', {
-        status: filterStatus,
-        search,
-        limit: 200,
+      const params: any = { sort: '-created_at', limit: 100 };
+      if (filterStatus && filterStatus !== 'all') params.status = filterStatus;
+      if (search) params.search = search;
+
+      const payload = await adminRequest<{ items?: AdminOrder[] }>(
+        '/api/v1/admin/orders',
+        'GET',
+        undefined,
+        params,
+      );
+      const newOrders = payload?.items || [];
+
+      // Clean old entries from recently-updated map (older than 5s)
+      const now = Date.now();
+      const recentUpdates = recentlyUpdatedRef.current;
+      for (const [id, ts] of recentUpdates.entries()) {
+        if (now - ts > 5000) recentUpdates.delete(id);
+      }
+
+      // Merge: keep local state for recently-updated orders
+      const mergedOrders = newOrders.map((polledOrder: Order) => {
+        if (recentUpdates.has(polledOrder.id)) {
+          const localOrder = orders.find(o => o.id === polledOrder.id);
+          return localOrder || polledOrder;
+        }
+        return polledOrder;
       });
-      setOrders(Array.isArray(payload.items) ? payload.items : []);
+
+      // Remove orders that were locally deleted
+      const filteredOrders = mergedOrders.filter((o: Order) => {
+        if (recentUpdates.has(o.id) && !orders.find(lo => lo.id === o.id)) {
+          return false;
+        }
+        return true;
+      });
+      
+      // Check for new orders and notify (no sound in admin - sound only in kitchen)
+      if (prevOrderCount > 0 && filteredOrders.length > prevOrderCount) {
+        const diff = filteredOrders.length - prevOrderCount;
+        toast.success(`🔔 ${diff} new order${diff > 1 ? 's' : ''} received!`);
+      }
+      
+      setPrevOrderCount(filteredOrders.length);
+      setOrders(filteredOrders);
       setLastRefresh(new Date());
-      if (showToast) toast.success('Orders refreshed');
-    } catch (error) {
-      console.error(error);
-      toast.error(`Orders load nahi hue: ${errorMessage(error)}`);
+      if (showToast) toast.success('Orders refreshed!');
+    } catch (e: any) {
+      console.error('Failed to load orders:', e);
+      if (e?.status === 401 || e?.response?.status === 401) {
+        toast.error('Admin session expired or Kitchen PIN was rejected. Logout and login again.');
+      } else if (showToast) {
+        toast.error('Failed to refresh orders. Please try again.');
+      }
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, [filterStatus, search]);
+  }, [filterStatus, search, prevOrderCount, navigate, orders]);
 
   useEffect(() => {
+    checkAuthAndLoad();
+    loadRiders();
+    loadAutoAssignSetting();
+    const interval = setInterval(() => {
+      loadOrders();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function loadRiders() {
+    try {
+      const payload = await adminRequest<{ items?: RiderInfo[] }>(
+        '/api/v1/rider/admin/locations',
+      );
+      setRiders(Array.isArray(payload?.items) ? payload.items : []);
+    } catch (error) {
+      console.error('Failed to load rider locations:', error);
+      try {
+        const payload = await adminRequest<{ items?: RiderInfo[] }>(
+          '/api/v1/rider/admin/list',
+        );
+        setRiders(Array.isArray(payload?.items) ? payload.items : []);
+      } catch (fallbackError) {
+        console.error('Failed to load riders:', fallbackError);
+        setRiders([]);
+      }
+    }
+  }
+
+  async function loadAutoAssignSetting() {
+    try {
+      const payload = await adminRequest<{ enabled?: boolean }>(
+        '/api/v1/rider/admin/auto-assign',
+      );
+      setAutoAssignEnabled(Boolean(payload?.enabled));
+    } catch (error) {
+      console.error('Failed to load auto assign setting:', error);
+    }
+  }
+
+  async function toggleAutoAssign() {
+    const nextEnabled = !autoAssignEnabled;
+    setSavingAutoAssign(true);
+    try {
+      const payload = await adminRequest<{
+        enabled?: boolean;
+        assigned_count?: number;
+      }>(
+        '/api/v1/rider/admin/auto-assign',
+        'PUT',
+        { enabled: nextEnabled },
+      );
+      const enabled = Boolean(payload?.enabled);
+      setAutoAssignEnabled(enabled);
+
+      if (enabled) {
+        const assignedCount = Number(payload?.assigned_count || 0);
+        toast.success(
+          assignedCount > 0
+            ? `Auto Assign ON — ${assignedCount} delivery order rider ko assign ho gaya`
+            : 'Auto Assign ON — new delivery order nearest available rider ko jayega',
+        );
+      } else {
+        toast.success('Auto Assign OFF — Admin manually rider assign karega');
+      }
+
+      await Promise.all([loadRiders(), loadOrders()]);
+    } catch (error: any) {
+      toast.error(
+        error?.response?.data?.detail ||
+        error?.data?.detail ||
+        'Auto Assign setting save nahi hui',
+      );
+    } finally {
+      setSavingAutoAssign(false);
+    }
+  }
+
+  async function assignToRider(order: Order) {
+    if (!selectedRider) {
+      toast.error('Please select a rider');
+      return;
+    }
+    // Parse GPS from order notes
+    let lat: number | null = null;
+    let lng: number | null = null;
+    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
+    if (gpsMatch) {
+      lat = parseFloat(gpsMatch[1]);
+      lng = parseFloat(gpsMatch[2]);
+    }
+    // Parse address from order notes
+    let address = '';
+    const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/);
+    if (addrMatch) address = addrMatch[1].trim();
+
+    try {
+      await adminRequest(
+        '/api/v1/rider/admin/assign',
+        'POST',
+        {
+          order_id: order.id,
+          rider_id: Number(selectedRider),
+          customer_lat: lat,
+          customer_lng: lng,
+          customer_address: address,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
+        },
+      );
+      toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      setAssigningOrder(null);
+      setSelectedRider('');
+      await loadRiders();
+      await loadOrders();
+    } catch (e: any) {
+      toast.error(
+        e?.response?.data?.detail ||
+        e?.data?.detail ||
+        'Failed to assign rider',
+      );
+    }
+  }
+
+  useEffect(() => {
+    loadOrders();
+  }, [filterStatus, search]);
+
+  function checkAuthAndLoad() {
     const auth = localStorage.getItem('admin_auth');
     if (!auth) {
       navigate('/admin');
+      setLoading(false);
       return;
     }
-    void loadOrders();
-    void loadRiders();
-    const timer = window.setInterval(() => void loadOrders(), 10000);
-    return () => window.clearInterval(timer);
-  }, [loadOrders, loadRiders, navigate]);
-
-  const activeOrders = useMemo(
-    () => orders.filter((order) => !['completed', 'cancelled'].includes(String(order.status))),
-    [orders],
-  );
-
-  async function updateStatus(order: AdminOrder, status: string, estimatedMinutes?: number) {
     try {
-      await controlPost('status', {
-        order_id: order.id,
-        status,
-        estimated_minutes: estimatedMinutes,
-      });
-      toast.success(`Order #${order.id} → ${status}`);
+      const parsed = JSON.parse(auth);
+      if (!parsed.loggedIn) {
+        navigate('/admin');
+        setLoading(false);
+        return;
+      }
+    } catch {
+      navigate('/admin');
+      setLoading(false);
+      return;
+    }
+    loadOrders();
+    setLoading(false);
+  }
+
+  async function acceptOrder(orderId: number, minutes: number) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'accepted', estimated_minutes: minutes },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
+      );
       setAcceptingOrder(null);
-      await loadOrders();
-    } catch (error) {
-      toast.error(errorMessage(error));
+      toast.success(`Order #${orderId} accepted — ${minutes} min`);
+    } catch (e) {
+      console.error('Failed to accept order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to accept order');
     }
   }
 
-  async function assignRider(order: AdminOrder) {
-    if (!selectedRider) {
-      toast.error('Rider select karein');
+  async function updateStatus(orderId: number, newStatus: string) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      const target = orders.find((item) => item.id === orderId);
+      if (target && isDeliveryOrder(target) && newStatus === 'completed') {
+        toast.error('Delivery order sirf Rider Delivered karke complete karega.');
+        return;
+      }
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: newStatus },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
+      toast.success(`Order #${orderId} → ${newStatus}`);
+    } catch (e) {
+      console.error('Failed to update status:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to update status');
+    }
+  }
+
+  async function cancelOrder(orderId: number, reason?: string) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'cancelled', cancel_reason: reason || '' },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
+      );
+      toast.success(`Order #${orderId} cancelled`);
+    } catch (e) {
+      console.error('Failed to cancel order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to cancel order');
+    }
+  }
+
+  async function deleteOrder(orderId: number) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}`,
+        'DELETE',
+      );
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+      setDeletingOrder(null);
+      toast.success(`Order #${orderId} deleted permanently`);
+    } catch (e: any) {
+      console.error('Failed to delete order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error(e?.data?.detail || 'Failed to delete order');
+    }
+  }
+
+  async function addStaffNoteToOrder(orderId: number) {
+    if (!staffNote.trim()) {
+      toast.error('Please enter a note');
       return;
     }
-
-    const gps = String(order.order_notes || '').match(/GPS:\s*([-\d.]+),\s*([-\d.]+)/i);
-    const address = String(order.order_notes || '').match(/Delivery Address:\s*([^|]+)/i);
-
+    setAddingNote(true);
     try {
-      const result = await controlPost<{ already_assigned?: boolean }>('assign', {
-        order_id: order.id,
-        rider_id: Number(selectedRider),
-        customer_lat: gps ? Number(gps[1]) : null,
-        customer_lng: gps ? Number(gps[2]) : null,
-        customer_address: address ? address[1].trim() : '',
-        customer_name: order.customer_name,
-        customer_phone: order.customer_phone,
-        delivery_charge: Number(order.delivery_charge || 0),
-      });
-      toast.success(result.already_assigned ? 'Order pehle se rider ko assigned hai' : `Order #${order.id} rider ko assign ho gaya`);
-      setAssigningOrder(null);
-      setSelectedRider('');
-      await Promise.all([loadOrders(), loadRiders()]);
-    } catch (error) {
-      toast.error(errorMessage(error));
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/notes`,
+        'POST',
+        { note: staffNote, admin_name: 'Admin' },
+      );
+      toast.success('Staff note added');
+      setNoteOrder(null);
+      setStaffNote('');
+      loadOrders();
+    } catch (e: any) {
+      console.error('Failed to add note:', e);
+      toast.error(e?.data?.detail || 'Failed to add note');
+    } finally {
+      setAddingNote(false);
     }
   }
 
-  function printOrder(order: AdminOrder) {
-    const items = parseItems(order.items_json);
-    const win = window.open('', '_blank');
-    if (!win) return;
-    win.document.write(`
-      <html><body style="font-family:monospace;max-width:320px;margin:auto;padding:20px">
-      <h2>Fai Fai Juice</h2><h3>Order #${order.id}</h3>
-      <p>${order.customer_name}<br>${order.customer_phone}</p>
-      ${items.map((item) => `<p>${item.quantity || 1}x ${item.name || item.menuItem?.name || 'Item'} ${item.size ? `(${item.size})` : ''}</p>`).join('')}
-      <hr><strong>Total AED ${Number(order.total_amount || 0).toFixed(2)}</strong>
+  function printReceipt(order: Order) {
+    let items: any[] = [];
+    try { items = JSON.parse(order.items_json); } catch { /* parse error */ }
+
+    const receiptHtml = `
+      <html><head><title>Receipt #${order.id}</title>
+      <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px}
+      h2{text-align:center;margin-bottom:5px}
+      .line{border-top:1px dashed #000;margin:10px 0}
+      .item{display:flex;justify-content:space-between;margin:5px 0}
+      .total{font-weight:bold;font-size:1.2em}</style></head>
+      <body>
+      <h2>Fai Fai Juice</h2>
+      <p style="text-align:center">Murbah, Fujairah, UAE<br>+971 54 294 0112</p>
+      <div class="line"></div>
+      <p><strong>Order #${order.id}</strong><br>
+      Customer: ${order.customer_name}<br>
+      Phone: ${order.customer_phone}<br>
+      ${order.estimated_time ? `Ready in: ${order.estimated_time}<br>` : ''}
+      Payment: ${order.payment_method}</p>
+      <div class="line"></div>
+      ${items.map(i => `<div class="item"><span>${i.quantity}x ${i.name} (${i.size})</span><span>AED ${i.price?.toFixed(2)}</span></div>${i.extras?.length ? `<div style="font-size:0.8em;color:#666;margin-left:10px">+ ${i.extras.join(', ')}</div>` : ''}`).join('')}
+      <div class="line"></div>
+      ${order.delivery_charge ? `<div class="item"><span>Delivery Fee</span><span>AED ${order.delivery_charge?.toFixed(2)}</span></div>` : ''}
+      ${order.tip_amount ? `<div class="item"><span>Tip${order.tip_type ? ` (${order.tip_type})` : ''}</span><span>AED ${order.tip_amount?.toFixed(2)}</span></div>` : ''}
+      <div class="item total"><span>TOTAL</span><span>AED ${order.total_amount?.toFixed(2)}</span></div>
+      ${order.order_notes ? `<div class="line"></div><p>Notes: ${order.order_notes}</p>` : ''}
+      <div class="line"></div>
+      <p style="text-align:center;font-size:0.8em">Thank you for your order!</p>
       </body></html>
-    `);
-    win.document.close();
-    win.print();
+    `;
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(receiptHtml);
+      printWindow.document.close();
+      printWindow.print();
+    }
+  }
+
+  // Calculate distance between rider and customer (Haversine formula)
+  function getRiderDistance(rider: RiderInfo, order: Order): string | null {
+    if (!rider.current_lat || !rider.current_lng) return null;
+    // Parse customer GPS from order notes
+    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
+    if (!gpsMatch) return null;
+    const custLat = parseFloat(gpsMatch[1]);
+    const custLng = parseFloat(gpsMatch[2]);
+    
+    const R = 6371; // Earth radius in km
+    const dLat = (custLat - rider.current_lat) * Math.PI / 180;
+    const dLng = (custLng - rider.current_lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(rider.current_lat * Math.PI / 180) * Math.cos(custLat * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const d = R * c;
+    return d.toFixed(1);
+  }
+
+  // Get human-readable time since last location update
+  function getLocationAge(updatedAt: string | null | undefined): string {
+    if (!updatedAt) return '';
+    const diff = Date.now() - new Date(updatedAt).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    return `${hours}h ago`;
   }
 
   if (loading) {
-    return <div className="min-h-screen bg-gray-950 text-gray-400 flex items-center justify-center">Loading orders…</div>;
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Loading...</div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-4 py-6 text-white">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center gap-3 mb-5">
-          <Button variant="ghost" onClick={() => navigate('/admin/dashboard')} className="text-gray-400">
+    <div className="min-h-screen bg-gray-950 px-4 py-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center gap-2 mb-6 flex-wrap">
+          <Button variant="ghost" onClick={() => navigate('/admin/dashboard')} className="text-gray-400 cursor-pointer">
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold">Order Management <span className="text-xs text-green-400">ADMIN B1</span></h1>
-            <p className="text-xs text-gray-500">Orders: {orders.length} • Active: {activeOrders.length} • Last {lastRefresh.toLocaleTimeString()}</p>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FINAL V5</span></h1>
+            <p className="text-gray-500 text-xs mt-0.5">
+              Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
+            </p>
           </div>
-          <Button variant="outline" onClick={() => void loadOrders(true)} disabled={refreshing} className="border-gray-700">
-            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => loadOrders(true)}
+            disabled={refreshing}
+            className="border-gray-700 text-gray-300 hover:text-white cursor-pointer"
+          >
+            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={toggleAutoAssign}
+            disabled={savingAutoAssign}
+            className={autoAssignEnabled
+              ? 'border-green-600 bg-green-600/15 text-green-400 hover:bg-green-600/25 cursor-pointer'
+              : 'border-gray-700 bg-gray-900 text-gray-400 hover:text-white cursor-pointer'}
+          >
+            {savingAutoAssign ? (
+              <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
+            ) : (
+              <Bike className="w-4 h-4 mr-1" />
+            )}
+            Auto Assign: {autoAssignEnabled ? 'ON' : 'OFF'}
+          </Button>
+          <div className="relative">
+            <Bell className="w-5 h-5 text-gray-400" />
+            {orders.filter(o => o.status === 'new').length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {orders.filter(o => o.status === 'new').length}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-[190px_1fr] gap-3 mb-5">
+        {/* Filters */}
+        <div className="flex gap-3 mb-6 flex-wrap">
           <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="bg-gray-900 border-gray-700"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[180px] bg-gray-900 border-gray-700 text-white">
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
             <SelectContent className="bg-gray-900 border-gray-700">
-              {STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+              <SelectItem value="all">All Orders</SelectItem>
+              {STATUS_OPTIONS.map(s => (
+                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or phone" className="bg-gray-900 border-gray-700" />
+          <Input
+            placeholder="Search by name or phone..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="bg-gray-900 border-gray-700 text-white max-w-[250px]"
+          />
         </div>
 
+        {/* Orders List */}
         <div className="space-y-4">
-          {orders.map((order) => {
-            const delivery = isDelivery(order);
-            const items = parseItems(order.items_json);
-            const assignment = order.rider_assignment;
-            const assignmentActive = assignment && !['rejected', 'delivered'].includes(String(assignment.status).toLowerCase());
+          {orders.map(order => {
+            const statusConfig = STATUS_OPTIONS.find(s => s.value === order.status) || STATUS_OPTIONS[0];
+            let items: any[] = [];
+            try { items = JSON.parse(order.items_json); } catch { /* parse error */ }
 
             return (
-              <Card key={order.id} className="bg-gray-900 border-gray-800 p-4 text-white">
-                <div className="flex items-start justify-between gap-3">
+              <Card key={order.id} className="bg-gray-900 border-gray-800 p-4">
+                <div className="flex items-start justify-between mb-3">
                   <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xl font-black">#{order.id}</span>
-                      <Badge className={delivery ? 'bg-blue-600/20 text-blue-300' : 'bg-green-600/20 text-green-300'}>{delivery ? 'Delivery' : 'Pickup'}</Badge>
-                      <Badge className="bg-gray-800 text-gray-300">{String(order.status).replaceAll('_', ' ')}</Badge>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-bold">#{order.id}</span>
+                      <Badge className={`${statusConfig.color} text-white`}>{statusConfig.label}</Badge>
+                      {order.estimated_time && order.status !== 'completed' && order.status !== 'cancelled' && (
+                        <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30">
+                          <Clock className="w-3 h-3 mr-1" />
+                          {order.estimated_time}
+                        </Badge>
+                      )}
                     </div>
-                    <p className="text-gray-300 mt-1">{order.customer_name} • {order.customer_phone}</p>
+                    <p className="text-gray-400 text-sm mt-1">
+                      {order.customer_name} • {order.customer_phone}
+                    </p>
                   </div>
-                  <Button variant="ghost" onClick={() => printOrder(order)}><Printer className="w-4 h-4" /></Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => printReceipt(order)}
+                    className="text-gray-400 hover:text-white cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </Button>
                 </div>
 
-                <div className="mt-3 space-y-1">
-                  {items.map((item, index) => (
-                    <p key={index} className="text-sm text-gray-300">
-                      {item.quantity || 1}x {item.name || item.menuItem?.name || 'Item'} {item.size ? `(${item.size})` : ''}
-                    </p>
+                <div className="space-y-1 mb-3">
+                  {items.map((item: any, idx: number) => (
+                    <div key={idx} className="text-gray-300 text-sm">
+                      {item.quantity}x {item.name} ({item.size}) — AED {item.price?.toFixed(2)}
+                      {item.extras?.length > 0 && (
+                        <span className="text-gray-500 ml-2">+ {item.extras.join(', ')}</span>
+                      )}
+                    </div>
                   ))}
                 </div>
 
-                {order.order_notes && <p className="mt-3 rounded-lg border border-yellow-700/30 bg-yellow-900/10 p-2 text-xs text-yellow-300">{order.order_notes}</p>}
+                {order.order_notes && (
+                  <p className="text-yellow-400/80 text-xs mb-3 italic">📝 {order.order_notes}</p>
+                )}
 
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-gray-800 pt-3">
-                  <div>
-                    <p className="text-xs text-gray-500">{order.payment_method}</p>
-                    <p className="font-bold text-red-400">AED {Number(order.total_amount || 0).toFixed(2)}</p>
+                {order.status === 'out_for_delivery' && (
+                  <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2 text-sm text-blue-300">
+                    Rider ne order pick kar liya hai. Customer ko deliver hone tak order pending rahega.
                   </div>
+                )}
 
-                  <div className="flex flex-wrap gap-2">
-                    {String(order.status) === 'new' && acceptingOrder !== order.id && (
-                      <Button onClick={() => setAcceptingOrder(order.id)} className="bg-green-600 hover:bg-green-700"><Check className="w-4 h-4 mr-1" />Accept</Button>
-                    )}
-                    {String(order.status) === 'accepted' && <Button onClick={() => void updateStatus(order, 'preparing')} className="bg-yellow-600 hover:bg-yellow-700">Preparing</Button>}
-                    {String(order.status) === 'preparing' && <Button onClick={() => void updateStatus(order, 'ready')} className="bg-purple-600 hover:bg-purple-700">Ready</Button>}
-                    {String(order.status) === 'ready' && !delivery && <Button onClick={() => void updateStatus(order, 'completed')} className="bg-gray-700">Completed</Button>}
-                    {!['completed', 'cancelled'].includes(String(order.status)) && (
-                      <Button variant="outline" onClick={() => void updateStatus(order, 'cancelled')} className="border-red-700 text-red-400"><X className="w-4 h-4 mr-1" />Cancel</Button>
-                    )}
-                  </div>
-                </div>
+                {/* Assign to Rider (for delivery orders) */}
+                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (
+                  assigningOrder === order.id ? (
+                    <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
+                      <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
+                      {/* Rider cards with location info */}
+                      <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
+                        {riders.filter(r => r.is_active).map(r => {
+                          const distance = getRiderDistance(r, order);
+                          const locationAge = getLocationAge(r.location_updated_at);
+                          const isSelected = selectedRider === String(r.id);
+                          return (
+                            <div
+                              key={r.id}
+                              onClick={() => setSelectedRider(String(r.id))}
+                              className={`p-2 rounded-lg cursor-pointer border transition-colors ${
+                                isSelected
+                                  ? 'border-blue-500 bg-blue-600/10'
+                                  : 'border-gray-700 bg-gray-700/50 hover:border-gray-600'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Bike className="w-4 h-4 text-blue-400" />
+                                  <span className="text-white text-sm font-medium">{r.name}</span>
+                                  {(r.active_deliveries ?? 0) > 0 && (
+                                    <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30 text-[10px] px-1.5">
+                                      {r.active_deliveries} active
+                                    </Badge>
+                                  )}
+                                </div>
+                                {distance !== null && (
+                                  <span className="text-green-400 text-xs font-medium">
+                                    <Navigation className="w-3 h-3 inline mr-0.5" />
+                                    {distance} km
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
+                                <span>{r.phone}</span>
+                                {r.current_lat && r.current_lng ? (
+                                  <span className="flex items-center gap-0.5">
+                                    <MapPin className="w-3 h-3 text-green-500" />
+                                    {locationAge || 'Live'}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600">No GPS</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => assignToRider(order)} disabled={!selectedRider} className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1">
+                          Assign Selected
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
+                          ✕
+                        </Button>
+                      </div>
+                      {riders.filter(r => r.is_active).length === 0 && (
+                        <p className="text-gray-500 text-xs mt-2">No riders added. Go to Settings → Delivery Riders to add.</p>
+                      )}
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); loadRiders(); }}
+                      className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
+                    >
+                      <Bike className="w-3 h-3 mr-1" /> Assign Rider
+                    </Button>
+                  )
+                )}
 
-                {acceptingOrder === order.id && (
-                  <div className="mt-3 rounded-lg bg-gray-800 p-3">
-                    <p className="mb-2 text-sm text-green-400">Ready time select karein</p>
-                    <div className="flex flex-wrap gap-2">
-                      {READY_TIMES.map((minutes) => (
-                        <button key={minutes} onClick={() => setReadyTime(minutes)} className={`rounded px-3 py-2 text-sm ${readyTime === minutes ? 'bg-green-600' : 'bg-gray-700'}`}>{minutes} min</button>
+                {/* Accept Order with Time Selection */}
+                {order.status === 'new' && acceptingOrder === order.id && (
+                  <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-green-600/30">
+                    <p className="text-green-400 text-sm font-medium mb-2">Set estimated ready time:</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {TIME_OPTIONS.map(t => (
+                        <button
+                          key={t.value}
+                          onClick={() => setSelectedTime(t.value)}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                            selectedTime === t.value
+                              ? 'bg-green-600 text-white'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
                       ))}
-                      <Button onClick={() => void updateStatus(order, 'accepted', readyTime)} className="bg-green-600">Confirm</Button>
-                      <Button variant="ghost" onClick={() => setAcceptingOrder(null)}>Back</Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => acceptOrder(order.id, selectedTime)}
+                        className="bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                      >
+                        <Check className="w-3 h-3 mr-1" />
+                        Accept — {selectedTime} min
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setAcceptingOrder(null)}
+                        className="text-gray-400 cursor-pointer"
+                      >
+                        Cancel
+                      </Button>
                     </div>
                   </div>
                 )}
 
-                {delivery && (
-                  <div className="mt-3 rounded-lg border border-blue-700/30 bg-blue-950/30 p-3">
-                    {assignmentActive ? (
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="font-semibold text-blue-300"><Bike className="inline w-4 h-4 mr-1" />{assignment?.rider_name}</p>
-                          <p className="text-xs text-blue-400">Status: {assignment?.status?.replaceAll('_', ' ')}</p>
-                        </div>
-                        {assignment?.rider_phone && <a className="text-sm text-blue-300 underline" href={`tel:${assignment.rider_phone}`}>{assignment.rider_phone}</a>}
-                      </div>
-                    ) : assigningOrder === order.id ? (
-                      <div>
-                        <p className="mb-2 text-sm font-semibold text-blue-300">Rider select karein</p>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {riders.map((rider) => (
-                            <button key={rider.id} onClick={() => setSelectedRider(String(rider.id))} className={`rounded-lg border p-3 text-left ${selectedRider === String(rider.id) ? 'border-blue-500 bg-blue-600/10' : 'border-gray-700 bg-gray-800'}`}>
-                              <p className="font-semibold">{rider.name}</p>
-                              <p className="text-xs text-gray-400">{rider.phone} • {rider.active_deliveries || 0} active</p>
-                              {rider.current_lat && <p className="text-xs text-green-400"><MapPin className="inline w-3 h-3" /> Live GPS</p>}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="mt-3 flex gap-2">
-                          <Button onClick={() => void assignRider(order)} disabled={!selectedRider} className="bg-blue-600">Assign Selected</Button>
-                          <Button variant="ghost" onClick={() => setAssigningOrder(null)}>Back</Button>
-                        </div>
-                        {riders.length === 0 && <p className="mt-2 text-xs text-red-300">No active rider found. Rider Management me rider add/activate karein.</p>}
-                      </div>
-                    ) : (
-                      <Button onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); void loadRiders(); }} className="bg-blue-600 hover:bg-blue-700"><Bike className="w-4 h-4 mr-1" />Assign Rider</Button>
-                    )}
+                {/* Staff Notes UI */}
+                {noteOrder === order.id && (
+                  <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-yellow-600/30">
+                    <p className="text-yellow-400 text-sm font-medium mb-2">📝 Add Staff Note:</p>
+                    <Textarea
+                      value={staffNote}
+                      onChange={e => setStaffNote(e.target.value)}
+                      placeholder="Internal note (not visible to customer)..."
+                      className="bg-gray-700 border-gray-600 text-white text-sm mb-2"
+                      rows={2}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => addStaffNoteToOrder(order.id)}
+                        disabled={addingNote}
+                        className="bg-yellow-600 hover:bg-yellow-700 text-white cursor-pointer"
+                      >
+                        <Send className="w-3 h-3 mr-1" /> {addingNote ? 'Adding...' : 'Add Note'}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setNoteOrder(null); setStaffNote(''); }} className="text-gray-400 cursor-pointer">
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
                 )}
+
+                {/* Cancel with Reason */}
+                {cancellingOrder === order.id && (
+                  <div className="bg-orange-950/50 rounded-lg p-3 mb-3 border border-orange-600/30">
+                    <p className="text-orange-400 text-sm font-medium mb-2">Cancel Order #{order.id} — Select Reason:</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {['Customer requested', 'Out of stock', 'Kitchen too busy', 'Wrong order', 'Duplicate order', 'Other'].map(reason => (
+                        <button
+                          key={reason}
+                          onClick={() => setCancelReason(reason)}
+                          className={`px-2 py-1 rounded text-xs font-medium cursor-pointer ${
+                            cancelReason === reason ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                    {cancelReason === 'Other' && (
+                      <Input
+                        value={cancelReason === 'Other' ? '' : cancelReason}
+                        onChange={e => setCancelReason(e.target.value || 'Other')}
+                        placeholder="Enter custom reason..."
+                        className="bg-gray-800 border-gray-700 text-white text-sm mb-2"
+                      />
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => { cancelOrder(order.id, cancelReason); setCancellingOrder(null); setCancelReason(''); }}
+                        disabled={!cancelReason}
+                        className="bg-orange-600 hover:bg-orange-700 text-white cursor-pointer"
+                      >
+                        <X className="w-3 h-3 mr-1" /> Confirm Cancel
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setCancellingOrder(null); setCancelReason(''); }} className="text-gray-400 cursor-pointer">
+                        Back
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirmation */}
+                {deletingOrder === order.id && (
+                  <div className="bg-red-950/50 rounded-lg p-3 mb-3 border border-red-600/30">
+                    <p className="text-red-400 text-sm font-medium mb-2">⚠️ Are you sure? This will permanently delete Order #{order.id}.</p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => deleteOrder(order.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" /> Yes, Delete
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setDeletingOrder(null)} className="text-gray-400 cursor-pointer">
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-3 border-t border-gray-800">
+                  <div className="text-sm text-gray-500">
+                    {order.payment_method}
+                    <br />
+                    {new Date(order.created_at).toLocaleString()}
+                  </div>
+                  <div className="flex flex-col items-end gap-0.5">
+                    {order.delivery_charge > 0 && (
+                      <span className="text-xs text-gray-400">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
+                    )}
+                    {order.tip_amount > 0 && (
+                      <span className="text-xs text-green-400">Tip{order.tip_type ? ` (${order.tip_type})` : ''}: AED {order.tip_amount?.toFixed(2)}</span>
+                    )}
+                    <span className="text-red-400 font-bold">Total: AED {order.total_amount?.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* Staff note button */}
+                    {noteOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setNoteOrder(order.id); setStaffNote(''); }}
+                        className="text-yellow-400 hover:text-yellow-300 cursor-pointer p-1 h-auto"
+                        title="Add staff note"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {/* Delete button */}
+                    {deletingOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeletingOrder(order.id)}
+                        className="text-red-400 hover:text-red-300 cursor-pointer p-1 h-auto"
+                        title="Delete order"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {/* Action buttons based on status */}
+                    {order.status === 'new' && acceptingOrder !== order.id && (
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          onClick={() => { setAcceptingOrder(order.id); setSelectedTime(20); }}
+                          className="bg-green-600 hover:bg-green-700 text-white text-xs cursor-pointer"
+                        >
+                          <Check className="w-3 h-3 mr-1" />
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                          className="text-red-400 hover:text-red-300 text-xs cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Cancel button for active orders (not new, not completed/cancelled) */}
+                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && cancellingOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                        className="text-orange-400 hover:text-orange-300 text-xs cursor-pointer p-1 h-auto"
+                        title="Cancel order"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && order.status !== 'out_for_delivery' && (
+                      <Select
+                        value={order.status}
+                        onValueChange={(val) => updateStatus(order.id, val)}
+                      >
+                        <SelectTrigger className="w-[140px] bg-gray-800 border-gray-700 text-white text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-gray-700">
+                          {STATUS_OPTIONS.filter((status) => {
+                            if (status.value === 'new' || status.value === 'out_for_delivery') return false;
+                            if (isDeliveryOrder(order) && status.value === 'completed') return false;
+                            return true;
+                          }).map((status) => (
+                            <SelectItem key={status.value} value={status.value}>
+                              {status.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                </div>
               </Card>
             );
           })}
 
           {orders.length === 0 && (
-            <div className="rounded-xl border border-gray-800 bg-gray-900/50 py-20 text-center">
-              <p className="text-lg text-gray-400">No orders found</p>
-              <p className="mt-1 text-sm text-gray-600">Refresh dabayein. Kitchen me jo orders hain woh yahan bhi aane chahiye.</p>
+            <div className="text-center py-16">
+              <div className="text-gray-500 text-4xl mb-4">📋</div>
+              <p className="text-gray-400 font-medium text-lg mb-2">No orders yet</p>
+              <p className="text-gray-600 text-sm max-w-sm mx-auto">
+                When customers place orders through the app, they will appear here automatically.
+                The page refreshes every 15 seconds.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadOrders(true)}
+                className="mt-4 border-gray-700 text-gray-300 hover:text-white cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Check Now
+              </Button>
             </div>
           )}
         </div>
