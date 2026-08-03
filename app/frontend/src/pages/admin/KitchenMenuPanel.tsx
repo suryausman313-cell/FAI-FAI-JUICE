@@ -212,7 +212,7 @@ export default function KitchenMenuPanel({ embedded = false }: { embedded?: bool
 
     if (!pin) {
       setAuthError(true);
-      toast.error('Pehle Live Orders me Kitchen PIN se login karein');
+      toast.error('Open Live Orders and login with the Kitchen PIN first.');
       return;
     }
 
@@ -266,8 +266,8 @@ export default function KitchenMenuPanel({ embedded = false }: { embedded?: bool
           <UtensilsCrossed className="w-12 h-12 text-yellow-400 mx-auto mb-3" />
           <h2 className="text-white font-bold text-lg">Kitchen Login Required</h2>
           <p className="text-gray-400 text-sm mt-2">
-            Pehle <strong>Live Orders</strong> tab kholo aur Kitchen PIN se login
-            karo. Phir Menu tab dobara kholo.
+            Open the <strong>Live Orders</strong> tab and login with the Kitchen
+            PIN first. Then open the Menu tab again.
           </p>
         </Card>
       </div>
@@ -284,7 +284,7 @@ export default function KitchenMenuPanel({ embedded = false }: { embedded?: bool
               Kitchen Menu
             </h1>
             <p className="text-gray-500 text-xs mt-1">
-              Item khatam ho to Sold Out karo. Wapas aaye to Available karo.
+              Mark an unavailable item as Sold Out. Mark it Available when it is back.
             </p>
           </div>
 

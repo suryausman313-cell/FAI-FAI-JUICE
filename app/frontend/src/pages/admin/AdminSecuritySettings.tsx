@@ -40,7 +40,7 @@ export default function AdminSecuritySettings() {
       return;
     }
     if (session.role !== 'super_admin') {
-      toast.error('Sirf Super Admin username/password change kar sakta hai');
+      toast.error('Only the Super Admin can change the username and password.');
       navigate('/admin/dashboard');
       return;
     }
@@ -54,7 +54,7 @@ export default function AdminSecuritySettings() {
       setUsername(me.username);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : 'Admin details load nahi huay',
+        error instanceof Error ? error.message : 'Admin details could not be loaded.',
       );
       navigate('/admin');
     } finally {
@@ -66,23 +66,23 @@ export default function AdminSecuritySettings() {
     event.preventDefault();
 
     if (username.trim().length < 3) {
-      toast.error('Username minimum 3 characters hona chahiye');
+      toast.error('Username must be at least 3 characters.');
       return;
     }
     if (!currentPassword) {
-      toast.error('Current password likho');
+      toast.error('Enter the current password.');
       return;
     }
     if (newPassword.length < 8) {
-      toast.error('New password minimum 8 characters hona chahiye');
+      toast.error('New password must be at least 8 characters.');
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error('New passwords match nahi karte');
+      toast.error('The new passwords do not match.');
       return;
     }
     if (newPassword === currentPassword) {
-      toast.error('New password current password se different rakho');
+      toast.error('The new password must be different from the current password.');
       return;
     }
 
@@ -101,7 +101,7 @@ export default function AdminSecuritySettings() {
       toast.error(
         error instanceof Error
           ? error.message
-          : 'Username/password change nahi hua',
+          : 'Username and password could not be changed.',
       );
     } finally {
       setSaving(false);
@@ -133,7 +133,7 @@ export default function AdminSecuritySettings() {
               Admin Security
             </h1>
             <p className="text-gray-500 text-sm">
-              Super Admin username aur password change karo
+              Change the Super Admin username and password
             </p>
           </div>
         </div>
@@ -143,10 +143,10 @@ export default function AdminSecuritySettings() {
             <ShieldAlert className="w-5 h-5 text-amber-400 mt-0.5" />
             <div>
               <p className="text-amber-200 text-sm font-semibold">
-                Save ke baad automatic logout hoga
+                You will be logged out automatically after saving
               </p>
               <p className="text-amber-300/60 text-xs mt-1">
-                Dobara new username aur new password se login karna hoga.
+                Log in again using the new username and password.
               </p>
             </div>
           </div>
@@ -246,7 +246,10 @@ export default function AdminSecuritySettings() {
         <Card className="bg-gray-900 border-gray-800 p-4 mt-4">
           <p className="text-white text-sm font-semibold">Kitchen PIN</p>
           <p className="text-gray-500 text-xs mt-1">
-            Kitchen PIN abhi Render Environment ke KITCHEN_PIN variable se controlled hai. Is page ka username/password change us PIN ko affect nahi karega.
+            The Kitchen PIN is controlled by the KITCHEN_PIN variable in the Render Environment. Changing the Admin username or password here will not change the Kitchen PIN.
+          </p>
+          <p className="text-gray-600 text-xs mt-2">
+            INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD are used only for the first Admin setup. For an existing Admin, change the credentials on this page.
           </p>
         </Card>
       </div>

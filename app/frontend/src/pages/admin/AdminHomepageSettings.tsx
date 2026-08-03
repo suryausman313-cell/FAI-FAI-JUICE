@@ -18,9 +18,15 @@ import {
 
 type HomepageForm = Pick<
   ExtendedSettings,
+  | 'show_branding'
+  | 'show_notifications'
   | 'show_status_banner'
   | 'show_offers'
   | 'show_quick_actions'
+  | 'show_menu_action'
+  | 'show_deals_action'
+  | 'show_orders_action'
+  | 'show_contact_action'
   | 'show_popular_items'
   | 'show_reviews'
   | 'blog_enabled'
@@ -31,11 +37,27 @@ type HomepageForm = Pick<
   | 'popular_max_items'
 >;
 
+type QuickActionKey =
+  | 'show_menu_action'
+  | 'show_deals_action'
+  | 'show_orders_action'
+  | 'show_contact_action';
+
 const rows: Array<{
   key: keyof HomepageForm;
   title: string;
   description: string;
 }> = [
+  {
+    key: 'show_branding',
+    title: 'Branding & Welcome Banner',
+    description: 'Shop name, slogan and custom welcome banner',
+  },
+  {
+    key: 'show_notifications',
+    title: 'Customer Notifications',
+    description: 'Notification messages at the top of the homepage',
+  },
   {
     key: 'show_status_banner',
     title: 'Status Banner',
@@ -78,14 +100,47 @@ const rows: Array<{
   },
 ];
 
+const quickActionRows: Array<{
+  key: QuickActionKey;
+  title: string;
+  description: string;
+}> = [
+  {
+    key: 'show_menu_action',
+    title: 'Menu Button',
+    description: 'Open the full customer menu',
+  },
+  {
+    key: 'show_deals_action',
+    title: 'Deals Button',
+    description: 'Show or hide Deals on Customer Home',
+  },
+  {
+    key: 'show_orders_action',
+    title: 'My Orders Button',
+    description: 'Open customer order history and tracking',
+  },
+  {
+    key: 'show_contact_action',
+    title: 'Contact Button',
+    description: 'Open the restaurant contact page',
+  },
+];
+
 export default function AdminHomepageSettings() {
   const [settingsId, setSettingsId] = useState<number | null>(null);
   const [form, setForm] = useState<HomepageForm>(() => {
     const local = readExtendedSettings();
     return {
+      show_branding: local.show_branding,
+      show_notifications: local.show_notifications,
       show_status_banner: local.show_status_banner,
       show_offers: local.show_offers,
       show_quick_actions: local.show_quick_actions,
+      show_menu_action: local.show_menu_action,
+      show_deals_action: local.show_deals_action,
+      show_orders_action: local.show_orders_action,
+      show_contact_action: local.show_contact_action,
       show_popular_items: local.show_popular_items,
       show_reviews: local.show_reviews,
       blog_enabled: local.blog_enabled,
@@ -110,11 +165,22 @@ export default function AdminHomepageSettings() {
       setSettingsId(Number(settings.id));
       setForm(current => ({
         ...current,
+        show_branding: settings.show_branding ?? current.show_branding,
+        show_notifications:
+          settings.show_notifications ?? current.show_notifications,
         show_status_banner:
           settings.show_status_banner ?? current.show_status_banner,
         show_offers: settings.show_offers ?? current.show_offers,
         show_quick_actions:
           settings.show_quick_actions ?? current.show_quick_actions,
+        show_menu_action:
+          settings.show_menu_action ?? current.show_menu_action,
+        show_deals_action:
+          settings.show_deals_action ?? current.show_deals_action,
+        show_orders_action:
+          settings.show_orders_action ?? current.show_orders_action,
+        show_contact_action:
+          settings.show_contact_action ?? current.show_contact_action,
         show_popular_items:
           settings.show_popular_items ?? current.show_popular_items,
         show_reviews: settings.show_reviews ?? current.show_reviews,
@@ -183,6 +249,36 @@ export default function AdminHomepageSettings() {
 
                 <Switch
                   checked={Boolean(form[row.key])}
+                  onCheckedChange={checked =>
+                    setForm({ ...form, [row.key]: checked })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="bg-gray-900 border-gray-800 p-6">
+          <h2 className="text-white font-semibold mb-1">
+            Individual Quick Action Buttons
+          </h2>
+          <p className="text-gray-500 text-xs mb-4">
+            The Quick Action Buttons master switch above must also be ON.
+          </p>
+          <div className="space-y-3">
+            {quickActionRows.map(row => (
+              <div
+                key={row.key}
+                className="flex items-center justify-between p-4 rounded-lg bg-gray-800 border border-gray-700"
+              >
+                <div>
+                  <Label className="text-gray-200">{row.title}</Label>
+                  <p className="text-gray-500 text-xs mt-1">
+                    {row.description}
+                  </p>
+                </div>
+                <Switch
+                  checked={form[row.key]}
                   onCheckedChange={checked =>
                     setForm({ ...form, [row.key]: checked })
                   }

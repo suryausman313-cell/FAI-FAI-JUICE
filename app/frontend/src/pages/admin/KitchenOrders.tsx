@@ -366,7 +366,7 @@ export default function KitchenOrders() {
 
   async function updateRestaurantStatus(nextStatus: RestaurantStatus) {
     if (!restaurantSettingsId) {
-      toast.error('Restaurant settings load nahi hui. Refresh karein.');
+      toast.error('Restaurant settings could not be loaded. Please refresh.');
       return;
     }
 
@@ -381,7 +381,7 @@ export default function KitchenOrders() {
       setStatusDialogOpen(false);
       toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
     } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Shop status save nahi hua');
+      toast.error(error?.response?.data?.detail || 'Shop status could not be saved.');
     } finally {
       setSavingRestaurantStatus(false);
     }
@@ -453,7 +453,7 @@ export default function KitchenOrders() {
         toast.error('Kitchen PIN expired. Please login again.');
       } else {
         console.error('Kitchen order loading failed:', error);
-        toast.error('Orders load nahi huay. Refresh dobara dabayein.');
+        toast.error('Orders could not be loaded. Please refresh again.');
       }
     } finally {
       setRefreshing(false);
@@ -486,8 +486,9 @@ export default function KitchenOrders() {
 
   async function handlePinLogin(event: FormEvent) {
     event.preventDefault();
-    if (!pin.trim()) {
-      toast.error('Kitchen PIN enter karein');
+    const normalizedPin = pin.trim();
+    if (!/^\d{4,8}$/.test(normalizedPin)) {
+      toast.error('Kitchen PIN must be 4 to 8 digits.');
       return;
     }
 
@@ -495,14 +496,14 @@ export default function KitchenOrders() {
       await axios.get(`${getAPIBaseURL()}/api/v1/admin/kitchen/orders`, {
         headers: {
           'Content-Type': 'application/json',
-          'X-Kitchen-Pin': pin.trim(),
+          'X-Kitchen-Pin': normalizedPin,
         },
         params: { limit: 1 },
         timeout: 12000,
       });
 
       localStorage.setItem('kitchen_auth', 'true');
-      localStorage.setItem('kitchen_pin', pin.trim());
+      localStorage.setItem('kitchen_pin', normalizedPin);
       setAuthenticated(true);
       kitchenAlarm.unlock();
       if (soundEnabled) kitchenAlarm.playOnce();
@@ -546,7 +547,7 @@ export default function KitchenOrders() {
 
   function printReceipt(order: KitchenOrder, reprint = false): boolean {
     if (!nativePrinterAvailable()) {
-      toast.info('Automatic print ke liye Vita Kitchen Print Android app kholo.');
+      toast.info('Open the Vita Kitchen Print Android app for automatic printing.');
       return false;
     }
 
@@ -567,7 +568,7 @@ export default function KitchenOrders() {
       return true;
     } catch (error) {
       console.error('Receipt print failed:', error);
-      toast.error('Receipt print failed. Reprint dobara dabayein.');
+      toast.error('Receipt printing failed. Press Reprint again.');
       return false;
     }
   }
@@ -722,7 +723,7 @@ export default function KitchenOrders() {
               value={pin}
               onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
               placeholder="Enter PIN"
-              maxLength={4}
+              maxLength={8}
               inputMode="numeric"
               className="w-full text-center text-2xl tracking-[0.5em] bg-gray-900 border border-gray-700 text-white rounded-xl py-4 px-4 focus:outline-none focus:border-orange-500"
             />
@@ -730,7 +731,7 @@ export default function KitchenOrders() {
               Enter Kitchen
             </Button>
           </form>
-          <p className="text-gray-600 text-xs mt-4">PIN Render Environment ke KITCHEN_PIN se chalega</p>
+          <p className="text-gray-600 text-xs mt-4">The PIN is controlled by KITCHEN_PIN in the Render Environment.</p>
         </div>
       </div>
     );
@@ -809,9 +810,9 @@ export default function KitchenOrders() {
             return (
               <div className="mb-3 rounded-lg border border-amber-600/30 bg-amber-600/10 px-2.5 py-2">
                 <p className="text-amber-300 text-sm font-semibold">Waiting Rider</p>
-                <p className="text-amber-200/70 text-xs mt-0.5">Rider assignment ka wait ho raha hai.</p>
+                <p className="text-amber-200/70 text-xs mt-0.5">Waiting for a rider to be assigned.</p>
                 {assignmentStatus === 'rejected' && (
-                  <p className="text-red-300 text-xs mt-1">Previous rider rejected — doosra rider assign hoga.</p>
+                  <p className="text-red-300 text-xs mt-1">The previous rider rejected the order. Another rider will be assigned.</p>
                 )}
               </div>
             );
@@ -932,7 +933,7 @@ export default function KitchenOrders() {
                     ? 'Waiting for Rider Pickup'
                     : 'Waiting Rider Assignment'}
                 </p>
-                <p className="text-blue-200/70 text-xs mt-0.5">Delivery order Rider app se hi complete hoga.</p>
+                <p className="text-blue-200/70 text-xs mt-0.5">This delivery order can only be completed from the Rider app.</p>
               </div>
             ) : (
               <Button
@@ -949,7 +950,7 @@ export default function KitchenOrders() {
 
             {isDeliveryOrder(order) && (
               <p className="col-span-2 text-[11px] text-blue-300 bg-blue-600/10 border border-blue-600/20 rounded-lg px-2 py-1.5">
-                Rider Picked Up karega to order Live Kitchen se hat kar Today Orders me “Delivery Pending” rahega. Rider Delivered karega to automatic “Completed” ho jayega.
+                After the rider marks Picked Up, the order moves from Live Kitchen to Today Orders as “Delivery Pending”. It becomes “Completed” automatically when the rider marks Delivered.
               </p>
             )}
           </div>
@@ -979,7 +980,7 @@ export default function KitchenOrders() {
 
         {historyOrders.length === 0 ? (
           <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
-            Is din koi completed, pending delivery ya cancelled order nahi hai.
+            There are no completed, pending delivery, or cancelled orders for this day.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -1172,7 +1173,7 @@ export default function KitchenOrders() {
 
         {soundEnabled && newOrders.length > 0 && (
           <div className="bg-red-600/10 border border-red-600/30 rounded-lg px-3 py-2 mb-3 text-red-300 text-xs">
-            New order alert active — Accept karne par sound band hogi.
+            New order alert is active. The sound stops when the order is accepted.
           </div>
         )}
 
@@ -1273,15 +1274,15 @@ export default function KitchenOrders() {
               <Store className="w-5 h-5 text-orange-500" /> Shop Status
             </DialogTitle>
             <DialogDescription className="text-gray-500">
-              Customer app par shop ka live status foran update hoga.
+              The shop status updates immediately in the Customer app.
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-2">
             {([
-              { key: 'open' as const, label: 'OPEN', note: 'Orders normal receive honge', className: 'border-green-600/40 bg-green-600/10 text-green-400' },
-              { key: 'busy' as const, label: 'BUSY', note: 'Customer ko busy status show hoga', className: 'border-amber-600/40 bg-amber-600/10 text-amber-400' },
-              { key: 'closed' as const, label: 'CLOSED', note: 'Shop closed show hoga', className: 'border-red-600/40 bg-red-600/10 text-red-400' },
+              { key: 'open' as const, label: 'OPEN', note: 'Orders are received normally', className: 'border-green-600/40 bg-green-600/10 text-green-400' },
+              { key: 'busy' as const, label: 'BUSY', note: 'Customers will see the Busy status', className: 'border-amber-600/40 bg-amber-600/10 text-amber-400' },
+              { key: 'closed' as const, label: 'CLOSED', note: 'Customers will see that the shop is closed', className: 'border-red-600/40 bg-red-600/10 text-red-400' },
             ]).map((option) => (
               <button
                 key={option.key}
@@ -1305,7 +1306,7 @@ export default function KitchenOrders() {
               <Settings className="w-5 h-5 text-orange-500" /> Kitchen Settings
             </DialogTitle>
             <DialogDescription className="text-gray-500">
-              Sound yahan se ON/OFF karein. Bada activation message dobara show nahi hoga.
+              Turn the sound ON or OFF here. The large activation message will not appear again.
             </DialogDescription>
           </DialogHeader>
 
@@ -1313,7 +1314,7 @@ export default function KitchenOrders() {
             <div className="flex items-center justify-between bg-gray-900 rounded-xl p-3">
               <div>
                 <p className="font-semibold text-sm">New Order Sound</p>
-                <p className="text-gray-500 text-xs">Order accept hone tak alert</p>
+                <p className="text-gray-500 text-xs">Alert continues until the order is accepted</p>
               </div>
               <button
                 type="button"

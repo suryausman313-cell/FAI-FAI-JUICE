@@ -415,9 +415,13 @@ export default function AdminBrandSettings() {
           <div className="flex items-center gap-2">
             <ImageIcon className="w-5 h-5 text-cyan-400" />
             <h2 className="text-white font-semibold">
-              Logos
+              App Icons & Logos
             </h2>
           </div>
+
+          <p className="text-gray-500 text-xs">
+            Upload a separate square icon for the Customer, Admin, Kitchen and Rider apps. A 512 x 512 PNG or WebP image is recommended.
+          </p>
 
           <div className="grid md:grid-cols-2 gap-4">
             {LOGO_FIELDS.map((field) => {
