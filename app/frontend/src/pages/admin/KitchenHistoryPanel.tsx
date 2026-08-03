@@ -149,7 +149,7 @@ export default function KitchenHistoryPanel({
 
   const loadOrders = useCallback(async (silent = false) => {
     const pin =
-      localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '1122';
+      localStorage.getItem(KITCHEN_PIN_STORAGE_KEY) || '';
     const baseURL = getAPIBaseURL().replace(/\/$/, '');
 
     if (!silent) setRefreshing(true);

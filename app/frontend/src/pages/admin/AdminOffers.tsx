@@ -26,6 +26,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { client, Offer } from '@/lib/api';
+import { uploadMenuImage } from '@/lib/image-upload';
 
 type DiscountType = 'percentage' | 'fixed';
 
@@ -314,36 +315,10 @@ export default function AdminOffers() {
     toast.info('Uploading image...');
 
     try {
-      const extension = file.name.split('.').pop() || 'jpg';
-      const objectKey = `offers/${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}.${extension}`;
-
-      const uploadResponse = await client.storage.getUploadUrl({
-        bucket_name: 'offer-images',
-        object_key: objectKey,
-      });
-
-      const uploadUrl = uploadResponse?.data?.upload_url;
-      if (!uploadUrl) throw new Error('Failed to get upload URL');
-
-      const uploadResult = await fetch(uploadUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      });
-
-      if (!uploadResult.ok) throw new Error('Image upload failed');
-
-      const downloadResponse = await client.storage.getDownloadUrl({
-        bucket_name: 'offer-images',
-        object_key: objectKey,
-      });
-
-      const downloadUrl = downloadResponse?.data?.download_url;
+      const imageUrl = await uploadMenuImage(file);
       setForm((current) => ({
         ...current,
-        banner_image_url: downloadUrl || objectKey,
+        banner_image_url: imageUrl,
       }));
       toast.success('Image uploaded');
     } catch (error) {

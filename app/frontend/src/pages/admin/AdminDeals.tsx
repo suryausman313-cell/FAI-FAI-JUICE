@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
+import { uploadMenuImage } from '@/lib/image-upload';
 
 interface DealCategory {
   category_id: number;
@@ -420,35 +421,9 @@ export default function AdminDeals() {
                       }
                       toast.info('Uploading image...');
                       try {
-                        const ext = file.name.split('.').pop() || 'jpg';
-                        const objectKey = `deals/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-                        
-                        const uploadRes = await client.storage.getUploadUrl({
-                          bucket_name: 'offer-images',
-                          object_key: objectKey,
-                        });
-                        const uploadUrl = uploadRes?.data?.upload_url;
-                        if (!uploadUrl) throw new Error('Failed to get upload URL');
-
-                        await fetch(uploadUrl, {
-                          method: 'PUT',
-                          body: file,
-                          headers: { 'Content-Type': file.type },
-                        });
-
-                        const downloadRes = await client.storage.getDownloadUrl({
-                          bucket_name: 'offer-images',
-                          object_key: objectKey,
-                        });
-                        const downloadUrl = downloadRes?.data?.download_url;
-                        
-                        if (downloadUrl) {
-                          setFormImageUrl(downloadUrl);
-                          toast.success('Image uploaded!');
-                        } else {
-                          setFormImageUrl(objectKey);
-                          toast.success('Image uploaded!');
-                        }
+                        const imageUrl = await uploadMenuImage(file);
+                        setFormImageUrl(imageUrl);
+                        toast.success('Image uploaded!');
                       } catch (err: any) {
                         console.error('Upload error:', err);
                         toast.error('Failed to upload image');

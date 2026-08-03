@@ -26,7 +26,6 @@ function adminHeaders() {
 
   return {
     'Content-Type': 'application/json',
-    'X-Kitchen-Pin': '1122',
     ...(adminToken
       ? { Authorization: `Bearer ${adminToken}` }
       : {}),

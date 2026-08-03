@@ -320,7 +320,7 @@ export default function KitchenOrders() {
   const loadInProgressRef = useRef(false);
 
   const kitchenPin = useCallback(
-    () => localStorage.getItem('kitchen_pin') || '1122',
+    () => localStorage.getItem('kitchen_pin') || '',
     []
   );
 

@@ -240,12 +240,16 @@ export default function AdminSales() {
 
     try {
       const baseURL = getAPIBaseURL().replace(/\/$/, '');
-      const pin = localStorage.getItem('kitchen_pin') || '1122';
+      const token = localStorage.getItem('fai_fai_admin_token') || '';
+      const adminHeaders = { Authorization: `Bearer ${token}` };
       const [summaryResult, ordersResult] = await Promise.allSettled([
-        axios.get(`${baseURL}${summaryUrl()}`, { timeout: 20000 }),
+        axios.get(`${baseURL}${summaryUrl()}`, {
+          headers: adminHeaders,
+          timeout: 20000,
+        }),
         axios.get(`${baseURL}/api/v1/admin/orders`, {
           params: { sort: '-created_at', limit: 2000 },
-          headers: { 'X-Kitchen-Pin': pin },
+          headers: adminHeaders,
           timeout: 20000,
         }),
       ]);

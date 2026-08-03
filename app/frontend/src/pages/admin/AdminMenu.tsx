@@ -91,6 +91,11 @@ async function request<T>(
     timeout: 20000,
     headers: {
       'Content-Type': 'application/json',
+      ...(localStorage.getItem('fai_fai_admin_token')
+        ? {
+            Authorization: `Bearer ${localStorage.getItem('fai_fai_admin_token')}`,
+          }
+        : {}),
     },
   });
 

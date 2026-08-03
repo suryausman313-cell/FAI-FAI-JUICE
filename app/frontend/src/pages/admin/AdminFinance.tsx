@@ -93,6 +93,7 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${localStorage.getItem('fai_fai_admin_token') || ''}`,
       ...(options?.headers || {}),
     },
   });

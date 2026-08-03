@@ -23,7 +23,7 @@ function riderAdminApi(options: RiderAdminApiOptions) {
     method: options.method,
     data: options.data,
     headers: {
-      'X-Kitchen-Pin': localStorage.getItem('kitchen_pin') || '1122',
+      Authorization: `Bearer ${localStorage.getItem('fai_fai_admin_token') || ''}`,
     },
     timeout: 25000,
   });

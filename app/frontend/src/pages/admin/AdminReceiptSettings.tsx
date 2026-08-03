@@ -72,7 +72,10 @@ export default function AdminReceiptSettings() {
     try {
       const response = await fetch(endpoint(), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('fai_fai_admin_token') || ''}`,
+        },
         body: JSON.stringify(form),
       });
 
