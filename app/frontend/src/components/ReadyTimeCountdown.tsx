@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3 } from 'lucide-react';
+import { useTranslation } from '@/lib/i18n';
 
 type ReadyTimeCountdownProps = {
   estimatedTime?: string | null;
@@ -76,6 +77,7 @@ export default function ReadyTimeCountdown({
   status,
   compact = false,
 }: ReadyTimeCountdownProps) {
+  const { t } = useTranslation();
   const [now, setNow] = useState(Date.now());
   const normalizedStatus = String(status || '').toLowerCase();
 
@@ -98,8 +100,8 @@ export default function ReadyTimeCountdown({
       <div className={`rounded-xl border border-green-500/30 bg-green-500/10 ${compact ? 'px-2.5 py-2' : 'p-3'} flex items-center gap-2.5`}>
         <CheckCircle2 className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-green-400 shrink-0`} />
         <div className="min-w-0">
-          <p className="text-green-300 font-bold text-sm">Order is ready</p>
-          {!compact && <p className="text-green-400/70 text-xs">Shop ne Ready status confirm kar diya hai.</p>}
+          <p className="text-green-300 font-bold text-sm">{t('orders.ready_confirmed_title')}</p>
+          {!compact && <p className="text-green-400/70 text-xs">{t('orders.ready_confirmed_subtitle')}</p>}
         </div>
       </div>
     );
@@ -110,7 +112,7 @@ export default function ReadyTimeCountdown({
       <div className={`rounded-xl border border-green-500/30 bg-green-500/10 ${compact ? 'px-2.5 py-2' : 'p-3'} flex items-center gap-2.5`}>
         <Clock3 className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-green-400 shrink-0`} />
         <div>
-          <p className="text-green-300 font-bold text-sm">Estimated ready time</p>
+          <p className="text-green-300 font-bold text-sm">{t('orders.estimated_ready_time')}</p>
           <p className="text-green-400 text-sm font-bold">{parsed.label}</p>
         </div>
       </div>
@@ -129,9 +131,9 @@ export default function ReadyTimeCountdown({
       <div className={`rounded-xl border border-amber-500/40 bg-amber-500/10 ${compact ? 'px-2.5 py-2' : 'p-3'} flex items-center gap-2.5`}>
         <AlertTriangle className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-amber-400 shrink-0`} />
         <div className="min-w-0">
-          <p className="text-amber-300 font-bold text-sm">Estimated time passed</p>
+          <p className="text-amber-300 font-bold text-sm">{t('orders.estimated_time_passed')}</p>
           <p className="text-amber-200/70 text-xs">
-            Abhi Ready confirm nahi hua. Kitchen update ka wait karein.
+            {t('orders.ready_waiting_update')}
           </p>
         </div>
       </div>
@@ -142,8 +144,14 @@ export default function ReadyTimeCountdown({
     <div className={`rounded-xl border border-green-500/30 bg-green-500/10 ${compact ? 'px-2.5 py-2' : 'p-3'} flex items-center gap-2.5`}>
       <Clock3 className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-green-400 shrink-0`} />
       <div className="min-w-0">
-        <p className="text-green-300 font-bold text-sm">Ready in {formatClock(remainingSeconds)}</p>
-        {!compact && <p className="text-green-400/70 text-xs">Expected around {dueTime}</p>}
+        <p className="text-green-300 font-bold text-sm">
+          {t('orders.ready_in').replace('{time}', formatClock(remainingSeconds))}
+        </p>
+        {!compact && (
+          <p className="text-green-400/70 text-xs">
+            {t('orders.expected_around').replace('{time}', dueTime)}
+          </p>
+        )}
       </div>
     </div>
   );

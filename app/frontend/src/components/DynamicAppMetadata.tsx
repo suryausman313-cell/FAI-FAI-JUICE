@@ -81,8 +81,8 @@ export default function DynamicAppMetadata() {
       theme_color: color,
       orientation: 'portrait',
       icons: [
-        { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-        { src: icon, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        { src: icon, sizes: '192x192', purpose: 'any maskable' },
+        { src: icon, sizes: '512x512', purpose: 'any maskable' },
       ],
     };
 
