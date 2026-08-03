@@ -11,11 +11,11 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
+from middlewares.admin_security import admin_security_middleware
 
 # MODULE_IMPORTS_START
 from services.database import initialize_database, close_database
 from services.mock_data import initialize_mock_data
-from services.auth import initialize_admin_user
 # MODULE_IMPORTS_END
 
 
@@ -69,7 +69,6 @@ async def lifespan(app: FastAPI):
     # MODULE_STARTUP_START
     await initialize_database()
     await initialize_mock_data()
-    await initialize_admin_user()
     # MODULE_STARTUP_END
 
     logger.info("=== Application startup completed successfully ===")
@@ -88,14 +87,27 @@ app = FastAPI(
 
 
 # MODULE_MIDDLEWARE_START
+default_origins = [
+    "https://fai-fai-juice.pages.dev",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+configured_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
-    allow_credentials=True,
+    allow_origins=configured_origins or default_origins,
+    allow_origin_regex=r"^https://[a-z0-9-]+\.fai-fai-juice\.pages\.dev$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+app.middleware("http")(admin_security_middleware)
 # MODULE_MIDDLEWARE_END
 
 
@@ -115,10 +127,23 @@ def include_routers_from_package(app: FastAPI, package_name: str = "routers") ->
         logger.debug("Routers package '%s' not loaded: %s", package_name, exc)
         return
 
+    disabled_legacy_routers = {
+        "routers.activity_logs",
+        "routers.admin_customer_pin",
+        "routers.aihub",
+        "routers.auth",
+        "routers.settings",
+        "routers.storage",
+        "routers.user",
+    }
+
     discovered: int = 0
     for _finder, module_name, is_pkg in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + "."):
         # Only import leaf modules; subpackages will be walked automatically
         if is_pkg:
+            continue
+        if module_name in disabled_legacy_routers:
+            logger.info("Skipped unused legacy router: %s", module_name)
             continue
         try:
             module = importlib.import_module(module_name)
