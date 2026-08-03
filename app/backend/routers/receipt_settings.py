@@ -13,6 +13,8 @@ from models.receipt_settings import Receipt_settings
 
 router = APIRouter(prefix="/api/v1/receipt-settings", tags=["receipt-settings"])
 
+MAX_LOGO_VALUE_LENGTH = 1_000_000
+
 
 class ReceiptSettingsUpdate(BaseModel):
     printer_ip: str = Field(default="192.168.70.125", min_length=3, max_length=64)
@@ -22,7 +24,7 @@ class ReceiptSettingsUpdate(BaseModel):
 
     restaurant_name: str = Field(default="Vita Napoli", max_length=200)
     show_logo: bool = False
-    logo_url: str = Field(default="", max_length=2000)
+    logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
     header_text: str = Field(default="Kitchen Order", max_length=1000)
     footer_text: str = Field(default="Thank you", max_length=1000)
 
