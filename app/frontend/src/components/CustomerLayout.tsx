@@ -1,6 +1,6 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, MessageSquare } from 'lucide-react';
+import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, UserRound } from 'lucide-react';
 import { getCartItemCount, getCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
@@ -33,7 +33,7 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
     { path: '/menu', icon: UtensilsCrossed, label: t('nav.menu') },
     { path: '/cart', icon: ShoppingCart, label: t('nav.cart'), badge: cartCount },
     { path: '/my-orders', icon: ClipboardList, label: t('nav.orders') },
-    { path: '/feedback', icon: MessageSquare, label: t('nav.feedback') },
+    { path: '/account?manage=1', activePath: '/account', icon: UserRound, label: 'Account' },
   ];
 
   return (
@@ -43,9 +43,9 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-600 to-green-700 flex items-center justify-center">
-              <span className="text-white font-bold text-sm">VN</span>
+              <span className="text-white font-bold text-sm">FF</span>
             </div>
-            <span className="text-xl font-bold text-white tracking-tight">Vita Napoli Pizza</span>
+            <span className="text-xl font-bold text-white tracking-tight">Fai Fai Juice</span>
           </Link>
           <LanguageSwitcher />
 
@@ -60,8 +60,8 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-black border-t border-red-900/30">
         <div className="max-w-7xl mx-auto flex items-center justify-around py-2">
-          {navItems.map(({ path, icon: Icon, label, badge }) => {
-            const isActive = location.pathname === path;
+          {navItems.map(({ path, activePath, icon: Icon, label, badge }) => {
+            const isActive = location.pathname === (activePath || path);
             return (
               <Link
                 key={path}
