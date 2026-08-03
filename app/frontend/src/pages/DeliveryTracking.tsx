@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Bike, MapPin, Phone, Clock, CheckCircle, Package, Navigation } from 'lucide-react';
+import { ArrowLeft, Bike, MapPin, Clock, CheckCircle, Package, Navigation } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { getAPIBaseURL } from '@/lib/config';
@@ -19,6 +19,8 @@ L.Icon.Default.mergeOptions({
 interface ETAData {
   status: string;
   eta_minutes: number | null;
+  eta_seconds?: number | null;
+  calculated_at?: string | null;
   rider_name: string | null;
   rider_phone: string | null;
   rider_lat: number | null;
@@ -38,6 +40,7 @@ export default function DeliveryTracking() {
   const [eta, setEta] = useState<ETAData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [now, setNow] = useState(Date.now());
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const riderMarkerRef = useRef<L.Marker | null>(null);
@@ -55,6 +58,11 @@ export default function DeliveryTracking() {
       updateMap(eta.rider_lat, eta.rider_lng);
     }
   }, [eta]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   async function loadETA() {
     try {
@@ -127,6 +135,10 @@ export default function DeliveryTracking() {
   }
 
   const currentStatusIndex = eta ? getStatusIndex(eta.status) : -1;
+  const etaBaseMs = eta?.calculated_at ? new Date(eta.calculated_at).getTime() : now;
+  const etaDeadlineMs = etaBaseMs + Number(eta?.eta_seconds || eta?.eta_minutes || 0) * (eta?.eta_seconds ? 1000 : 60_000);
+  const remainingEtaSeconds = Math.max(0, Math.floor((etaDeadlineMs - now) / 1000));
+  const etaClock = `${Math.floor(remainingEtaSeconds / 60)}:${String(remainingEtaSeconds % 60).padStart(2, '0')}`;
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -169,7 +181,14 @@ export default function DeliveryTracking() {
                 <div>
                   <p className="text-gray-500 text-xs uppercase tracking-wider">Estimated Arrival</p>
                   <p className="text-white text-3xl font-bold mt-1">
-                    {eta.eta_minutes ? `${eta.eta_minutes} min` : '—'}
+                    {eta.eta_seconds || eta.eta_minutes
+                      ? (remainingEtaSeconds > 0 ? etaClock : 'Arriving soon')
+                      : 'ETA updating'}
+                  </p>
+                  <p className="text-blue-400/70 text-xs mt-1">
+                    {eta.eta_seconds || eta.eta_minutes
+                      ? 'Live rider ETA'
+                      : 'Rider GPS milte hi exact time show hoga'}
                   </p>
                 </div>
                 <div className="w-16 h-16 bg-red-600/20 rounded-full flex items-center justify-center">
@@ -179,8 +198,18 @@ export default function DeliveryTracking() {
             </Card>
 
             {/* Rider Info */}
-            {eta.rider_name && (
-              <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+            {eta.rider_name && (() => {
+              let waPhone = String(eta.rider_phone || '').replace(/\D/g, '');
+              if (waPhone.startsWith('0')) waPhone = `971${waPhone.slice(1)}`;
+              if (waPhone.length <= 10 && !waPhone.startsWith('971')) waPhone = `971${waPhone}`;
+              return (
+              <a
+                href={waPhone ? `https://wa.me/${waPhone}` : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block mb-4"
+              >
+              <Card className="bg-gray-900 border-gray-800 p-4 hover:border-emerald-600/50">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-red-600 rounded-full flex items-center justify-center">
@@ -188,17 +217,15 @@ export default function DeliveryTracking() {
                     </div>
                     <div>
                       <p className="text-white font-semibold">{eta.rider_name}</p>
-                      <p className="text-gray-500 text-xs">Your delivery rider</p>
+                      <p className="text-emerald-400 text-xs">Tap to WhatsApp rider</p>
                     </div>
                   </div>
-                  {eta.rider_phone && (
-                    <a href={`tel:${eta.rider_phone}`} className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center">
-                      <Phone className="w-4 h-4 text-white" />
-                    </a>
-                  )}
+                  <div className="w-10 h-10 bg-emerald-600 rounded-full flex items-center justify-center text-white font-bold">WA</div>
                 </div>
               </Card>
-            )}
+              </a>
+              );
+            })()}
 
             {/* Map */}
             {eta.rider_lat && eta.rider_lng && (
