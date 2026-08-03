@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { client } from '@/lib/api';
+import { customerAuthApi } from '@/lib/customer-auth';
 
 /**
  * Tracks ALL visitors to the app - both guests and authenticated users.
@@ -46,17 +47,15 @@ export function useCustomerHeartbeat() {
 
       // 2. If user is authenticated, also send authenticated heartbeat
       try {
-        const res = await client.auth.me();
-        if (!res?.data || cancelled) return;
-
-        const user = res.data;
+        const user = customerAuthApi.getSavedCustomer();
+        if (!user || cancelled) return;
         await client.apiCall.invoke({
           url: '/api/v1/admin/customer-heartbeat',
           method: 'POST',
           data: {
-            customer_name: user.user_metadata?.full_name || user.name || user.email?.split('@')[0] || savedName || 'Customer',
-            customer_email: user.email || '',
-            customer_phone: user.phone || user.user_metadata?.phone || savedPhone || '',
+            customer_name: user.name || savedName || 'Customer',
+            customer_email: '',
+            customer_phone: user.phone || savedPhone || '',
           },
         });
       } catch {
