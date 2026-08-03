@@ -26,6 +26,8 @@ router = APIRouter(
     tags=["fai-fai-admin"],
 )
 
+MAX_LOGO_VALUE_LENGTH = 1_000_000
+
 
 class BrandSettingsUpdate(BaseModel):
     shop_name: str = Field(min_length=1, max_length=200)
@@ -35,11 +37,13 @@ class BrandSettingsUpdate(BaseModel):
     whatsapp: str = Field(default="971521091092", max_length=80)
     address: str = Field(default=ADDRESS, max_length=500)
 
-    logo_url: str = Field(default="", max_length=2000)
-    customer_logo_url: str = Field(default="", max_length=2000)
-    admin_logo_url: str = Field(default="", max_length=2000)
-    kitchen_logo_url: str = Field(default="", max_length=2000)
-    rider_logo_url: str = Field(default="", max_length=2000)
+    # When Cloudinary is not configured the frontend stores a compressed WebP
+    # data URL. Keep an explicit cap, but allow that safe offline fallback.
+    logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
+    customer_logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
+    admin_logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
+    kitchen_logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
+    rider_logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
 
     customer_app_name: str = Field(default="Fai Fai Juice", max_length=100)
     admin_app_name: str = Field(default="Fai Fai Admin", max_length=100)
