@@ -10,7 +10,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
-import { getAPIBaseURL } from '@/lib/config';
 
 
 type AdminOrder = Order & {
@@ -20,29 +19,13 @@ type AdminOrder = Order & {
   tip_type?: string;
 };
 
-function getSavedKitchenPin(): string {
-  return String(localStorage.getItem('kitchen_pin') || '').trim();
-}
+const API_BASE = 'https://vita-napoli-backend-usman.onrender.com';
+const KITCHEN_PIN = '1122';
 
-function saveKitchenPin(pin: string): void {
-  localStorage.setItem('kitchen_pin', pin.trim());
-}
-
-function adminHeaders(pinOverride?: string) {
-  const adminToken =
-    localStorage.getItem('fai_fai_admin_token') || '';
-  const kitchenPin = String(
-    pinOverride ?? getSavedKitchenPin(),
-  ).trim();
-
+function adminHeaders() {
   return {
     'Content-Type': 'application/json',
-    ...(kitchenPin
-      ? { 'X-Kitchen-Pin': kitchenPin }
-      : {}),
-    ...(adminToken
-      ? { Authorization: `Bearer ${adminToken}` }
-      : {}),
+    'X-Kitchen-Pin': KITCHEN_PIN,
   };
 }
 
@@ -51,44 +34,16 @@ async function adminRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
   data?: unknown,
   params?: Record<string, unknown>,
-  allowPinRetry = true,
 ): Promise<T> {
-  try {
-    const response = await axios.request<T>({
-      url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
-      method,
-      data,
-      params,
-      headers: adminHeaders(),
-      timeout: 20000,
-    });
-    return response.data;
-  } catch (error: any) {
-    const status = error?.response?.status;
-
-    if (status === 401 && allowPinRetry) {
-      const entered = window.prompt(
-        'Admin Orders ke liye wahi Kitchen PIN enter karein jo Kitchen login me use hota hai.',
-        getSavedKitchenPin(),
-      );
-      const pin = String(entered || '').trim();
-
-      if (pin) {
-        saveKitchenPin(pin);
-        const response = await axios.request<T>({
-          url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
-          method,
-          data,
-          params,
-          headers: adminHeaders(pin),
-          timeout: 20000,
-        });
-        return response.data;
-      }
-    }
-
-    throw error;
-  }
+  const response = await axios.request<T>({
+    url: `${API_BASE}${path}`,
+    method,
+    data,
+    params,
+    headers: adminHeaders(),
+    timeout: 20000,
+  });
+  return response.data;
 }
 
 function isDeliveryOrder(order: AdminOrder): boolean {
@@ -204,7 +159,7 @@ export default function AdminOrders() {
     } catch (e: any) {
       console.error('Failed to load orders:', e);
       if (e?.status === 401 || e?.response?.status === 401) {
-        toast.error('Orders load nahi hue. Kitchen PIN check karke Refresh dabayein.');
+        toast.error(e?.response?.data?.detail || 'Orders API ne PIN reject kiya.');
       } else if (showToast) {
         toast.error('Failed to refresh orders. Please try again.');
       }
@@ -320,7 +275,7 @@ export default function AdminOrders() {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
       await adminRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
         'PUT',
         { status: 'accepted', estimated_minutes: minutes },
       );
@@ -345,7 +300,7 @@ export default function AdminOrders() {
         return;
       }
       await adminRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
         'PUT',
         { status: newStatus },
       );
@@ -364,7 +319,7 @@ export default function AdminOrders() {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
       await adminRequest(
-        `/api/v1/admin/orders/${orderId}/status`,
+        `/api/v1/admin/kitchen/orders/${orderId}/status`,
         'PUT',
         { status: 'cancelled', cancel_reason: reason || '' },
       );
@@ -506,7 +461,7 @@ export default function AdminOrders() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-blue-400">FINAL V5</span></h1>
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-green-400">NEW CODE A1</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
               Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
             </p>
