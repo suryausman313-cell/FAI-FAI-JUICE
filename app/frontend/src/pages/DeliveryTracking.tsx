@@ -5,6 +5,7 @@ import { ArrowLeft, Bike, MapPin, Clock, CheckCircle, Package, Navigation } from
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { getAPIBaseURL } from '@/lib/config';
+import { useTranslation } from '@/lib/i18n';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -35,6 +36,7 @@ const STATUS_STEPS = [
 ];
 
 export default function DeliveryTracking() {
+  const { t } = useTranslation();
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const [eta, setEta] = useState<ETAData | null>(null);
@@ -188,7 +190,7 @@ export default function DeliveryTracking() {
                   <p className="text-blue-400/70 text-xs mt-1">
                     {eta.eta_seconds || eta.eta_minutes
                       ? 'Live rider ETA'
-                      : 'Rider GPS milte hi exact time show hoga'}
+                      : t('orders.eta_waiting_gps')}
                   </p>
                 </div>
                 <div className="w-16 h-16 bg-red-600/20 rounded-full flex items-center justify-center">

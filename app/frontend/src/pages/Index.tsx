@@ -131,6 +131,12 @@ export default function Index() {
   }
 
   const restaurantStatus = settings?.restaurant_status || 'open';
+  const visibleQuickActionCount = [
+    settings?.show_menu_action !== false,
+    settings?.show_deals_action !== false,
+    settings?.show_orders_action !== false,
+    settings?.show_contact_action !== false,
+  ].filter(Boolean).length;
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -149,19 +155,22 @@ export default function Index() {
           </div>
           <div className="flex items-center gap-2">
             <LanguageSwitcher />
+            {settings?.show_status_banner !== false && (
             <div className="flex items-center gap-1.5">
               <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(restaurantStatus)} animate-pulse`} />
               <span className="text-xs text-gray-300 font-medium">{getStatusText(restaurantStatus)}</span>
             </div>
+            )}
           </div>
         </div>
       </header>
 
       <div className="max-w-lg mx-auto px-4 pb-24">
         {/* Notifications - deferred loading */}
-        <NotificationBanner />
+        {settings?.show_notifications !== false && <NotificationBanner />}
 
         {/* Hero Branding */}
+        {settings?.show_branding !== false && (
         <div className="py-8 text-center">
           <h1 className="text-5xl font-black mb-1">
             <span className="text-white">{settings?.restaurant_name || 'Fai Fai Juice'}</span>
@@ -192,6 +201,7 @@ export default function Index() {
             </div>
           )}
         </div>
+        )}
 
         {/* Active Offers */}
         {settings?.show_offers !== false && offers.length > 0 && (
@@ -227,8 +237,12 @@ export default function Index() {
         )}
 
         {/* Quick Actions */}
-        {settings?.show_quick_actions !== false && (
-        <div className="grid grid-cols-4 gap-2 mb-6">
+        {settings?.show_quick_actions !== false && visibleQuickActionCount > 0 && (
+        <div
+          className="grid gap-2 mb-6"
+          style={{ gridTemplateColumns: `repeat(${visibleQuickActionCount}, minmax(0, 1fr))` }}
+        >
+          {settings?.show_menu_action !== false && (
           <Button
             onClick={() => navigate('/menu')}
             className="bg-red-600 hover:bg-red-700 text-white h-14 rounded-xl font-semibold cursor-pointer flex flex-col items-center justify-center gap-0.5"
@@ -236,6 +250,8 @@ export default function Index() {
             <ShoppingBag className="w-5 h-5" />
             <span className="text-[10px]">{t('nav.menu')}</span>
           </Button>
+          )}
+          {settings?.show_deals_action !== false && (
           <Button
             onClick={() => navigate('/deals')}
             className="bg-orange-600 hover:bg-orange-700 text-white h-14 rounded-xl font-semibold cursor-pointer flex flex-col items-center justify-center gap-0.5"
@@ -243,6 +259,8 @@ export default function Index() {
             <Package className="w-5 h-5" />
             <span className="text-[10px]">Deals</span>
           </Button>
+          )}
+          {settings?.show_orders_action !== false && (
           <Button
             onClick={() => navigate('/my-orders')}
             variant="outline"
@@ -251,6 +269,8 @@ export default function Index() {
             <Clock className="w-5 h-5" />
             <span className="text-[10px]">{t('home.my_orders')}</span>
           </Button>
+          )}
+          {settings?.show_contact_action !== false && (
           <Button
             onClick={() => navigate('/contact')}
             variant="outline"
@@ -259,6 +279,7 @@ export default function Index() {
             <Phone className="w-5 h-5" />
             <span className="text-[10px]">{t('nav.contact')}</span>
           </Button>
+          )}
         </div>
         )}
 
