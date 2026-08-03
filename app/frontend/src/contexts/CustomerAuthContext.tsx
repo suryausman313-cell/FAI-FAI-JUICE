@@ -151,6 +151,22 @@ export function CustomerAuthProvider({
 
   useEffect(() => {
     void refreshCustomer();
+
+    const handleAuthChange = () => {
+      void refreshCustomer();
+    };
+
+    window.addEventListener(
+      'customer-auth-changed',
+      handleAuthChange
+    );
+
+    return () => {
+      window.removeEventListener(
+        'customer-auth-changed',
+        handleAuthChange
+      );
+    };
   }, []);
 
   const value = useMemo(
