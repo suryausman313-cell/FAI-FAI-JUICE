@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef } from 'react';
-import axios from 'axios';
 import { Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -12,9 +11,8 @@ import { Category, MenuItem, Extra, RestaurantSettings, getItemSizes } from '@/l
 import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
-import { getAPIBaseURL } from '@/lib/config';
 
-const MENU_CACHE_KEY = 'fai_menu_cache_render_v5';
+const MENU_CACHE_KEY = 'fai_fai_menu_direct_a1';
 const MENU_CACHE_TTL = 120000; // 2 minutes
 
 interface MenuCache {
@@ -38,12 +36,98 @@ function setMenuCache(data: Omit<MenuCache, 'timestamp'>) {
   } catch { /* storage full */ }
 }
 
-const PIZZA_IMAGES: Record<string, string> = {
-  'Margherita': 'https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5jqycaiya/pizza-margherita.png',
-  'Pepperoni': 'https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5j7qcaiza/pizza-pepperoni.png',
-  'Truffle': 'https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kmicai2q/pizza-truffle.png',
-  'Chicken Calzone': 'https://mgx-backend-cdn.metadl.com/generate/images/1435502/2026-07-16/sti5kzacai2a/calzone-chicken.png',
+const API_BASE = 'https://vita-napoli-backend-usman.onrender.com';
+
+const FAI_FAI_IMAGE_MAP: Record<string, string> = {
+  "watermelon": "watermelon.webp",
+  "watermelon with cheese": "watermelon.webp",
+  "fai fai special": "fai-fai-special.webp",
+  "shining": "shining.webp",
+  "cocktail": "cocktail.webp",
+  "orange": "orange.webp",
+  "orange passion fruit": "orange-passion-fruit.webp",
+  "strawberry smoothie": "strawberry-smoothie.webp",
+  "fadeetk": "fadeetk.webp",
+  "tamer hindi": "tamer-hindi.webp",
+  "grapefruit": "grapefruit.webp",
+  "qamar al deen": "qamar-al-deen.webp",
+  "avocado": "avocado.webp",
+  "melon": "melon.webp",
+  "hibiscus": "hibiscus.webp",
+  "pomegranate": "pomegranate.webp",
+  "beetroot": "beetroot.webp",
+  "lemon mint": "lemon-mint.webp",
+  "einstein": "einstein.webp",
+  "lotus": "lotus.webp",
+  "nutella": "nutella.webp",
+  "cerelac": "cerelac.webp",
+  "strawberry milkshake": "strawberry-milkshake.webp",
+  "chocolate milkshake": "chocolate-milkshake.webp",
+  "oreo milkshake": "oreo-milkshake.webp",
+  "passion fruit mojito": "passion-fruit-mojito.webp",
+  "lemon mojito": "lemon-mojito.webp",
+  "green apple mojito": "green-apple-mojito.webp",
+  "blue mojito": "blue-mojito.webp",
+  "strawberry mojito": "strawberry-mojito.webp",
+  "acai": "acai.webp",
+  "smoothie acai": "smoothie-acai.webp",
+  "juice box": "juice-box.webp",
+  "hambana box 20 pcs": "juice-box.webp",
+  "mini juice box": "mini-juice-box.webp",
+  "hot chocolate": "hot-chocolate.webp",
+  "shorkhama": "shorkhama.webp",
+  "sahlab": "sahlab.webp",
+  "mahallabiyah": "mahallabiyah.webp",
+  "passion fruit ice cream": "passion-fruit-ice-cream.webp",
+  "vanilla ice cream": "vanilla-ice-cream.webp",
+  "coconut ice cream": "coconut-ice-cream.webp",
+  "mango ice cream": "mango-ice-cream.webp",
+  "oreo ice cream": "oreo-ice-cream.webp",
+  "caramel ice cream": "caramel-ice-cream.webp",
+  "lemon mint ice cream": "lemon-mint-ice-cream.webp",
+  "mix berry ice cream": "mix-berry-ice-cream.webp",
+  "strawberry cheesecake ice cream": "strawberry-cheesecake-ice-cream.webp"
 };
+
+function normalItemName(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getMenuItemImage(item: MenuItem): string {
+  const localFile = FAI_FAI_IMAGE_MAP[normalItemName(item.name)];
+  if (localFile) return `/menu/fai-fai-v1/${localFile}`;
+
+  const saved = String(item.image_url || '').trim();
+  if (!saved) return '/icon-customer-192.png';
+  if (saved.startsWith('http://') || saved.startsWith('https://') || saved.startsWith('/')) {
+    return saved;
+  }
+  return `/${saved.replace(/^\/+/, '')}`;
+}
+
+async function fetchEntityList<T>(
+  path: string,
+  options: { query?: Record<string, unknown>; sort?: string; limit?: number } = {},
+): Promise<T[]> {
+  const params = new URLSearchParams();
+  if (options.query) params.set('query', JSON.stringify(options.query));
+  if (options.sort) params.set('sort', options.sort);
+  params.set('limit', String(options.limit ?? 200));
+
+  const response = await fetch(`${API_BASE}${path}?${params.toString()}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`${path} failed: ${response.status}`);
+  }
+  const payload = await response.json();
+  return Array.isArray(payload?.items) ? payload.items : [];
+}
 
 export default function Menu() {
   const { t } = useTranslation();
@@ -75,53 +159,39 @@ export default function Menu() {
 
   async function loadData() {
     try {
-      const base = getAPIBaseURL().replace(/\/$/, '');
-      const activeQuery = JSON.stringify({ is_active: true });
-
-      const [catRes, itemRes, extrasRes, settingsRes] = await Promise.all([
-        axios.get(`${base}/api/v1/entities/categories`, {
-          params: { query: activeQuery, sort: 'sort_order', limit: 50 },
-          timeout: 20000,
+      const [cats, items, ext, settingsRows] = await Promise.all([
+        fetchEntityList<Category>('/api/v1/entities/categories', {
+          query: { is_active: true },
+          sort: 'sort_order',
+          limit: 50,
         }),
-        axios.get(`${base}/api/v1/entities/menu_items`, {
-          params: { query: activeQuery, sort: 'sort_order', limit: 500 },
-          timeout: 20000,
+        fetchEntityList<MenuItem>('/api/v1/entities/menu_items', {
+          query: { is_active: true },
+          sort: 'sort_order',
+          limit: 500,
         }),
-        axios.get(`${base}/api/v1/entities/extras`, {
-          params: { query: activeQuery, sort: 'id', limit: 200 },
-          timeout: 20000,
+        fetchEntityList<Extra>('/api/v1/entities/extras', {
+          query: { is_active: true },
+          limit: 100,
         }),
-        axios.get(`${base}/api/v1/entities/restaurant_settings`, {
-          params: { limit: 1 },
-          timeout: 20000,
+        fetchEntityList<RestaurantSettings>('/api/v1/entities/restaurant_settings', {
+          limit: 1,
         }),
       ]);
 
-      const cats = (catRes.data?.items || []) as Category[];
-      const items = (itemRes.data?.items || []) as MenuItem[];
-      const ext = (extrasRes.data?.items || []) as Extra[];
-      const settingsData =
-        (settingsRes.data?.items?.[0] || null) as RestaurantSettings | null;
-
-      setSettings(settingsData);
+      setSettings(settingsRows[0] || null);
       setCategories(cats);
       setMenuItems(items);
       setExtras(ext);
-
       if (cats.length > 0) {
-        setActiveCategory((current) =>
-          current && cats.some((category) => category.id === current)
-            ? current
-            : cats[0].id,
+        setActiveCategory(current =>
+          current && cats.some(cat => cat.id === current) ? current : cats[0].id
         );
-      } else {
-        setActiveCategory(null);
       }
-
       setMenuCache({ categories: cats, menuItems: items, extras: ext });
     } catch (error) {
-      console.error('Failed to load menu from Render:', error);
-      toast.error('Menu load nahi hua. Page refresh karein.');
+      console.error('Direct menu load failed:', error);
+      toast.error('Menu load nahi hua. Internet check karke Refresh karein.');
     }
   }
 
@@ -165,6 +235,7 @@ export default function Menu() {
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen">
+        <div className="sr-only">MENU DIRECT A1</div>
         {settings?.offer_text && (
           <div className="max-w-4xl mx-auto px-4 pt-4">
             <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-center text-sm font-medium text-orange-200">
@@ -206,12 +277,15 @@ export default function Menu() {
                   onClick={() => openItemDialog(item)}
                 >
                   <div className="flex gap-4 p-4">
-                    {(item.image_url || PIZZA_IMAGES[item.name]) && (
+                    {getMenuItemImage(item) && (
                       <img
-                        src={item.image_url || PIZZA_IMAGES[item.name]}
+                        src={getMenuItemImage(item)}
                         alt={item.name}
                         className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
                         loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.src = '/icon-customer-192.png';
+                        }}
                       />
                     )}
                     <div className="flex-1 min-w-0">
@@ -270,11 +344,14 @@ export default function Menu() {
             const sizes = getItemSizes(selectedItem);
             return (
               <div className="space-y-6">
-                {(selectedItem.image_url || PIZZA_IMAGES[selectedItem.name]) && (
+                {getMenuItemImage(selectedItem) && (
                   <img
-                    src={selectedItem.image_url || PIZZA_IMAGES[selectedItem.name]}
+                    src={getMenuItemImage(selectedItem)}
                     alt={selectedItem.name}
                     className="w-full h-48 object-cover rounded-xl"
+                    onError={(event) => {
+                      event.currentTarget.src = '/icon-customer-192.png';
+                    }}
                   />
                 )}
 
