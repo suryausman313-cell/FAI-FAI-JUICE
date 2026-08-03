@@ -4,106 +4,13 @@ import { ShoppingBag, Clock, Phone, MapPin, ChevronRight, Tag, MessageSquare, St
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
+import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
 import { getItemPriceBreakdown, isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
 
-const API_BASE = 'https://vita-napoli-backend-usman.onrender.com';
-
-const FAI_FAI_IMAGE_MAP: Record<string, string> = {
-  "watermelon": "watermelon.webp",
-  "watermelon with cheese": "watermelon.webp",
-  "fai fai special": "fai-fai-special.webp",
-  "shining": "shining.webp",
-  "cocktail": "cocktail.webp",
-  "orange": "orange.webp",
-  "orange passion fruit": "orange-passion-fruit.webp",
-  "strawberry smoothie": "strawberry-smoothie.webp",
-  "fadeetk": "fadeetk.webp",
-  "tamer hindi": "tamer-hindi.webp",
-  "grapefruit": "grapefruit.webp",
-  "qamar al deen": "qamar-al-deen.webp",
-  "avocado": "avocado.webp",
-  "melon": "melon.webp",
-  "hibiscus": "hibiscus.webp",
-  "pomegranate": "pomegranate.webp",
-  "beetroot": "beetroot.webp",
-  "lemon mint": "lemon-mint.webp",
-  "einstein": "einstein.webp",
-  "lotus": "lotus.webp",
-  "nutella": "nutella.webp",
-  "cerelac": "cerelac.webp",
-  "strawberry milkshake": "strawberry-milkshake.webp",
-  "chocolate milkshake": "chocolate-milkshake.webp",
-  "oreo milkshake": "oreo-milkshake.webp",
-  "passion fruit mojito": "passion-fruit-mojito.webp",
-  "lemon mojito": "lemon-mojito.webp",
-  "green apple mojito": "green-apple-mojito.webp",
-  "blue mojito": "blue-mojito.webp",
-  "strawberry mojito": "strawberry-mojito.webp",
-  "acai": "acai.webp",
-  "smoothie acai": "smoothie-acai.webp",
-  "juice box": "juice-box.webp",
-  "hambana box 20 pcs": "juice-box.webp",
-  "mini juice box": "mini-juice-box.webp",
-  "hot chocolate": "hot-chocolate.webp",
-  "shorkhama": "shorkhama.webp",
-  "sahlab": "sahlab.webp",
-  "mahallabiyah": "mahallabiyah.webp",
-  "passion fruit ice cream": "passion-fruit-ice-cream.webp",
-  "vanilla ice cream": "vanilla-ice-cream.webp",
-  "coconut ice cream": "coconut-ice-cream.webp",
-  "mango ice cream": "mango-ice-cream.webp",
-  "oreo ice cream": "oreo-ice-cream.webp",
-  "caramel ice cream": "caramel-ice-cream.webp",
-  "lemon mint ice cream": "lemon-mint-ice-cream.webp",
-  "mix berry ice cream": "mix-berry-ice-cream.webp",
-  "strawberry cheesecake ice cream": "strawberry-cheesecake-ice-cream.webp"
-};
-
-function normalItemName(value: string): string {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getMenuItemImage(item: MenuItem): string {
-  const localFile = FAI_FAI_IMAGE_MAP[normalItemName(item.name)];
-  if (localFile) return `/menu/fai-fai-v1/${localFile}`;
-
-  const saved = String(item.image_url || '').trim();
-  if (!saved) return '/icon-customer-192.png';
-  if (saved.startsWith('http://') || saved.startsWith('https://') || saved.startsWith('/')) {
-    return saved;
-  }
-  return `/${saved.replace(/^\/+/, '')}`;
-}
-
-async function fetchEntityList<T>(
-  path: string,
-  options: { query?: Record<string, unknown>; sort?: string; limit?: number } = {},
-): Promise<T[]> {
-  const params = new URLSearchParams();
-  if (options.query) params.set('query', JSON.stringify(options.query));
-  if (options.sort) params.set('sort', options.sort);
-  params.set('limit', String(options.limit ?? 200));
-
-  const response = await fetch(`${API_BASE}${path}?${params.toString()}`, {
-    cache: 'no-store',
-  });
-  if (!response.ok) {
-    throw new Error(`${path} failed: ${response.status}`);
-  }
-  const payload = await response.json();
-  return Array.isArray(payload?.items) ? payload.items : [];
-}
-
-const CACHE_KEY = 'fai_home_direct_a1';
+const CACHE_KEY = 'fai_home_cache_v6';
 const CACHE_TTL = 120000; // 2 minutes
 
 interface CachedData {
@@ -147,54 +54,31 @@ export default function Index() {
 
   const loadData = useCallback(async () => {
     try {
-      const [settingsRows, allItems, cats, allOffers, popularResponse] = await Promise.all([
-        fetchEntityList<RestaurantSettings>('/api/v1/entities/restaurant_settings', { limit: 1 }),
-        fetchEntityList<MenuItem>('/api/v1/entities/menu_items', {
-          query: { is_active: true },
-          sort: 'sort_order',
-          limit: 500,
-        }),
-        fetchEntityList<Category>('/api/v1/entities/categories', {
-          query: { is_active: true },
-          sort: 'sort_order',
-          limit: 100,
-        }),
-        fetchEntityList<Offer>('/api/v1/entities/offers', {
-          query: { is_active: true },
-          limit: 200,
-        }),
-        fetch(`${API_BASE}/api/v1/public/popular-items`, { cache: 'no-store' })
-          .then(async response => response.ok ? response.json() : { items: [] })
-          .catch(() => ({ items: [] })),
+      const [settingsRes, itemsRes, catRes, offersRes, popularRes] = await Promise.all([
+        client.entities.restaurant_settings.query({ query: {}, limit: 1 }),
+        client.entities.menu_items.query({ query: { is_active: true }, sort: 'sort_order', limit: 200 }),
+        client.entities.categories.query({ query: { is_active: true }, sort: 'sort_order', limit: 20 }),
+        client.entities.offers.query({ query: { is_active: true }, limit: 100 }),
+        client.apiCall.invoke({ url: '/api/v1/public/popular-items', method: 'GET' }).catch(() => null),
       ]);
-
-      const settingsData = settingsRows[0] || null;
-      const popularItems: MenuItem[] = Array.isArray(popularResponse?.items)
-        ? popularResponse.items
-        : [];
-      const maxPopular = Math.max(
-        2,
-        Math.min(12, Number((settingsData as any)?.popular_max_items || 6)),
-      );
-      const items = (popularItems.length > 0 ? popularItems : allItems).slice(0, maxPopular);
-      const offersList = allOffers.filter((offer: Offer) =>
-        isPromoOfferCurrentlyActive(offer)
-      );
+      const settingsData = settingsRes?.data?.items?.[0] || null;
+      const allItems = itemsRes?.data?.items || [];
+      const popularItems = popularRes?.data?.items || [];
+      const maxPopular = Math.max(2, Math.min(12, Number((settingsData as any)?.popular_max_items || 6)));
+      const items = popularItems.length > 0 ? popularItems.slice(0, maxPopular) : allItems.slice(0, maxPopular);
+      const cats = catRes?.data?.items || [];
+      const offersList = (offersRes?.data?.items || []).filter((offer: Offer) => isPromoOfferCurrentlyActive(offer));
 
       setSettings(settingsData);
       setFeaturedItems(items);
       setCategories(cats);
       setOffers(offersList);
-      setCachedData({
-        settings: settingsData,
-        featuredItems: items,
-        categories: cats,
-        offers: offersList,
-      });
 
-      if (settingsData) checkAutoSchedule(settingsData);
-    } catch (error) {
-      console.error('Direct home load failed:', error);
+      // Cache for next visit
+      setCachedData({ settings: settingsData, featuredItems: items, categories: cats, offers: offersList });
+
+    } catch (e) {
+      console.error('Failed to load data:', e);
     } finally {
       setLoading(false);
     }
@@ -213,49 +97,6 @@ export default function Index() {
       loadData();
     }
   }, [loadData]);
-
-  function checkAutoSchedule(currentSettings: RestaurantSettings | undefined) {
-    const ext = localStorage.getItem('extended_settings');
-    if (!ext || !currentSettings) return;
-    try {
-      const parsed = JSON.parse(ext);
-      if (!parsed.auto_schedule_enabled) return;
-
-      const now = new Date();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-      const [openH, openM] = (parsed.auto_open_time || '15:00').split(':').map(Number);
-      const [closeH, closeM] = (parsed.auto_close_time || '02:00').split(':').map(Number);
-      const openMinutes = openH * 60 + openM;
-      const closeMinutes = closeH * 60 + closeM;
-
-      let shouldBeOpen: boolean;
-      if (closeMinutes < openMinutes) {
-        shouldBeOpen = currentMinutes >= openMinutes || currentMinutes < closeMinutes;
-      } else {
-        shouldBeOpen = currentMinutes >= openMinutes && currentMinutes < closeMinutes;
-      }
-
-      const currentStatus = currentSettings.restaurant_status;
-      const desiredStatus = shouldBeOpen ? 'open' : 'closed';
-
-      if (currentStatus !== 'busy' && currentStatus !== desiredStatus) {
-        fetch(`${API_BASE}/api/v1/entities/restaurant_settings/${currentSettings.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ restaurant_status: desiredStatus }),
-        })
-          .then(response => {
-            if (response.ok) {
-              setSettings(prev =>
-                prev ? { ...prev, restaurant_status: desiredStatus } : prev
-              );
-            }
-          })
-          .catch(() => { /* ignore */ });
-      }
-    } catch { /* ignore */ }
-  }
 
   function getStatusColor(status: string) {
     switch (status) {
@@ -443,15 +284,13 @@ export default function Index() {
                   onClick={() => navigate('/menu')}
                 >
                   <div className="relative">
-                    <img
-                      src={getMenuItemImage(item)}
-                      alt={item.name}
-                      className="w-full h-28 object-cover"
-                      loading="lazy"
-                      onError={(event) => {
-                        event.currentTarget.src = '/icon-customer-192.png';
-                      }}
-                    />
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={item.name} className="w-full h-28 object-cover" loading="lazy" />
+                    ) : (
+                      <div className="w-full h-28 bg-gray-800 flex items-center justify-center">
+                        <span className="text-3xl">🍕</span>
+                      </div>
+                    )}
                     {lowestBreakdown.discountActive && item.is_active && (
                       <Badge className="absolute top-2 left-2 bg-green-600 text-white text-[10px]">
                         {lowestBreakdown.discountLabel}

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   ArrowLeft,
@@ -46,9 +46,9 @@ const DEVICE_PHONE_KEY = 'vita_customer_registered_phone';
 const TOKEN_KEY = 'vita_customer_token';
 const CUSTOMER_KEY = 'vita_customer';
 
-const RESTAURANT_PHONE_DISPLAY = '+971 54 294 0112';
-const RESTAURANT_PHONE_TEL = '+971542940112';
-const RESTAURANT_WHATSAPP = '971542940112';
+const RESTAURANT_PHONE_DISPLAY = '+971 52 109 1092';
+const RESTAURANT_PHONE_TEL = '+971521091092';
+const RESTAURANT_WHATSAPP = '971521091092';
 
 function normalizePhone(value: string): string {
   const raw = value.trim();
@@ -208,12 +208,16 @@ function PinInput({
 
 export default function CustomerAuth() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const manageMode = searchParams.get('manage') === '1';
   const rememberedPhone = useMemo(getRememberedPhone, []);
 
   const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(
     hasKnownAccountOnDevice,
   );
-  const [mode, setMode] = useState<ScreenMode>('login');
+  const [mode, setMode] = useState<ScreenMode>(() =>
+    hasKnownAccountOnDevice() ? 'login' : 'signup',
+  );
   const [loading, setLoading] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(
     Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
@@ -284,14 +288,19 @@ export default function CustomerAuth() {
   // Customer already logged in ho to /account screen par na roko.
   // Installed app agar purane /account start URL se khule tab bhi seedha Home khulega.
   useEffect(() => {
-    if (!sessionChecking && activeCustomer && mode !== 'changePin') {
+    if (
+      !manageMode &&
+      !sessionChecking &&
+      activeCustomer &&
+      mode !== 'changePin'
+    ) {
       const timer = window.setTimeout(() => {
         window.location.replace('/');
       }, 50);
 
       return () => window.clearTimeout(timer);
     }
-  }, [sessionChecking, activeCustomer, mode]);
+  }, [manageMode, sessionChecking, activeCustomer, mode]);
 
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
@@ -466,7 +475,7 @@ export default function CustomerAuth() {
   function openWhatsApp() {
     const phone = normalizePhone(loginPhone);
     const message = encodeURIComponent(
-      `Hello Vita Napoli, I forgot my customer PIN. My registered mobile number is ${
+      `Hello Fai Fai Juice, I forgot my customer PIN. My registered mobile number is ${
         isValidPhone(phone) ? phone : '________'
       }. Please help me reset it.`,
     );
@@ -480,13 +489,18 @@ export default function CustomerAuth() {
 
   // A valid saved session must go straight to the Customer Home.
   // Show only a tiny redirect loader so the old "Account logged in" card never flashes.
-  if (!sessionChecking && activeCustomer && mode !== 'changePin') {
+  if (
+    !manageMode &&
+    !sessionChecking &&
+    activeCustomer &&
+    mode !== 'changePin'
+  ) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center text-white">
         <div className="text-center">
           <div className="text-3xl font-black">
-            <span className="text-white">Vita</span>{' '}
-            <span className="text-red-600">Napoli</span>
+            <span className="text-white">Fai Fai</span>{' '}
+            <span className="text-red-600">Juice</span>
           </div>
           <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-4" />
         </div>
@@ -515,7 +529,7 @@ export default function CustomerAuth() {
 
         <div className="mb-8 text-center">
           <h1 className="text-4xl font-extrabold">
-            Vita <span className="text-red-600">Napoli</span>
+            Fai Fai <span className="text-red-600">Juice</span>
           </h1>
           <p className="mt-2 text-gray-500">Customer Account</p>
         </div>
@@ -665,8 +679,10 @@ export default function CustomerAuth() {
                 type="button"
                 onClick={() => {
                   localStorage.removeItem(DEVICE_ACCOUNT_KEY);
+                  localStorage.removeItem(DEVICE_PHONE_KEY);
+                  localStorage.removeItem('vita_customer_phone');
                   setRegisteredOnThisDevice(false);
-                  setSignupPhone(loginPhone);
+                  setSignupPhone('+971');
                   setMode('signup');
                 }}
                 className="w-full text-xs text-gray-600 hover:text-gray-400"
@@ -747,7 +763,7 @@ export default function CustomerAuth() {
             <div>
               <h2 className="text-xl font-bold">Forgot PIN</h2>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                OTP has been removed. For security, contact Vita Napoli and ask the shop to reset your PIN.
+                OTP has been removed. For security, contact Fai Fai Juice and ask the shop to reset your PIN.
               </p>
             </div>
 

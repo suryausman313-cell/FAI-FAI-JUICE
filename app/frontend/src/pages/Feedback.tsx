@@ -8,12 +8,19 @@ import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client, Order } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
+import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
+import { getGuestSessionId } from '@/lib/guest-session';
 
 export default function Feedback() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const orderId = searchParams.get('order');
+  const {
+    customer,
+    isLoggedIn,
+    loading: checkingAuth,
+  } = useCustomerAuth();
   
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
@@ -21,38 +28,26 @@ export default function Feedback() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userName, setUserName] = useState('');
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
+  const userName = customer?.name || 'Customer';
 
   useEffect(() => {
-    checkAuthAndLoad();
-  }, []);
-
-  async function checkAuthAndLoad() {
-    try {
-      const res = await client.auth.me();
-      if (res?.data) {
-        setIsLoggedIn(true);
-        setUserName(res.data.name || res.data.email || 'Customer');
-        if (orderId) {
-          await loadOrder(parseInt(orderId));
-          await checkExistingFeedback(parseInt(orderId));
-        }
+    if (!checkingAuth && isLoggedIn && orderId) {
+      const id = Number.parseInt(orderId, 10);
+      if (Number.isFinite(id)) {
+        void Promise.all([
+          loadOrder(id),
+          checkExistingFeedback(id),
+        ]);
       }
-    } catch {
-      setIsLoggedIn(false);
-    } finally {
-      setCheckingAuth(false);
     }
-  }
+  }, [checkingAuth, isLoggedIn, orderId]);
 
   async function loadOrder(id: number) {
     try {
       // Load from my-orders API and find the specific order
       const res = await client.apiCall.invoke({
-        url: '/api/v1/orders/my-orders',
+        url: `/api/v1/orders/my-orders?session_id=${encodeURIComponent(getGuestSessionId())}`,
         method: 'GET',
       });
       const orders = res?.data?.items || [];
@@ -88,7 +83,7 @@ export default function Feedback() {
     }
     if (!isLoggedIn) {
       toast.error('Please login to submit feedback');
-      client.auth.toLogin();
+      navigate('/account');
       return;
     }
     if (!orderId) {
@@ -197,7 +192,7 @@ export default function Feedback() {
         {!isLoggedIn && (
           <div className="mb-6 p-4 rounded-xl bg-red-600/10 border border-red-600/30">
             <p className="text-red-400 text-sm mb-3">Please login to submit feedback</p>
-            <Button onClick={() => client.auth.toLogin()} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
+            <Button onClick={() => navigate('/account')} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
               Login / Sign Up
             </Button>
           </div>

@@ -15,6 +15,7 @@ import { useTranslation } from '@/lib/i18n';
 import { isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { getGuestSessionId } from '@/lib/guest-session';
 import { getAPIBaseURL } from '@/lib/config';
+import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -29,6 +30,7 @@ L.Icon.Default.mergeOptions({
 export default function Checkout() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { isLoggedIn } = useCustomerAuth();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(false);
   const submittingRef = useRef(false); // Guard against double-submit
@@ -40,8 +42,6 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
-  const [authChecked, setAuthChecked] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Field-level validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -110,7 +110,6 @@ export default function Checkout() {
 
   useEffect(() => {
     setCart(getCart());
-    checkAuth();
     loadDeliverySettings();
     loadActivePromoOffers();
   }, []);
@@ -294,19 +293,6 @@ export default function Checkout() {
     return R * c;
   }
 
-  async function checkAuth() {
-    try {
-      const res = await client.auth.me();
-      if (res?.data) {
-        setIsLoggedIn(true);
-      }
-    } catch {
-      setIsLoggedIn(false);
-    } finally {
-      setAuthChecked(true);
-    }
-  }
-
   async function loadDeliverySettings() {
     try {
       // Fetch from backend entity (accessible to all users)
@@ -459,7 +445,13 @@ export default function Checkout() {
         try {
           const ordersRes = await axios.get(
             `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/orders/my-orders`,
-            { params: { session_id: getGuestSessionId() }, timeout: 15000 },
+            {
+              params: { session_id: getGuestSessionId() },
+              headers: {
+                Authorization: `Bearer ${localStorage.getItem('vita_customer_token') || ''}`,
+              },
+              timeout: 15000,
+            },
           );
           previousOrders = ordersRes?.data?.items || [];
         } catch {
@@ -719,7 +711,7 @@ export default function Checkout() {
 
       // Handle auth redirect
       if (validationErrors.auth) {
-        client.auth.toLogin();
+        navigate('/account');
       }
       return;
     }
@@ -794,7 +786,12 @@ export default function Checkout() {
           customer_lng: orderType === 'delivery' ? customerLng : null,
           customer_address: orderType === 'delivery' ? deliveryAddress.trim() : '',
         },
-        { timeout: 30000 },
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('vita_customer_token') || ''}`,
+          },
+          timeout: 30000,
+        },
       );
 
       const orderId = response?.data?.order_id;
@@ -817,16 +814,6 @@ export default function Checkout() {
     }
   }
 
-  if (!authChecked) {
-    return (
-      <CustomerLayout>
-        <div className="bg-black min-h-screen flex items-center justify-center">
-          <div className="text-gray-400">Loading...</div>
-        </div>
-      </CustomerLayout>
-    );
-  }
-
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-6 max-w-lg mx-auto">
@@ -836,7 +823,7 @@ export default function Checkout() {
           <div id="auth-section" className="mb-6 p-4 rounded-xl bg-red-600/10 border border-red-600/30">
             <p className="text-red-400 text-sm mb-3">Please login to place your order</p>
             <Button
-              onClick={() => client.auth.toLogin()}
+              onClick={() => navigate('/account')}
               className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
             >
               Login / Sign Up
