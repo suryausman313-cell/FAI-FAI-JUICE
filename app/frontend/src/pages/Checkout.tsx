@@ -918,7 +918,7 @@ export default function Checkout() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Order Type Selection */}
-          {deliveryAvailableNow && (
+          {deliveryEnabled && (
             <div>
               <Label className="text-gray-300 mb-3 block">{t('checkout.order_type')}</Label>
               <div className="grid grid-cols-2 gap-3">
@@ -937,16 +937,29 @@ export default function Checkout() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setOrderType('delivery'); setShowMap(true); }}
-                  className={`p-4 rounded-xl border-2 transition-all cursor-pointer flex flex-col items-center gap-2 ${
+                  disabled={!deliveryAvailableNow}
+                  onClick={() => {
+                    if (!deliveryAvailableNow) return;
+                    setOrderType('delivery');
+                    setShowMap(true);
+                  }}
+                  className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
+                    !deliveryAvailableNow
+                      ? 'border-gray-800 bg-gray-900/60 opacity-60 cursor-not-allowed'
+                      : 'cursor-pointer ' + (
                     orderType === 'delivery'
                       ? 'border-red-600 bg-red-600/10'
                       : 'border-gray-700 bg-gray-900 hover:border-gray-500'
+                      )
                   }`}
                 >
                   <MapPin className={`w-6 h-6 ${orderType === 'delivery' ? 'text-red-400' : 'text-gray-400'}`} />
                   <span className={`font-medium ${orderType === 'delivery' ? 'text-white' : 'text-gray-400'}`}>{t('checkout.delivery')}</span>
-                  <span className="text-gray-500 text-xs">To your location</span>
+                  <span className="text-gray-500 text-xs">
+                    {deliveryAvailableNow
+                      ? 'To your location'
+                      : `Opens ${formatScheduleTime(deliveryStartTime)}`}
+                  </span>
                 </button>
               </div>
             </div>
