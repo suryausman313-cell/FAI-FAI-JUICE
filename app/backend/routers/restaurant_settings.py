@@ -29,6 +29,9 @@ class Restaurant_settingsData(BaseModel):
     busy_message: str = None
     estimated_wait_time: str = None
     delivery_enabled: bool = None
+    delivery_schedule_enabled: bool = None
+    delivery_start_time: str = None
+    delivery_end_time: str = None
     delivery_charges: str = None
     estimated_delivery_time: str = None
     restaurant_lat: str = None
@@ -92,6 +95,9 @@ class Restaurant_settingsUpdateData(BaseModel):
     busy_message: Optional[str] = None
     estimated_wait_time: Optional[str] = None
     delivery_enabled: Optional[bool] = None
+    delivery_schedule_enabled: Optional[bool] = None
+    delivery_start_time: Optional[str] = None
+    delivery_end_time: Optional[str] = None
     delivery_charges: Optional[str] = None
     estimated_delivery_time: Optional[str] = None
     restaurant_lat: Optional[str] = None
@@ -156,6 +162,9 @@ class Restaurant_settingsResponse(BaseModel):
     busy_message: Optional[str] = None
     estimated_wait_time: Optional[str] = None
     delivery_enabled: Optional[bool] = None
+    delivery_schedule_enabled: Optional[bool] = None
+    delivery_start_time: Optional[str] = None
+    delivery_end_time: Optional[str] = None
     delivery_charges: Optional[str] = None
     estimated_delivery_time: Optional[str] = None
     restaurant_lat: Optional[str] = None
