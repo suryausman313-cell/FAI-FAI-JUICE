@@ -42,6 +42,9 @@ export default function AdminDeliverySettings() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     delivery_enabled: local.delivery_enabled,
+    delivery_schedule_enabled: local.delivery_schedule_enabled,
+    delivery_start_time: local.delivery_start_time,
+    delivery_end_time: local.delivery_end_time,
     estimated_delivery_time: local.estimated_delivery_time,
     restaurant_lat: local.restaurant_lat,
     restaurant_lng: local.restaurant_lng,
@@ -59,6 +62,12 @@ export default function AdminDeliverySettings() {
       setSettingsId(Number(settings.id));
       setForm({
         delivery_enabled: settings.delivery_enabled === true,
+        delivery_schedule_enabled:
+          settings.delivery_schedule_enabled === true,
+        delivery_start_time:
+          settings.delivery_start_time || local.delivery_start_time,
+        delivery_end_time:
+          settings.delivery_end_time || local.delivery_end_time,
         estimated_delivery_time:
           settings.estimated_delivery_time ||
           local.estimated_delivery_time,
@@ -147,7 +156,7 @@ export default function AdminDeliverySettings() {
           </div>
 
           {form.delivery_enabled && (
-            <div className="mt-5">
+            <div className="mt-5 space-y-5">
               <Label className="text-gray-300">
                 Estimated Delivery Time
               </Label>
@@ -162,6 +171,61 @@ export default function AdminDeliverySettings() {
                 placeholder="30-45 min"
                 className="bg-gray-800 border-gray-700 text-white mt-1 max-w-sm"
               />
+
+              <div className="border-t border-gray-800 pt-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <Label className="text-gray-200">
+                      Delivery Hours Schedule
+                    </Label>
+                    <p className="text-gray-500 text-xs mt-1">
+                      Outside these hours Checkout will offer Pickup only.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={form.delivery_schedule_enabled}
+                    onCheckedChange={checked =>
+                      setForm({
+                        ...form,
+                        delivery_schedule_enabled: checked,
+                      })
+                    }
+                  />
+                </div>
+
+                {form.delivery_schedule_enabled && (
+                  <div className="grid grid-cols-2 gap-4 mt-4 max-w-md">
+                    <div>
+                      <Label className="text-gray-300">Start Time</Label>
+                      <Input
+                        type="time"
+                        value={form.delivery_start_time}
+                        onChange={event =>
+                          setForm({
+                            ...form,
+                            delivery_start_time: event.target.value,
+                          })
+                        }
+                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-gray-300">End Time</Label>
+                      <Input
+                        type="time"
+                        value={form.delivery_end_time}
+                        onChange={event =>
+                          setForm({
+                            ...form,
+                            delivery_end_time: event.target.value,
+                          })
+                        }
+                        className="bg-gray-800 border-gray-700 text-white mt-1"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </Card>
