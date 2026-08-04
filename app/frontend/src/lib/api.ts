@@ -56,7 +56,7 @@ function restoreMenuImages(payload: any) {
   return payload;
 }
 
-async function backendRequest(
+export async function backendRequest(
   path: string,
   method = 'GET',
   data?: unknown,
