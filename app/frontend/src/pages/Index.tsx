@@ -64,8 +64,30 @@ export default function Index() {
       const settingsData = settingsRes?.data?.items?.[0] || null;
       const allItems = itemsRes?.data?.items || [];
       const popularItems = popularRes?.data?.items || [];
+      // The public popular-items endpoint can contain an empty/old image URL.
+      // Reuse the matching menu item's current image so the Home cards never
+      // lose a picture after Admin toggles an item as popular.
+      const menuItemById = new Map(
+        allItems.map((item: MenuItem) => [String(item.id), item]),
+      );
+      const menuItemByName = new Map(
+        allItems.map((item: MenuItem) => [String(item.name || '').trim().toLowerCase(), item]),
+      );
+      const popularItemsWithImages = popularItems.map((item: MenuItem) => {
+        const matchingMenuItem = menuItemById.get(String(item.id))
+          || menuItemByName.get(String(item.name || '').trim().toLowerCase());
+        const currentImage = String(item.image_url || '').trim();
+        const imageIsUsable = currentImage !== '' && currentImage !== '[object Object]';
+        return {
+          ...matchingMenuItem,
+          ...item,
+          image_url: imageIsUsable ? currentImage : (matchingMenuItem?.image_url || ''),
+        };
+      });
       const maxPopular = Math.max(2, Math.min(12, Number((settingsData as any)?.popular_max_items || 6)));
-      const items = popularItems.length > 0 ? popularItems.slice(0, maxPopular) : allItems.slice(0, maxPopular);
+      const items = popularItemsWithImages.length > 0
+        ? popularItemsWithImages.slice(0, maxPopular)
+        : allItems.slice(0, maxPopular);
       const cats = catRes?.data?.items || [];
       const offersList = (offersRes?.data?.items || []).filter((offer: Offer) => isPromoOfferCurrentlyActive(offer));
 
