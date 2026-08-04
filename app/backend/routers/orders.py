@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, or_
 from typing import Optional
 
 from core.database import get_db
@@ -632,12 +632,21 @@ async def get_my_orders(
         owner_ids = [f"customer:{customer_payload.get('sub', '')}"]
         if session_id:
             owner_ids.append(get_guest_user_id(session_id))
+        # Older deployments stored some orders against a previous account/session
+        # identifier. The phone comes from the verified JWT (never from the query),
+        # so it is safe to use it to recover those orders for the same customer.
+        account_phone = normalize_phone(str(customer_payload.get("phone") or ""))
+        ownership_filters = [Orders.user_id.in_(owner_ids)]
+        if account_phone:
+            ownership_filters.append(Orders.customer_phone == account_phone)
+            # Also support legacy rows that kept spaces or a local UAE prefix.
+            ownership_filters.append(Orders.customer_phone.ilike(f"%{account_phone[-9:]}"))
         from models.delivery_assignments import Delivery_assignments
         from models.riders import Riders
 
         result = await db.execute(
             select(Orders)
-            .where(Orders.user_id.in_(owner_ids))
+            .where(or_(*ownership_filters))
             .order_by(desc(Orders.created_at))
             .limit(50)
         )
