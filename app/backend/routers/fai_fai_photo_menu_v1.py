@@ -25,7 +25,7 @@ router = APIRouter(
 )
 
 
-CATEGORY_ORDER = ['Fresh Juices', 'Milkshakes', 'Mojitos', 'Acai & Boxes', 'Winter Vibes', 'Ice Cream']
+CATEGORY_ORDER = ['Fresh Juices', 'Milkshakes', 'Mojitos', 'Acai & Boxes', 'Desserts', 'Winter Vibes', 'Ice Cream']
 
 MENU_CATALOG = [{'category': 'Fresh Juices',
   'name': 'Watermelon',
@@ -302,7 +302,55 @@ MENU_CATALOG = [{'category': 'Fresh Juices',
   'description': 'Strawberry cheesecake ice cream.',
   'sizes': [{'name': '1 Scoop', 'price': 10.0}, {'name': '2 Scoops', 'price': 17.0}],
   'image_url': '/menu/fai-fai-v1/strawberry-cheesecake-ice-cream.webp',
-  'is_popular': True}]
+  'is_popular': True},
+ {'category': 'Milkshakes',
+  'name': 'Kinder Milkshake',
+  'description': 'Creamy Kinder milkshake. Regular size.',
+  'sizes': [{'name': 'Regular', 'price': 15.0}],
+  'image_url': '/menu/fai-fai-v1/kinder-milkshake.jpg',
+  'is_popular': True},
+ {'category': 'Desserts',
+  'name': 'Mix Fruit',
+  'description': 'Fresh mixed fruit dessert. Available in Small, Medium and Large.',
+  'sizes': [{'name': 'Small', 'price': 15.0}, {'name': 'Medium', 'price': 20.0}, {'name': 'Large', 'price': 25.0}],
+  'image_url': '/menu/fai-fai-v1/mix-fruit.jpg',
+  'is_popular': True},
+ {'category': 'Desserts',
+  'name': 'Hambana',
+  'description': 'Fai Fai Hambana dessert. Sizes can be edited later in Admin Menu.',
+  'sizes': [{'name': 'Small', 'price': 15.0}, {'name': 'Medium', 'price': 20.0}, {'name': 'Large', 'price': 25.0}, {'name': 'Box', 'price': 167.0}],
+  'image_url': '/menu/fai-fai-v1/hambana.jpg',
+  'is_popular': True},
+ {'category': 'Desserts',
+  'name': 'Pancake',
+  'description': 'Choose Kinder, Pistachio, Nutella or Lotus.',
+  'sizes': [{'name': 'Kinder', 'price': 15.0}, {'name': 'Pistachio', 'price': 15.0}, {'name': 'Nutella', 'price': 15.0}, {'name': 'Lotus', 'price': 15.0}],
+  'image_url': '/menu/fai-fai-v1/pancake.png',
+  'is_popular': True},
+ {'category': 'Desserts',
+  'name': 'Mini Pancakes',
+  'description': 'Choose Kinder, Pistachio, Nutella or Lotus.',
+  'sizes': [{'name': 'Kinder', 'price': 13.0}, {'name': 'Pistachio', 'price': 13.0}, {'name': 'Nutella', 'price': 13.0}, {'name': 'Lotus', 'price': 13.0}],
+  'image_url': '/menu/fai-fai-v1/mini-pancakes.png',
+  'is_popular': False},
+ {'category': 'Desserts',
+  'name': 'Mango Tella',
+  'description': 'Mango dessert with chocolate.',
+  'sizes': [{'name': 'Regular', 'price': 15.0}],
+  'image_url': '/menu/fai-fai-v1/mango-tella.jpeg',
+  'is_popular': False},
+ {'category': 'Desserts',
+  'name': 'Falodah',
+  'description': 'Traditional Falodah dessert.',
+  'sizes': [{'name': 'Regular', 'price': 12.0}],
+  'image_url': '/menu/fai-fai-v1/falodah.jpg',
+  'is_popular': False},
+ {'category': 'Ice Cream',
+  'name': 'Ice Cream Cones',
+  'description': 'Choose Caramel, Lemon Mint, Mix Berry or Strawberry Cheesecake.',
+  'sizes': [{'name': '1 Scoop', 'price': 11.0}, {'name': '2 Scoops', 'price': 18.0}],
+  'image_url': '/menu/fai-fai-v1/ice-cream-cones.jpg',
+  'is_popular': False}]
 
 IMAGE_PREFIX = "/menu/fai-fai-v1/"
 
@@ -449,7 +497,7 @@ async def _ensure_menu_items_schema(db: AsyncSession) -> list[str]:
 async def health():
     return {
         "success": True,
-        "version": "photo-menu-image-fix-v3",
+        "version": "minidine-complete-menu-v4",
         "categories": len(CATEGORY_ORDER),
         "items": len(MENU_CATALOG),
         "automatic_startup_import": False,
@@ -543,7 +591,7 @@ async def fix_photo_menu_images(
 
     return {
         "success": True,
-        "version": "photo-menu-image-fix-v3",
+        "version": "minidine-complete-menu-v4",
         "message": "All available Fai Fai menu photo URLs were repaired.",
         "schema_checked": schema_columns,
         "updated_rows": updated,
