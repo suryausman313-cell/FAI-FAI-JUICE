@@ -76,7 +76,14 @@ export async function backendRequest(
 
   const adminToken = localStorage.getItem('fai_fai_admin_token') || '';
   const customerToken = localStorage.getItem('vita_customer_token') || '';
-  const bearerToken = path === '/api/v1/admin/customer-heartbeat'
+  // A shop owner may use Admin and Customer screens in the same browser.
+  // Customer-only endpoints must never receive the saved Admin token.
+  const isCustomerEndpoint =
+    path.startsWith('/api/v1/orders/') ||
+    path.startsWith('/api/v1/customer-push/') ||
+    path.startsWith('/api/v1/customer-auth/') ||
+    path === '/api/v1/admin/customer-heartbeat';
+  const bearerToken = isCustomerEndpoint
     ? customerToken
     : adminToken || customerToken;
 
