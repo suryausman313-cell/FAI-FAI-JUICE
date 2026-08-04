@@ -244,6 +244,9 @@ export interface RestaurantSettings {
   busy_message: string;
   estimated_wait_time: string;
   delivery_enabled: boolean;
+  delivery_schedule_enabled?: boolean;
+  delivery_start_time?: string;
+  delivery_end_time?: string;
   delivery_charges: string;
   estimated_delivery_time: string;
   restaurant_lat: string;

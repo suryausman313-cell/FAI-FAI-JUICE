@@ -2,6 +2,9 @@ import { client } from '@/lib/api';
 
 export interface ExtendedSettings {
   delivery_enabled: boolean;
+  delivery_schedule_enabled: boolean;
+  delivery_start_time: string;
+  delivery_end_time: string;
   delivery_charges: string;
   estimated_delivery_time: string;
   tax_percent: string;
@@ -61,6 +64,9 @@ export interface ExtendedSettings {
 
 export const DEFAULT_EXTENDED_SETTINGS: ExtendedSettings = {
   delivery_enabled: false,
+  delivery_schedule_enabled: false,
+  delivery_start_time: '16:00',
+  delivery_end_time: '01:00',
   delivery_charges: '5',
   estimated_delivery_time: '30-45 min',
   tax_percent: '5',
