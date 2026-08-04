@@ -48,6 +48,7 @@ class Restaurant_settings(Base):
     order_expire_timeout_minutes = Column(Integer, nullable=True)
     checkout_flow = Column(String, nullable=True, default='two_step', server_default='two_step')
     tax_percent = Column(Float, nullable=True, default=0, server_default='0')
+    vat_included = Column(Boolean, nullable=True, default=False, server_default='false')
     banner_text = Column(String, nullable=True, default='', server_default='')
     offer_text = Column(String, nullable=True, default='', server_default='')
 
