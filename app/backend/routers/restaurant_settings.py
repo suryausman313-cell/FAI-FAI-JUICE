@@ -60,6 +60,7 @@ class Restaurant_settingsData(BaseModel):
     order_expire_timeout_minutes: int = None
     checkout_flow: str = None
     tax_percent: float = None
+    vat_included: bool = None
     banner_text: str = None
     offer_text: str = None
     show_branding: bool = None
@@ -122,6 +123,7 @@ class Restaurant_settingsUpdateData(BaseModel):
     order_expire_timeout_minutes: Optional[int] = None
     checkout_flow: Optional[str] = None
     tax_percent: Optional[float] = None
+    vat_included: Optional[bool] = None
     banner_text: Optional[str] = None
     offer_text: Optional[str] = None
     show_branding: Optional[bool] = None
@@ -185,6 +187,7 @@ class Restaurant_settingsResponse(BaseModel):
     order_expire_timeout_minutes: Optional[int] = None
     checkout_flow: Optional[str] = None
     tax_percent: Optional[float] = None
+    vat_included: Optional[bool] = None
     banner_text: Optional[str] = None
     offer_text: Optional[str] = None
     show_branding: Optional[bool] = None
