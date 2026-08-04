@@ -36,24 +36,25 @@ export default function DynamicAppMetadata() {
       color: keyof BrandSettings;
       fallbackName: string;
       fallbackIcon: string;
+      manifest: string;
       startUrl: string;
       scope: string;
     }> = {
       customer: {
         name: 'customer_app_name', icon: 'customer_logo_url', color: 'primary_color',
-        fallbackName: 'Fai Fai Juice', fallbackIcon: '/icon-customer-512.png', startUrl: '/', scope: '/',
+        fallbackName: 'Fai Fai Juice', fallbackIcon: '/icon-customer-512.png', manifest: '/manifest.json?v=20260804-role-icons-2', startUrl: '/', scope: '/',
       },
       admin: {
         name: 'admin_app_name', icon: 'admin_logo_url', color: 'admin_color',
-        fallbackName: 'Fai Fai Admin', fallbackIcon: '/icon-admin-512.png', startUrl: '/admin/dashboard', scope: '/admin',
+        fallbackName: 'Fai Fai Admin', fallbackIcon: '/icon-admin-512.png?v=20260804-role-icons-2', manifest: '/manifest-admin.json?v=20260804-role-icons-2', startUrl: '/admin/dashboard', scope: '/admin',
       },
       kitchen: {
         name: 'kitchen_app_name', icon: 'kitchen_logo_url', color: 'kitchen_color',
-        fallbackName: 'Fai Fai Kitchen', fallbackIcon: '/icon-kitchen-512.png', startUrl: '/kitchen', scope: '/kitchen',
+        fallbackName: 'Fai Fai Kitchen', fallbackIcon: '/icon-kitchen-512.png?v=20260804-role-icons-2', manifest: '/manifest-kitchen.json?v=20260804-role-icons-2', startUrl: '/kitchen', scope: '/kitchen',
       },
       rider: {
         name: 'rider_app_name', icon: 'rider_logo_url', color: 'rider_color',
-        fallbackName: 'Fai Fai Rider', fallbackIcon: '/icon-rider-512.png', startUrl: '/rider', scope: '/rider',
+        fallbackName: 'Fai Fai Rider', fallbackIcon: '/icon-rider-512.png?v=20260804-role-icons-2', manifest: '/manifest-rider.json?v=20260804-role-icons-2', startUrl: '/rider', scope: '/rider',
       },
     };
 
@@ -61,38 +62,17 @@ export default function DynamicAppMetadata() {
     const name = String(settings[selected.name] || selected.fallbackName);
     const icon = String(settings[selected.icon] || settings.logo_url || selected.fallbackIcon);
     const color = String(settings[selected.color] || '#111827');
-    const shortName = String(settings.short_name || name).slice(0, 30);
-
     document.title = name;
     ensureLink('icon').href = icon;
     ensureLink('apple-touch-icon').href = icon;
     const theme = document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (theme) theme.content = color;
 
-    const manifest = {
-      id: selected.startUrl,
-      name,
-      short_name: shortName,
-      description: settings.slogan || `${name} application`,
-      start_url: selected.startUrl,
-      scope: selected.scope,
-      display: 'standalone',
-      background_color: '#000000',
-      theme_color: color,
-      orientation: 'portrait',
-      icons: [
-        { src: icon, sizes: '192x192', purpose: 'any maskable' },
-        { src: icon, sizes: '512x512', purpose: 'any maskable' },
-      ],
-    };
-
-    const oldManifest = document.head.querySelector<HTMLLinkElement>('link[rel="manifest"]');
-    const oldBlob = oldManifest?.dataset.dynamicBlob;
+    const manifestLink = document.head.querySelector<HTMLLinkElement>('link[rel="manifest"]') || ensureLink('manifest');
+    const oldBlob = manifestLink.dataset.dynamicBlob;
     if (oldBlob) URL.revokeObjectURL(oldBlob);
-    const blobUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }));
-    const manifestLink = oldManifest || ensureLink('manifest');
-    manifestLink.href = blobUrl;
-    manifestLink.dataset.dynamicBlob = blobUrl;
+    manifestLink.href = selected.manifest;
+    delete manifestLink.dataset.dynamicBlob;
   }, [location.pathname]);
 
   useEffect(() => {
