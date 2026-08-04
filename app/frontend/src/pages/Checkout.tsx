@@ -56,6 +56,7 @@ export default function Checkout() {
   const [smallOrderFeeAmount, setSmallOrderFeeAmount] = useState(0);
   const [smallOrderFeeThreshold, setSmallOrderFeeThreshold] = useState(20);
   const [taxPercent, setTaxPercent] = useState(0);
+  const [vatIncluded, setVatIncluded] = useState(false);
 
   // Payment method settings from admin
   const [cashEnabledPickup, setCashEnabledPickup] = useState(true);
@@ -364,6 +365,7 @@ export default function Checkout() {
         setSmallOrderFeeAmount(parseFloat(s.small_order_fee_amount) || 0);
         setSmallOrderFeeThreshold(parseFloat(s.small_order_fee_threshold) || 20);
         setTaxPercent(Math.max(0, Math.min(100, parseFloat(s.tax_percent) || 0)));
+        setVatIncluded(s.vat_included === true);
         // Payment method settings
         setCashEnabledPickup(s.cash_enabled_pickup !== false);
         setCardEnabledPickup(s.card_enabled_pickup !== false);
@@ -555,8 +557,13 @@ export default function Checkout() {
     : 0;
   const smallOrderFee = (smallOrderFeeEnabled && subtotal < smallOrderFeeThreshold) ? smallOrderFeeAmount : 0;
   const taxableAmount = Math.max(0, subtotal - discountAmount + deliveryFee + serviceFee + smallOrderFee);
-  const taxAmount = taxPercent > 0 ? (taxableAmount * taxPercent) / 100 : 0;
-  const total = subtotal + deliveryFee + serviceFee + smallOrderFee + taxAmount + tipAmount - discountAmount;
+  const taxAmount = taxPercent > 0
+    ? vatIncluded
+      ? taxableAmount - taxableAmount / (1 + taxPercent / 100)
+      : (taxableAmount * taxPercent) / 100
+    : 0;
+  const taxAddedToTotal = vatIncluded ? 0 : taxAmount;
+  const total = subtotal + deliveryFee + serviceFee + smallOrderFee + taxAddedToTotal + tipAmount - discountAmount;
 
   // Determine available payment methods based on order type
   const availablePaymentMethods: { value: string; label: string; description: string }[] = [];
@@ -1255,7 +1262,7 @@ export default function Checkout() {
               {itemDiscountTotal > 0 && (
                 <>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Original Food Subtotal</span>
+                    <span className="text-gray-400">Original Subtotal</span>
                     <span className="text-gray-500 line-through">AED {originalSubtotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
@@ -1265,7 +1272,7 @@ export default function Checkout() {
                 </>
               )}
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Food Subtotal</span>
+                <span className="text-gray-400">Subtotal</span>
                 <span className="text-gray-300">AED {subtotal.toFixed(2)}</span>
               </div>
               {orderType === 'delivery' && deliveryFee > 0 && (
@@ -1288,7 +1295,9 @@ export default function Checkout() {
               )}
               {taxAmount > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">VAT / Tax ({taxPercent.toFixed(2)}%)</span>
+                  <span className="text-gray-400">
+                    {vatIncluded ? 'VAT (Incl.)' : `VAT / Tax (${taxPercent.toFixed(2)}%)`}
+                  </span>
                   <span className="text-gray-300">AED {taxAmount.toFixed(2)}</span>
                 </div>
               )}
