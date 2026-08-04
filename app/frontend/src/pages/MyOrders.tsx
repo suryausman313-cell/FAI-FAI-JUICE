@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { useTranslation } from '@/lib/i18n';
 import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
+import { customerPushSupported, enableCustomerPush } from '@/lib/customer-push';
 
 const PICKUP_STEPS = [
   { key: 'new', label: 'Order Placed', icon: Store },
@@ -414,6 +415,11 @@ export default function MyOrders() {
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
+  const [pushEnabled, setPushEnabled] = useState(
+    () => localStorage.getItem('vita_customer_push_enabled') === '1' &&
+      typeof Notification !== 'undefined' && Notification.permission === 'granted',
+  );
+  const [enablingPush, setEnablingPush] = useState(false);
 
   // Admin-configured timeouts
   const [acceptTimeout, setAcceptTimeout] = useState(5); // minutes
@@ -506,6 +512,18 @@ export default function MyOrders() {
       console.error('Failed to load orders:', e);
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function handleEnableNotifications() {
+    try {
+      setEnablingPush(true);
+      await enableCustomerPush();
+      setPushEnabled(true);
+    } catch (error: any) {
+      alert(error?.message || 'Notifications could not be enabled');
+    } finally {
+      setEnablingPush(false);
     }
   }
 
@@ -632,6 +650,25 @@ export default function MyOrders() {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
         </div>
+
+        {!pushEnabled && customerPushSupported() && (
+          <button
+            type="button"
+            onClick={handleEnableNotifications}
+            disabled={enablingPush}
+            className="w-full mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-left flex items-center gap-3"
+          >
+            <Bell className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span>
+              <span className="block text-emerald-300 font-semibold text-sm">
+                {enablingPush ? 'Enabling notifications…' : 'Enable order notifications'}
+              </span>
+              <span className="block text-gray-400 text-xs mt-0.5">
+                Get an alert when Kitchen marks your order ready.
+              </span>
+            </span>
+          </button>
+        )}
 
         {orders.length === 0 ? (
           <div className="text-center py-16">
