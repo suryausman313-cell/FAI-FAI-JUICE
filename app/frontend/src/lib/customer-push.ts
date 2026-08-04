@@ -24,9 +24,10 @@ export async function enableCustomerPush(): Promise<void> {
     });
   }
   const json = subscription.toJSON();
-  await backendRequest('/api/v1/customer-push/subscribe', {
-    method: 'POST',
-    body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
-  });
+  await backendRequest(
+    '/api/v1/customer-push/subscribe',
+    'POST',
+    { endpoint: json.endpoint, keys: json.keys },
+  );
   localStorage.setItem('vita_customer_push_enabled', '1');
 }
