@@ -33,6 +33,7 @@ export default function AdminFeesSettings() {
     small_order_fee_amount: local.small_order_fee_amount,
     small_order_fee_threshold: local.small_order_fee_threshold,
     tax_percent: local.tax_percent,
+    vat_included: local.vat_included,
   });
 
   useEffect(() => {
@@ -65,6 +66,7 @@ export default function AdminFeesSettings() {
           settings.small_order_fee_threshold || 20,
         ),
         tax_percent: String(settings.tax_percent ?? current.tax_percent),
+        vat_included: settings.vat_included === true,
       }));
     } catch (error) {
       console.error(error);
@@ -97,6 +99,7 @@ export default function AdminFeesSettings() {
           20,
         ),
         tax_percent: Math.max(0, Math.min(100, numberValue(form.tax_percent))),
+        vat_included: form.vat_included,
       });
 
       saveExtendedSettings(form);
@@ -305,6 +308,20 @@ export default function AdminFeesSettings() {
           <p className="text-gray-500 text-xs mt-2">
             This percentage is now shown and calculated in customer checkout.
           </p>
+          <div className="flex items-center justify-between mt-5 pt-5 border-t border-gray-800">
+            <div className="pr-4">
+              <Label className="text-gray-200">VAT Included in Prices</Label>
+              <p className="text-gray-500 text-xs mt-1">
+                ON: show VAT (Incl.) without adding it again to the total.
+              </p>
+            </div>
+            <Switch
+              checked={form.vat_included}
+              onCheckedChange={checked =>
+                setForm({ ...form, vat_included: checked })
+              }
+            />
+          </div>
         </Card>
 
         <Button
