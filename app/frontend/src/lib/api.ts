@@ -284,6 +284,7 @@ export interface RestaurantSettings {
   popular_max_items?: number;
   checkout_flow?: 'two_step' | 'direct';
   tax_percent?: number;
+  vat_included?: boolean;
   banner_text?: string;
   offer_text?: string;
 }

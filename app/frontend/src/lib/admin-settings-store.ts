@@ -5,6 +5,7 @@ export interface ExtendedSettings {
   delivery_charges: string;
   estimated_delivery_time: string;
   tax_percent: string;
+  vat_included: boolean;
   promo_code: string;
   promo_discount: string;
   offer_text: string;
@@ -63,6 +64,7 @@ export const DEFAULT_EXTENDED_SETTINGS: ExtendedSettings = {
   delivery_charges: '5',
   estimated_delivery_time: '30-45 min',
   tax_percent: '5',
+  vat_included: false,
   promo_code: '',
   promo_discount: '0',
   offer_text: '',
