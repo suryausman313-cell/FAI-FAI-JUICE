@@ -27,6 +27,30 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
+function isWithinDailySchedule(start: string, end: string, now: Date): boolean {
+  const toMinutes = (value: string) => {
+    const [hours, minutes] = value.split(':').map(Number);
+    return Number.isFinite(hours) && Number.isFinite(minutes)
+      ? hours * 60 + minutes
+      : -1;
+  };
+  const startMinutes = toMinutes(start);
+  const endMinutes = toMinutes(end);
+  if (startMinutes < 0 || endMinutes < 0 || startMinutes === endMinutes) return true;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  return endMinutes < startMinutes
+    ? currentMinutes >= startMinutes || currentMinutes < endMinutes
+    : currentMinutes >= startMinutes && currentMinutes < endMinutes;
+}
+
+function formatScheduleTime(value: string): string {
+  const [hours, minutes] = value.split(':').map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  return `${displayHours}:${String(minutes).padStart(2, '0')} ${suffix}`;
+}
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -66,6 +90,10 @@ export default function Checkout() {
 
   // Delivery settings from admin
   const [deliveryEnabled, setDeliveryEnabled] = useState(false);
+  const [deliveryScheduleEnabled, setDeliveryScheduleEnabled] = useState(false);
+  const [deliveryStartTime, setDeliveryStartTime] = useState('16:00');
+  const [deliveryEndTime, setDeliveryEndTime] = useState('01:00');
+  const [scheduleClock, setScheduleClock] = useState(() => Date.now());
   const [deliveryCharge, setDeliveryCharge] = useState(0);
   const [estimatedDeliveryTime, setEstimatedDeliveryTime] = useState('30-45 min');
 
@@ -114,6 +142,23 @@ export default function Checkout() {
     loadDeliverySettings();
     loadActivePromoOffers();
   }, []);
+
+  const deliveryAvailableNow = deliveryEnabled && (
+    !deliveryScheduleEnabled ||
+    isWithinDailySchedule(deliveryStartTime, deliveryEndTime, new Date(scheduleClock))
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setScheduleClock(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (orderType === 'delivery' && !deliveryAvailableNow) {
+      setOrderType('pickup');
+      setShowMap(false);
+    }
+  }, [deliveryAvailableNow, orderType]);
 
   // Auto-select first available payment method when order type changes
   useEffect(() => {
@@ -348,6 +393,9 @@ export default function Checkout() {
         // ===== END SHOP STATUS CHECK =====
 
         setDeliveryEnabled(s.delivery_enabled === true || s.delivery_enabled === 'true');
+        setDeliveryScheduleEnabled(s.delivery_schedule_enabled === true);
+        setDeliveryStartTime(s.delivery_start_time || '16:00');
+        setDeliveryEndTime(s.delivery_end_time || '01:00');
         setDeliveryCharge(parseFloat(s.delivery_charges) || 5);
         setEstimatedDeliveryTime(s.estimated_delivery_time || '30-45 min');
         if (s.restaurant_lat) setRestaurantLat(parseFloat(s.restaurant_lat));
@@ -391,6 +439,9 @@ export default function Checkout() {
         try {
           const parsed = JSON.parse(ext);
           setDeliveryEnabled(parsed.delivery_enabled === true || parsed.delivery_enabled === 'true');
+          setDeliveryScheduleEnabled(parsed.delivery_schedule_enabled === true);
+          setDeliveryStartTime(parsed.delivery_start_time || '16:00');
+          setDeliveryEndTime(parsed.delivery_end_time || '01:00');
           setDeliveryCharge(parseFloat(parsed.delivery_charges) || 5);
           setEstimatedDeliveryTime(parsed.estimated_delivery_time || '30-45 min');
           if (parsed.restaurant_lat) setRestaurantLat(parseFloat(parsed.restaurant_lat));
@@ -685,6 +736,15 @@ export default function Checkout() {
       return;
     }
 
+    if (orderType === 'delivery' && !deliveryAvailableNow) {
+      toast.error(
+        `Delivery is available from ${formatScheduleTime(deliveryStartTime)} to ${formatScheduleTime(deliveryEndTime)}. Please select Pickup.`,
+      );
+      setOrderType('pickup');
+      setShowMap(false);
+      return;
+    }
+
     // Block if not logged in
     if (!isLoggedIn) {
       toast.error('Please login to place your order.');
@@ -858,7 +918,7 @@ export default function Checkout() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Order Type Selection */}
-          {deliveryEnabled && (
+          {deliveryAvailableNow && (
             <div>
               <Label className="text-gray-300 mb-3 block">{t('checkout.order_type')}</Label>
               <div className="grid grid-cols-2 gap-3">
@@ -889,6 +949,23 @@ export default function Checkout() {
                   <span className="text-gray-500 text-xs">To your location</span>
                 </button>
               </div>
+            </div>
+          )}
+
+          {!shopClosed && deliveryEnabled && deliveryScheduleEnabled && (
+            <div className={`rounded-xl border p-3 ${
+              deliveryAvailableNow
+                ? 'border-green-700/40 bg-green-900/10 text-green-300'
+                : 'border-yellow-700/40 bg-yellow-900/10 text-yellow-300'
+            }`}>
+              <p className="text-sm">
+                Delivery hours: {formatScheduleTime(deliveryStartTime)} – {formatScheduleTime(deliveryEndTime)}
+              </p>
+              {!deliveryAvailableNow && (
+                <p className="text-xs mt-1">
+                  Delivery is closed now. Pickup is available while the shop is open.
+                </p>
+              )}
             </div>
           )}
 
@@ -1333,7 +1410,7 @@ export default function Checkout() {
 
           <Button
             type="submit"
-            disabled={loading || shopClosed || !isLoggedIn || (orderType === 'delivery' && (!!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
+            disabled={loading || shopClosed || !isLoggedIn || (orderType === 'delivery' && (!deliveryAvailableNow || !!deliveryZoneError || !locationShared || calculatedDeliveryCharge <= 0))}
             className="w-full bg-red-600 hover:bg-red-700 text-white py-6 text-lg font-semibold rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? t('checkout.placing') : `${t('checkout.place_order')} — ${t('common.aed')} ${total.toFixed(2)}`}
