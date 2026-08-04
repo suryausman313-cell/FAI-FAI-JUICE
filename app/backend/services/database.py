@@ -244,6 +244,7 @@ async def ensure_homepage_settings_columns() -> None:
     statements = [
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS checkout_flow VARCHAR(20) DEFAULT 'two_step'",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS tax_percent DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS vat_included BOOLEAN DEFAULT FALSE",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS banner_text TEXT DEFAULT ''",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS offer_text TEXT DEFAULT ''",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS show_branding BOOLEAN DEFAULT TRUE",
