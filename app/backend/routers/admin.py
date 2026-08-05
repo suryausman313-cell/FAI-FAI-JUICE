@@ -14,6 +14,7 @@ from routers.customer_auth import decode_customer_token, get_bearer_token
 from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
+from services.customer_push_service import notify_customer_order_ready_safely
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -235,6 +236,9 @@ async def update_kitchen_order_status(
         await db.commit()
         await db.refresh(order)
 
+        if new_status == "ready":
+            await notify_customer_order_ready_safely(db, order)
+
         return {
             "success": True,
             "status": new_status,
@@ -377,6 +381,10 @@ async def update_order_status(
             existing_notes = order.order_notes or ''
             order.order_notes = f"{existing_notes} | Cancelled by admin: {data.cancel_reason}"
         await db.commit()
+
+        if new_status == "ready":
+            await db.refresh(order)
+            await notify_customer_order_ready_safely(db, order)
 
         return {"success": True, "status": new_status, "estimated_minutes": data.estimated_minutes}
     except HTTPException:

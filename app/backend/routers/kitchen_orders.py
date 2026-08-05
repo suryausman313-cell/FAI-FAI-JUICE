@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
+from services.customer_push_service import notify_customer_order_ready_safely
 
 logger = logging.getLogger(__name__)
 
@@ -207,23 +208,8 @@ async def update_kitchen_order_status(
         logger.exception("Kitchen could not update order %s status", order_id)
         raise HTTPException(status_code=500, detail="Could not update order status") from exc
 
-    if new_status == "ready" and order.customer_phone:
-        try:
-            from routers.customer_auth import normalize_phone
-            from services.customer_push_service import send_customer_push
-
-            await send_customer_push(
-                db,
-                customer_phone=normalize_phone(order.customer_phone),
-                title=f"Order #{order.id} is ready",
-                body="Your order is ready. Please check My Orders for the latest update.",
-                url="/my-orders",
-                tag=f"customer-order-ready:{order.id}",
-            )
-        except Exception:
-            # Printing/Kitchen status must still succeed if a customer's browser
-            # subscription has expired or push delivery is temporarily unavailable.
-            logger.exception("Customer ready push failed for order %s", order.id)
+    if new_status == "ready":
+        await notify_customer_order_ready_safely(db, order)
 
     return {
         "success": True,

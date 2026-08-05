@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from models.orders import Orders
+from services.customer_push_service import notify_customer_order_ready_safely
 
 router = APIRouter(prefix="/api/v1/order-workflow", tags=["order-workflow"])
 
@@ -157,5 +158,8 @@ async def update_workflow_order_status(
         await db.rollback()
         logging.exception("Order workflow update failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if new_status == "ready":
+        await notify_customer_order_ready_safely(db, order)
 
     return {"success": True, "order": serialize_order(order)}
