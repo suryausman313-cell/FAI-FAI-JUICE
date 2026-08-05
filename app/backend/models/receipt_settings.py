@@ -31,6 +31,13 @@ class Receipt_settings(Base):
     show_order_totals = Column(Boolean, nullable=False, default=True, server_default="true")
     cut_paper = Column(Boolean, nullable=False, default=True, server_default="true")
 
+    # Alarm sounds are controlled only by Admin. Android Kitchen/Rider apps
+    # read these values; staff devices do not expose a ringtone picker.
+    kitchen_alarm_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    kitchen_alarm_audio = Column(Text, nullable=False, default="", server_default="")
+    rider_alarm_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    rider_alarm_audio = Column(Text, nullable=False, default="", server_default="")
+
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),
