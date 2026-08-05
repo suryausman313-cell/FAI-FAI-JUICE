@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import {
+  BellRing,
   Image as ImageIcon,
   Printer,
   Save,
@@ -61,6 +62,9 @@ export default function AdminReceiptSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingAlarm, setUploadingAlarm] = useState<
+    'kitchen' | 'rider' | null
+  >(null);
 
   useEffect(() => {
     void load();
@@ -144,6 +148,44 @@ export default function AdminReceiptSettings() {
       setUploading(false);
       event.target.value = '';
     }
+  }
+
+  function uploadAlarm(
+    event: ChangeEvent<HTMLInputElement>,
+    target: 'kitchen' | 'rider',
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('audio/')) {
+      toast.error('Please select an audio file');
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      toast.error('Ring audio must be smaller than 3 MB');
+      return;
+    }
+
+    setUploadingAlarm(target);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = typeof reader.result === 'string' ? reader.result : '';
+      setForm(current => ({
+        ...current,
+        [target === 'kitchen'
+          ? 'kitchen_alarm_audio'
+          : 'rider_alarm_audio']: value,
+      }));
+      setUploadingAlarm(null);
+      toast.success(
+        `${target === 'kitchen' ? 'Kitchen' : 'Rider'} ring selected. Press Save.`,
+      );
+    };
+    reader.onerror = () => {
+      setUploadingAlarm(null);
+      toast.error('Could not read audio file');
+    };
+    reader.readAsDataURL(file);
   }
 
   function testInstructions() {
@@ -349,6 +391,86 @@ export default function AdminReceiptSettings() {
                 />
               </div>
             </div>
+          </div>
+        </Card>
+
+        <Card className="bg-gray-900 border-gray-800 p-6">
+          <div className="flex items-center gap-2 mb-2">
+            <BellRing className="w-5 h-5 text-green-400" />
+            <h2 className="text-white font-semibold">
+              Kitchen & Rider Order Rings
+            </h2>
+          </div>
+          <p className="text-gray-400 text-sm mb-5">
+            Only Admin can select these sounds. Kitchen and Rider devices
+            automatically use the saved ring.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {([
+              {
+                target: 'kitchen' as const,
+                title: 'Kitchen New Order Ring',
+                enabled: 'kitchen_alarm_enabled' as const,
+                audio: 'kitchen_alarm_audio' as const,
+              },
+              {
+                target: 'rider' as const,
+                title: 'Rider Assignment Ring',
+                enabled: 'rider_alarm_enabled' as const,
+                audio: 'rider_alarm_audio' as const,
+              },
+            ]).map(item => (
+              <div
+                key={item.target}
+                className="rounded-xl bg-gray-800 border border-gray-700 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-white font-medium">{item.title}</p>
+                  <Switch
+                    checked={Boolean(form[item.enabled])}
+                    onCheckedChange={checked =>
+                      setForm({ ...form, [item.enabled]: checked })
+                    }
+                  />
+                </div>
+
+                {form[item.audio] ? (
+                  <audio
+                    controls
+                    src={form[item.audio]}
+                    className="w-full mt-4 h-10"
+                  />
+                ) : (
+                  <p className="text-yellow-400 text-xs mt-4">
+                    No ring selected. This device will remain silent.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-2 mt-4">
+                  <Label>
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.ogg,.m4a"
+                      className="hidden"
+                      onChange={event => uploadAlarm(event, item.target)}
+                    />
+                    <span className="w-full inline-flex items-center justify-center rounded-lg bg-green-600 hover:bg-green-700 text-white py-2.5 cursor-pointer text-sm">
+                      <Upload className="w-4 h-4 mr-2" />
+                      {uploadingAlarm === item.target ? 'Reading...' : 'Choose Ring'}
+                    </span>
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-gray-600 text-gray-300"
+                    onClick={() => setForm({ ...form, [item.audio]: '' })}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
 
