@@ -22,6 +22,10 @@ export interface ReceiptSettings {
   show_item_prices: boolean;
   show_order_totals: boolean;
   cut_paper: boolean;
+  kitchen_alarm_enabled: boolean;
+  kitchen_alarm_audio: string;
+  rider_alarm_enabled: boolean;
+  rider_alarm_audio: string;
 }
 
 export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
@@ -42,6 +46,10 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   show_item_prices: false,
   show_order_totals: true,
   cut_paper: true,
+  kitchen_alarm_enabled: true,
+  kitchen_alarm_audio: '',
+  rider_alarm_enabled: true,
+  rider_alarm_audio: '',
 };
 
 declare global {
