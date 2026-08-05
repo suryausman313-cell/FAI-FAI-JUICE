@@ -450,7 +450,9 @@ export default function MyOrders() {
       else if (state.permission === 'granted' && state.subscribed) setNotificationStatus('enabled');
       else setNotificationStatus('available');
     } catch (error: any) {
-      setNotificationStatus('error');
+      // A stale browser subscription should not leave the customer trapped on
+      // an error card. The Enable button will repair/recreate it on demand.
+      setNotificationStatus('available');
       setNotificationMessage(error?.message || 'Could not check notifications');
     }
   }
