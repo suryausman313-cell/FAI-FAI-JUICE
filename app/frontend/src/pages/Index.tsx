@@ -10,9 +10,18 @@ import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
 import FaiFaiWordmark from '@/components/FaiFaiWordmark';
+import { getAPIBaseURL } from '@/lib/config';
 
 const CACHE_KEY = 'fai_home_cache_v6';
 const CACHE_TTL = 120000; // 2 minutes
+
+function customerImageUrl(value?: string | null): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
+  const base = getAPIBaseURL().replace(/\/$/, '');
+  return `${base}/${raw.replace(/^\//, '')}`;
+}
 
 interface CachedData {
   settings: RestaurantSettings | null;
@@ -305,7 +314,16 @@ export default function Index() {
                 >
                   <div className="relative">
                     {item.image_url ? (
-                      <img src={item.image_url} alt={item.name} className="w-full h-28 object-cover" loading="lazy" />
+                      <img
+                        src={customerImageUrl(item.image_url)}
+                        alt={item.name}
+                        className="w-full h-28 object-cover"
+                        loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none';
+                          event.currentTarget.parentElement?.classList.add('bg-gray-800');
+                        }}
+                      />
                     ) : (
                       <div className="w-full h-28 bg-gray-800 flex items-center justify-center">
                         <span className="text-3xl">🍕</span>
