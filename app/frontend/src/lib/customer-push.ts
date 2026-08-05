@@ -25,14 +25,35 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('vita_customer_token') || '';
   if (!token) throw new Error('Please login to enable order notifications');
 
-  const response = await fetch(apiUrl(path), {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(options?.headers || {}),
-    },
-  });
+  let response: Response | null = null;
+  let lastError: unknown = null;
+  // Render can briefly be unavailable while waking/redeploying. One retry also
+  // prevents a temporary mobile-network drop from leaving Push setup stuck.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      response = await fetch(apiUrl(path), {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(options?.headers || {}),
+        },
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        await new Promise(resolve => window.setTimeout(resolve, 1200));
+      }
+    }
+  }
+  if (!response) {
+    throw new Error(
+      lastError instanceof Error && lastError.message !== 'Failed to fetch'
+        ? lastError.message
+        : 'Notification server could not be reached. Please try again.',
+    );
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data?.detail || data?.message || 'Notification request failed');
@@ -75,9 +96,11 @@ async function sendSubscription(subscription: PushSubscription): Promise<void> {
 }
 
 async function publicKey(): Promise<string> {
-  const result = await apiRequest<{ public_key: string }>(
-    '/api/v1/customer-push/public-key',
-  );
+  // This route is public. Avoiding Authorization/JSON headers also avoids an
+  // unnecessary CORS preflight on Android browsers.
+  const response = await fetch(apiUrl('/api/v1/customer-push/public-key'));
+  const result = (await response.json().catch(() => ({}))) as { public_key?: string };
+  if (!response.ok) throw new Error('Notification public key could not be loaded');
   if (!result.public_key) throw new Error('Notification public key was not returned');
   return result.public_key;
 }
@@ -117,7 +140,22 @@ export async function enableCustomerPush(): Promise<CustomerPushState> {
     });
   }
 
-  await sendSubscription(subscription);
+  try {
+    await sendSubscription(subscription);
+  } catch (firstError) {
+    // A browser may retain a subscription created with an older VAPID key or
+    // broken push-service endpoint. Recreate it once before showing an error.
+    if (subscription) await subscription.unsubscribe().catch(() => false);
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+    try {
+      await sendSubscription(subscription);
+    } catch {
+      throw firstError;
+    }
+  }
   localStorage.setItem(VAPID_KEY_STORAGE, key);
   return { supported: true, permission, subscribed: true };
 }
