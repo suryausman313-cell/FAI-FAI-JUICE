@@ -9,6 +9,7 @@ import { getItemPriceBreakdown, isPromoOfferCurrentlyActive } from '@/lib/discou
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import NotificationBanner from '@/components/NotificationBanner';
+import FaiFaiWordmark from '@/components/FaiFaiWordmark';
 
 const CACHE_KEY = 'fai_home_cache_v6';
 const CACHE_TTL = 120000; // 2 minutes
@@ -64,30 +65,8 @@ export default function Index() {
       const settingsData = settingsRes?.data?.items?.[0] || null;
       const allItems = itemsRes?.data?.items || [];
       const popularItems = popularRes?.data?.items || [];
-      // The public popular-items endpoint can contain an empty/old image URL.
-      // Reuse the matching menu item's current image so the Home cards never
-      // lose a picture after Admin toggles an item as popular.
-      const menuItemById = new Map(
-        allItems.map((item: MenuItem) => [String(item.id), item]),
-      );
-      const menuItemByName = new Map(
-        allItems.map((item: MenuItem) => [String(item.name || '').trim().toLowerCase(), item]),
-      );
-      const popularItemsWithImages = popularItems.map((item: MenuItem) => {
-        const matchingMenuItem = menuItemById.get(String(item.id))
-          || menuItemByName.get(String(item.name || '').trim().toLowerCase());
-        const currentImage = String(item.image_url || '').trim();
-        const imageIsUsable = currentImage !== '' && currentImage !== '[object Object]';
-        return {
-          ...matchingMenuItem,
-          ...item,
-          image_url: imageIsUsable ? currentImage : (matchingMenuItem?.image_url || ''),
-        };
-      });
       const maxPopular = Math.max(2, Math.min(12, Number((settingsData as any)?.popular_max_items || 6)));
-      const items = popularItemsWithImages.length > 0
-        ? popularItemsWithImages.slice(0, maxPopular)
-        : allItems.slice(0, maxPopular);
+      const items = popularItems.length > 0 ? popularItems.slice(0, maxPopular) : allItems.slice(0, maxPopular);
       const cats = catRes?.data?.items || [];
       const offersList = (offersRes?.data?.items || []).filter((offer: Offer) => isPromoOfferCurrentlyActive(offer));
 
@@ -143,7 +122,7 @@ export default function Index() {
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="text-center">
           <div className="text-4xl font-black mb-2">
-            <span className="text-white">{settings?.restaurant_name || 'Fai Fai Juice'}</span>
+            <FaiFaiWordmark name={settings?.restaurant_name} />
           </div>
           <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-2" />
           <p className="text-gray-500 text-sm mt-2">{t('home.loading')}</p>
@@ -170,9 +149,7 @@ export default function Index() {
               <img src={settings.logo_url} alt="Logo" className="w-8 h-8 rounded-full object-cover" />
             )}
             <div>
-              <span className="text-white font-black text-lg">
-                {settings?.restaurant_name || 'Fai Fai Juice'}
-              </span>
+              <FaiFaiWordmark name={settings?.restaurant_name} compact className="text-lg" />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -195,7 +172,7 @@ export default function Index() {
         {settings?.show_branding !== false && (
         <div className="py-8 text-center">
           <h1 className="text-5xl font-black mb-1">
-            <span className="text-white">{settings?.restaurant_name || 'Fai Fai Juice'}</span>
+            <FaiFaiWordmark name={settings?.restaurant_name} className="text-[0.95em]" />
           </h1>
           <p className="text-gray-400 text-sm">{t('home.tagline')}</p>
           {settings?.banner_text && (
