@@ -1126,6 +1126,11 @@ async def get_delivery_eta(
             "rider_phone": rider.phone if rider else None,
             "rider_lat": rider.current_lat if rider else None,
             "rider_lng": rider.current_lng if rider else None,
+            "rider_location_updated_at": (
+                rider.location_updated_at.isoformat()
+                if rider and rider.location_updated_at
+                else None
+            ),
         }
     except Exception as e:
         logging.error(f"Failed to get delivery ETA: {e}")
