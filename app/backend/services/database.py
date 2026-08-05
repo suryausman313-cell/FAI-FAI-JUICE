@@ -244,10 +244,6 @@ async def ensure_homepage_settings_columns() -> None:
     statements = [
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS checkout_flow VARCHAR(20) DEFAULT 'two_step'",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS tax_percent DOUBLE PRECISION DEFAULT 0",
-        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS vat_included BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS delivery_schedule_enabled BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS delivery_start_time VARCHAR(5) DEFAULT '16:00'",
-        "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS delivery_end_time VARCHAR(5) DEFAULT '01:00'",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS banner_text TEXT DEFAULT ''",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS offer_text TEXT DEFAULT ''",
         "ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS show_branding BOOLEAN DEFAULT TRUE",
@@ -273,6 +269,23 @@ async def ensure_homepage_settings_columns() -> None:
             await session.execute(text(statement))
         await session.commit()
     logger.info("Restaurant/homepage settings database columns checked successfully")
+
+
+async def ensure_admin_alarm_columns() -> None:
+    """Add Admin-controlled Kitchen and Rider alarm fields safely."""
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+    statements = [
+        "ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS kitchen_alarm_enabled BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS kitchen_alarm_audio TEXT DEFAULT ''",
+        "ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS rider_alarm_enabled BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS rider_alarm_audio TEXT DEFAULT ''",
+    ]
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.commit()
+    logger.info("Admin-controlled alarm columns checked successfully")
 
 
 async def initialize_database():
@@ -312,6 +325,9 @@ async def initialize_database():
         logger.info("V6 schema migration 3/3: checking restaurant/homepage columns...")
         await ensure_homepage_settings_columns()
         logger.info("V7 rider auto-assign schema migration completed")
+
+        await ensure_admin_alarm_columns()
+        logger.info("V8 Admin alarm schema migration completed")
 
         logger.info("V7 database schema migration completed successfully")
         logger.info("Database initialized successfully")
