@@ -23,10 +23,12 @@ import {
   Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import axios from 'axios';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { client, RestaurantSettings } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 
 interface AdminPermissions {
   orders?: boolean;
@@ -163,11 +165,17 @@ export default function AdminDashboard() {
 
   async function loadSummary(period: FinancePeriod): Promise<FinanceSummary | null> {
     try {
-      const response = await client.apiCall.invoke({
-        url: `/api/v1/finance/admin/summary?period=${period}`,
-        method: 'GET',
-        data: {},
-      });
+      // Use the exact same authenticated request as Sales & Reports so the
+      // Dashboard and full report can never disagree because of client state.
+      const baseURL = getAPIBaseURL().replace(/\/$/, '');
+      const token = localStorage.getItem('fai_fai_admin_token') || '';
+      const response = await axios.get(
+        `${baseURL}/api/v1/finance/admin/summary?period=${period}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 20000,
+        },
+      );
       return response.data as FinanceSummary;
     } catch (error) {
       console.error(`Failed to load ${period} finance summary:`, error);

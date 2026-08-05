@@ -37,11 +37,15 @@ interface RiderReport {
   is_online: boolean;
   total_orders: number;
   today_orders: number;
+  today_order_value: number;
   pending_orders: number;
   total_earnings: number;
   delivery_charges_earned: number;
   delivery_charge_per_order: number;
   cash_collected: number;
+  approved_cash: number;
+  awaiting_approval: number;
+  cash_pending: number;
   card_orders: number;
   current_lat: number | null;
   current_lng: number | null;
@@ -380,26 +384,38 @@ export default function AdminRiders() {
                   </div>
 
                   {/* Stats Grid */}
-                  <div className="grid grid-cols-5 gap-2 mb-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-white">{rider.total_orders}</p>
-                      <p className="text-gray-500 text-[10px]">Total Orders</p>
+                      <p className="text-lg font-bold text-white">{rider.today_orders}</p>
+                      <p className="text-gray-500 text-[10px]">Today Orders</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-green-400">AED {rider.total_earnings.toFixed(0)}</p>
-                      <p className="text-gray-500 text-[10px]">Order Value</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-purple-400">AED {(rider.delivery_charges_earned || 0).toFixed(0)}</p>
-                      <p className="text-gray-500 text-[10px]">Del. Charges</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-yellow-400">AED {rider.cash_collected.toFixed(0)}</p>
-                      <p className="text-gray-500 text-[10px]">Cash</p>
+                      <p className="text-lg font-bold text-green-400">AED {(rider.today_order_value || 0).toFixed(2)}</p>
+                      <p className="text-gray-500 text-[10px]">Today Sale</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-orange-400">{rider.pending_orders}</p>
-                      <p className="text-gray-500 text-[10px]">Pending</p>
+                      <p className="text-gray-500 text-[10px]">Active / Pending</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-yellow-400">AED {(rider.cash_pending || 0).toFixed(2)}</p>
+                      <p className="text-gray-500 text-[10px]">Cash Pending</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-emerald-400">AED {(rider.approved_cash || 0).toFixed(2)}</p>
+                      <p className="text-gray-500 text-[10px]">Cash Approved</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-amber-300">AED {(rider.awaiting_approval || 0).toFixed(2)}</p>
+                      <p className="text-gray-500 text-[10px]">Awaiting Approval</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-purple-400">AED {(rider.delivery_charges_earned || 0).toFixed(2)}</p>
+                      <p className="text-gray-500 text-[10px]">Total Del. Earnings</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-blue-300">{rider.total_orders}</p>
+                      <p className="text-gray-500 text-[10px]">All Deliveries</p>
                     </div>
                   </div>
 
