@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
+import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +25,11 @@ function riderApi(options: RiderApiOptions) {
     data: options.data,
     timeout: 25000,
   });
+}
+
+function isNativeRiderApp(): boolean {
+  return typeof (window as any).FaiFaiRider !== 'undefined' ||
+    navigator.userAgent.includes('FaiFaiRider/');
 }
 
 // Fix leaflet default marker icon
@@ -271,7 +276,7 @@ export default function RiderPanel() {
       const newDelivery = deliveries.find(d => newIds.includes(d.id));
       if (newDelivery) {
         toast.success(`🛵 New Delivery #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
-        playNotificationSound();
+        if (!isNativeRiderApp()) playNotificationSound();
       }
     }
     prevDeliveryIdsRef.current = activeIds;
@@ -291,7 +296,7 @@ export default function RiderPanel() {
       riderAlarmIntervalRef.current = null;
     }
 
-    if (waitingForDecision) {
+    if (waitingForDecision && !isNativeRiderApp()) {
       playNotificationSound();
       riderAlarmIntervalRef.current = setInterval(playNotificationSound, 3500);
     }
@@ -407,7 +412,7 @@ export default function RiderPanel() {
         loadStats(riderData.id);
         loadFinance(riderData.id, 'today');
         loadCashSubmissions(riderData.id);
-        if ('Notification' in window && Notification.permission === 'default') {
+        if (!isNativeRiderApp() && 'Notification' in window && Notification.permission === 'default') {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
       }
@@ -620,9 +625,6 @@ export default function RiderPanel() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={toggleNotifications} variant="ghost" size="sm" className={`cursor-pointer ${notificationsEnabled ? 'text-green-400' : 'text-gray-400'}`}>
-              {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-            </Button>
             <Button onClick={() => { if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); } }} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
               <RefreshCw className="w-4 h-4" />
             </Button>
@@ -649,7 +651,7 @@ export default function RiderPanel() {
         </div>
 
         {/* Notification Permission Banner */}
-        {notificationPermission === 'default' && (
+        {!isNativeRiderApp() && notificationPermission === 'default' && (
           <div className="mb-4 p-3 rounded-xl bg-blue-600/10 border border-blue-600/30">
             <div className="flex items-center justify-between">
               <div>
@@ -660,7 +662,7 @@ export default function RiderPanel() {
             </div>
           </div>
         )}
-        {notificationPermission === 'denied' && (
+        {!isNativeRiderApp() && notificationPermission === 'denied' && (
           <div className="mb-4 p-3 rounded-xl bg-red-600/10 border border-red-600/30">
             <p className="text-red-400 text-sm">⚠️ Notifications blocked. Enable in browser settings.</p>
           </div>
