@@ -4,6 +4,7 @@ import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, UserRound } from 'l
 import { getCartItemCount, getCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
+import FaiFaiWordmark from '@/components/FaiFaiWordmark';
 
 interface CustomerLayoutProps {
   children: ReactNode;
@@ -45,7 +46,7 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-600 to-green-700 flex items-center justify-center">
               <span className="text-white font-bold text-sm">FF</span>
             </div>
-            <span className="text-xl font-bold text-white tracking-tight">Fai Fai Juice</span>
+            <FaiFaiWordmark compact className="text-xl" />
           </Link>
           <LanguageSwitcher />
 
