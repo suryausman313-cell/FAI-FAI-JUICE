@@ -12,6 +12,7 @@ from core.database import get_db
 from models.riders import Riders
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
+from models.rider_cash_settlements import Rider_cash_settlements
 from services.rider_assignment import (
     auto_assign_order,
     auto_assign_unassigned_orders,
@@ -711,7 +712,14 @@ async def get_rider_stats(
     """Get rider's delivery stats: today, week, month, earnings, cash/card breakdown"""
     try:
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # "Today" in Admin must follow UAE shop time, not UTC midnight.
+        uae_now = now.astimezone(timezone(timedelta(hours=4)))
+        today_start = uae_now.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        ).astimezone(timezone.utc)
         week_start = today_start - timedelta(days=now.weekday())
         month_start = today_start.replace(day=1)
 
@@ -849,8 +857,18 @@ async def get_admin_rider_reports(
             )
             orders_map = {o.id: o for o in orders_result.scalars().all()}
 
+        settlements_result = await db.execute(select(Rider_cash_settlements))
+        all_settlements = settlements_result.scalars().all()
+
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Rider card's "Today" follows UAE shop day.
+        uae_now = now.astimezone(timezone(timedelta(hours=4)))
+        today_start = uae_now.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        ).astimezone(timezone.utc)
 
         reports = []
         for rider in riders:
@@ -863,6 +881,7 @@ async def get_admin_rider_reports(
             cash_collected = 0.0
             card_orders = 0
             today_count = 0
+            today_order_value = 0.0
 
             for a in delivered:
                 order = orders_map.get(a.order_id)
@@ -882,6 +901,22 @@ async def get_admin_rider_reports(
                         a_time = a_time.replace(tzinfo=timezone.utc)
                     if a_time >= today_start:
                         today_count += 1
+                        today_order_value += amount
+
+            rider_settlements = [
+                item for item in all_settlements if item.rider_id == rider.id
+            ]
+            approved_cash = sum(
+                float(item.amount or 0)
+                for item in rider_settlements
+                if item.status == "approved"
+            )
+            awaiting_approval = sum(
+                float(item.amount or 0)
+                for item in rider_settlements
+                if item.status == "pending"
+            )
+            cash_pending = max(cash_collected - approved_cash, 0.0)
 
             # Determine online status based on heartbeat (60s threshold) or location update (2 min threshold)
             is_online = False
@@ -904,10 +939,14 @@ async def get_admin_rider_reports(
                 "is_online": is_online,
                 "total_orders": len(delivered),
                 "today_orders": today_count,
+                "today_order_value": round(today_order_value, 2),
                 "pending_orders": len(pending),
                 "total_earnings": round(total_earnings, 2),
                 "delivery_charges_earned": round(delivery_charges_earned, 2),
                 "cash_collected": round(cash_collected, 2),
+                "approved_cash": round(approved_cash, 2),
+                "awaiting_approval": round(awaiting_approval, 2),
+                "cash_pending": round(cash_pending, 2),
                 "card_orders": card_orders,
                 "current_lat": rider.current_lat,
                 "current_lng": rider.current_lng,

@@ -879,6 +879,17 @@ async def reset_data(
         for table in reversed(metadata.sorted_tables):
             if table.name in selected:
                 await db.execute(table.delete())
+
+        # Deleting test orders must also restart the public order number.
+        # PostgreSQL DELETE alone does not reset its auto-increment sequence.
+        if "orders" in selected:
+            dialect = db.get_bind().dialect.name
+            if dialect == "postgresql":
+                await db.execute(text("ALTER SEQUENCE orders_id_seq RESTART WITH 1"))
+            elif dialect == "sqlite":
+                await db.execute(
+                    text("DELETE FROM sqlite_sequence WHERE name = 'orders'")
+                )
         await db.commit()
     except Exception as exc:
         await db.rollback()
@@ -894,4 +905,5 @@ async def reset_data(
         "message": RESET_MESSAGES[reset_type],
         "deleted_rows": sum(counts.values()),
         "deleted_tables": counts,
+        "order_number_restarted": "orders" in selected,
     }
