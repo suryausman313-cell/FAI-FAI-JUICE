@@ -171,18 +171,23 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
   );
 }
 
+function normalizeUaeWhatsAppNumber(phone: string): string {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00971')) digits = digits.slice(2);
+  if (digits.startsWith('0')) digits = `971${digits.slice(1)}`;
+  if (!digits.startsWith('971') && digits.length === 9) digits = `971${digits}`;
+  return digits;
+}
+
 function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderPhone: string }) {
-  let waPhone = riderPhone.replace(/[^0-9+]/g, '').replace('+', '');
-  if (waPhone.startsWith('0')) {
-    waPhone = '971' + waPhone.substring(1);
-  }
-  if (waPhone.length <= 10 && !waPhone.startsWith('971')) {
-    waPhone = '971' + waPhone;
-  }
+  const waPhone = normalizeUaeWhatsAppNumber(riderPhone);
+  const message = encodeURIComponent(`Hello ${riderName}, I am contacting you about my Fai Fai Juice delivery.`);
+  const whatsappUrl = `https://wa.me/${waPhone}?text=${message}`;
 
   return (
     <a
-      href={`https://wa.me/${waPhone}`}
+      href={whatsappUrl}
+      data-rider-phone={waPhone}
       target="_blank"
       rel="noopener noreferrer"
       className="block bg-blue-600/10 border border-blue-600/30 rounded-xl p-4 mb-4 hover:bg-blue-600/15 transition-colors"
@@ -406,6 +411,8 @@ interface OrderWithDelivery extends Order {
   delivery_status?: string | null;
   rider_name?: string | null;
   rider_phone?: string | null;
+  rider_lat?: number | null;
+  rider_lng?: number | null;
   delivery_eta_seconds?: number | null;
   delivery_eta_calculated_at?: string | null;
 }
@@ -542,6 +549,8 @@ export default function MyOrders() {
               delivery_status: eta.status === 'no_rider' ? order.delivery_status : eta.status,
               rider_name: eta.rider_name || order.rider_name,
               rider_phone: eta.rider_phone || order.rider_phone,
+              rider_lat: eta.rider_lat ?? order.rider_lat,
+              rider_lng: eta.rider_lng ?? order.rider_lng,
               delivery_eta_seconds: Number(eta.eta_seconds || 0) || null,
               delivery_eta_calculated_at: eta.calculated_at || null,
             };
@@ -803,7 +812,10 @@ export default function MyOrders() {
                             className="w-full mb-3 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
                             size="sm"
                           >
-                            <Navigation className="w-4 h-4 mr-2" /> Track Live on Map
+                            <Navigation className="w-4 h-4 mr-2" />
+                            {order.rider_lat != null && order.rider_lng != null
+                              ? 'Track Rider Live on Map'
+                              : 'Open Rider Tracking'}
                           </Button>
                         )}
 

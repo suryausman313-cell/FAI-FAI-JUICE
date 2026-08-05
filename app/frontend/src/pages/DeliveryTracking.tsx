@@ -26,6 +26,7 @@ interface ETAData {
   rider_phone: string | null;
   rider_lat: number | null;
   rider_lng: number | null;
+  rider_location_updated_at?: string | null;
 }
 
 const STATUS_STEPS = [
@@ -230,8 +231,13 @@ export default function DeliveryTracking() {
             })()}
 
             {/* Map */}
-            {eta.rider_lat && eta.rider_lng && (
+            {eta.rider_lat != null && eta.rider_lng != null && (
               <div ref={mapContainerRef} className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700 mb-4" style={{ zIndex: 1 }} />
+            )}
+            {eta.rider_name && (eta.rider_lat == null || eta.rider_lng == null) && (
+              <Card className="bg-amber-950/30 border-amber-700/40 p-4 mb-4 text-amber-300 text-sm">
+                Rider live location is waiting for GPS. The Rider app must stay signed in with location permission enabled.
+              </Card>
             )}
 
             {/* Status Progress */}
