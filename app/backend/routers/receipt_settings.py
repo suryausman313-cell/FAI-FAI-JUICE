@@ -14,6 +14,7 @@ from models.receipt_settings import Receipt_settings
 router = APIRouter(prefix="/api/v1/receipt-settings", tags=["receipt-settings"])
 
 MAX_LOGO_VALUE_LENGTH = 1_000_000
+MAX_AUDIO_VALUE_LENGTH = 5_000_000
 
 
 class ReceiptSettingsUpdate(BaseModel):
@@ -34,6 +35,10 @@ class ReceiptSettingsUpdate(BaseModel):
     show_item_prices: bool = False
     show_order_totals: bool = True
     cut_paper: bool = True
+    kitchen_alarm_enabled: bool = True
+    kitchen_alarm_audio: str = Field(default="", max_length=MAX_AUDIO_VALUE_LENGTH)
+    rider_alarm_enabled: bool = True
+    rider_alarm_audio: str = Field(default="", max_length=MAX_AUDIO_VALUE_LENGTH)
 
 
 def serialize(item: Receipt_settings) -> dict:
@@ -54,6 +59,10 @@ def serialize(item: Receipt_settings) -> dict:
         "show_item_prices": bool(item.show_item_prices),
         "show_order_totals": bool(item.show_order_totals),
         "cut_paper": bool(item.cut_paper),
+        "kitchen_alarm_enabled": bool(item.kitchen_alarm_enabled),
+        "kitchen_alarm_audio": item.kitchen_alarm_audio or "",
+        "rider_alarm_enabled": bool(item.rider_alarm_enabled),
+        "rider_alarm_audio": item.rider_alarm_audio or "",
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
