@@ -1,4 +1,5 @@
 import { backendRequest } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 
 const VAPID_KEY_STORAGE = 'fai_fai_customer_vapid_public_key';
 const CUSTOMER_TOKEN_KEY = 'vita_customer_token';
@@ -24,7 +25,6 @@ function getCustomerToken(): string {
     sessionStorage.getItem(CUSTOMER_TOKEN_KEY) ||
     '';
 
-  // backendRequest localStorage se customer token uthata hai.
   if (token && !localStorage.getItem(CUSTOMER_TOKEN_KEY)) {
     localStorage.setItem(CUSTOMER_TOKEN_KEY, token);
   }
@@ -32,26 +32,8 @@ function getCustomerToken(): string {
   return token;
 }
 
-async function apiRequest<T>(
-  path: string,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-  data?: Record<string, unknown>,
-): Promise<T> {
-  if (!getCustomerToken()) {
-    throw new Error('Please login to enable order notifications');
-  }
-
-  try {
-    const response = await backendRequest(path, method, data);
-    return response.data as T;
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Notification request failed';
-
-    throw new Error(message);
-  }
+function apiBaseUrl(): string {
+  return String(getAPIBaseURL() || '').replace(/\/$/, '');
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -69,46 +51,111 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output;
 }
 
-async function getRegistration(): Promise<ServiceWorkerRegistration> {
-  // Purani narrow-scope customer registration remove karo.
-  const registrations = await navigator.serviceWorker.getRegistrations();
+async function waitForWorker(
+  registration: ServiceWorkerRegistration,
+): Promise<ServiceWorkerRegistration> {
+  if (registration.active) return registration;
 
-  for (const registration of registrations) {
-    if (
-      registration.scope.includes('/customer-push/') ||
-      registration.active?.scriptURL.includes('/customer-sw.js')
-    ) {
-      await registration.unregister().catch(() => false);
+  const worker = registration.installing || registration.waiting;
+  if (!worker) return registration;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      reject(new Error('Service worker activation timed out'));
+    }, 12000);
+
+    worker.addEventListener('statechange', () => {
+      if (worker.state === 'activated') {
+        window.clearTimeout(timeout);
+        resolve();
+      } else if (worker.state === 'redundant') {
+        window.clearTimeout(timeout);
+        reject(new Error('Service worker became redundant'));
+      }
+    });
+  });
+
+  return registration;
+}
+
+async function getRegistration(): Promise<ServiceWorkerRegistration> {
+  try {
+    // Register/update the same worker. Do NOT unregister it on every check,
+    // otherwise the saved PushSubscription is deleted again.
+    const registration = await navigator.serviceWorker.register(
+      '/customer-sw.js?v=4',
+      { scope: '/' },
+    );
+
+    await registration.update().catch(() => undefined);
+    return await waitForWorker(registration);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Service worker failed: ${message}`);
+  }
+}
+
+async function getPublicKey(): Promise<string> {
+  const url = `${apiBaseUrl()}/api/v1/customer-push/public-key`;
+  let lastError: unknown = null;
+
+  // This route is public. No Authorization header means no unnecessary
+  // CORS preflight before loading the VAPID key.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        mode: 'cors',
+      });
+
+      const data = (await response.json().catch(() => ({}))) as {
+        public_key?: string;
+        detail?: string;
+        message?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            data.message ||
+            `Public key request failed (${response.status})`,
+        );
+      }
+
+      const key = String(data.public_key || '').trim();
+      if (!key) {
+        throw new Error('Backend returned no notification public key');
+      }
+
+      return key;
+    } catch (error: unknown) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise(resolve => window.setTimeout(resolve, 2500));
+      }
     }
   }
 
-  // Root scope se worker customer pages par properly active rahega.
-  const registration = await navigator.serviceWorker.register(
-    '/customer-sw.js?v=3',
-    { scope: '/' },
-  );
+  const message =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`Notification backend/public key failed: ${message}`);
+}
 
-  await registration.update().catch(() => undefined);
-
-  if (registration.installing) {
-    await new Promise<void>((resolve) => {
-      const worker = registration.installing;
-      if (!worker) {
-        resolve();
-        return;
-      }
-
-      const timeout = window.setTimeout(resolve, 5000);
-      worker.addEventListener('statechange', () => {
-        if (worker.state === 'activated' || worker.state === 'redundant') {
-          window.clearTimeout(timeout);
-          resolve();
-        }
-      });
+async function createBrowserSubscription(
+  registration: ServiceWorkerRegistration,
+  publicKey: string,
+): Promise<PushSubscription> {
+  try {
+    return await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
     });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Browser push subscription failed: ${message}`);
   }
-
-  return registration;
 }
 
 async function sendSubscription(
@@ -122,28 +169,18 @@ async function sendSubscription(
     );
   }
 
-  await apiRequest('/api/v1/customer-push/subscribe', 'POST', {
-    endpoint: json.endpoint,
-    keys: {
-      p256dh: json.keys.p256dh,
-      auth: json.keys.auth,
-    },
-  });
-}
-
-async function getPublicKey(): Promise<string> {
-  const result = await apiRequest<{ public_key?: string }>(
-    '/api/v1/customer-push/public-key',
-    'GET',
-  );
-
-  const key = String(result.public_key || '').trim();
-
-  if (!key) {
-    throw new Error('Notification public key was not returned by backend');
+  try {
+    await backendRequest('/api/v1/customer-push/subscribe', 'POST', {
+      endpoint: json.endpoint,
+      keys: {
+        p256dh: json.keys.p256dh,
+        auth: json.keys.auth,
+      },
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Saving subscription to backend failed: ${message}`);
   }
-
-  return key;
 }
 
 export async function getCustomerPushState(): Promise<CustomerPushState> {
@@ -174,8 +211,8 @@ export async function enableCustomerPush(): Promise<CustomerPushState> {
     throw new Error('Please login to enable order notifications');
   }
 
+  // Permission request remains inside the button click flow.
   const permission = await Notification.requestPermission();
-
   if (permission !== 'granted') {
     throw new Error('Please allow notifications in browser settings');
   }
@@ -186,32 +223,25 @@ export async function enableCustomerPush(): Promise<CustomerPushState> {
   let subscription = await registration.pushManager.getSubscription();
   const previousKey = localStorage.getItem(VAPID_KEY_STORAGE);
 
-  if (subscription && previousKey !== publicKey) {
+  if (subscription && previousKey && previousKey !== publicKey) {
     await subscription.unsubscribe().catch(() => false);
     subscription = null;
   }
 
   if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+    subscription = await createBrowserSubscription(registration, publicKey);
   }
 
   try {
     await sendSubscription(subscription);
   } catch (firstError) {
     await subscription.unsubscribe().catch(() => false);
-
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+    subscription = await createBrowserSubscription(registration, publicKey);
 
     try {
       await sendSubscription(subscription);
-    } catch (secondError) {
-      throw secondError instanceof Error ? secondError : firstError;
+    } catch {
+      throw firstError;
     }
   }
 
