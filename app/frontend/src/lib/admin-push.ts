@@ -17,7 +17,7 @@ export interface AdminPushState extends AdminPushPreferences {
 }
 
 function apiUrl(path: string): string {
-  return `${getAPIBaseURL()}${path}`;
+  return `${getAPIBaseURL().replace(/\/$/, '')}${path}`;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
