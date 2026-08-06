@@ -35,6 +35,104 @@ async def check_database_health() -> bool:
         return False
 
 
+async def ensure_customer_push_columns() -> None:
+    """Upgrade an existing customer push table to the current schema."""
+
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+
+    statements = [
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS customer_account_id INTEGER DEFAULT 0
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS customer_phone_key VARCHAR(30) DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS endpoint TEXT DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS p256dh TEXT DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS auth TEXT DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS user_agent TEXT DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS
+        ix_customer_push_subscriptions_customer_account_id
+        ON customer_push_subscriptions (customer_account_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS
+        ix_customer_push_subscriptions_customer_phone_key
+        ON customer_push_subscriptions (customer_phone_key)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS
+        ix_customer_push_subscriptions_endpoint
+        ON customer_push_subscriptions (endpoint)
+        """,
+    ]
+
+    try:
+        async with db_manager.async_session_maker() as session:
+            for statement in statements:
+                await session.execute(text(statement))
+
+            await session.execute(
+                text(
+                    """
+                    UPDATE customer_push_subscriptions
+                    SET
+                        customer_account_id =
+                            COALESCE(customer_account_id, 0),
+                        customer_phone_key =
+                            COALESCE(customer_phone_key, ''),
+                        endpoint = COALESCE(endpoint, ''),
+                        p256dh = COALESCE(p256dh, ''),
+                        auth = COALESCE(auth, ''),
+                        is_active = COALESCE(is_active, TRUE),
+                        user_agent = COALESCE(user_agent, ''),
+                        created_at = COALESCE(created_at, NOW()),
+                        updated_at = COALESCE(updated_at, NOW())
+                    """
+                )
+            )
+
+            await session.commit()
+
+        logger.info(
+            "Customer push subscription database columns checked successfully"
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to prepare customer push subscription database columns"
+        )
+        raise
+
+
 async def ensure_offer_discount_columns() -> None:
     """Add discount fields to the existing offers table safely."""
 
@@ -311,6 +409,9 @@ async def initialize_database():
         await db_manager.create_tables()
 
         logger.info("🔧 Table creation completed")
+
+        await ensure_customer_push_columns()
+        logger.info("V9 customer push schema migration completed")
 
         await ensure_offer_discount_columns()
         await ensure_order_discount_columns()
