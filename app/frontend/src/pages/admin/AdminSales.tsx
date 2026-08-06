@@ -1,273 +1,532 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import {
+  ArrowLeft,
+  Banknote,
   BarChart3,
-  Bell,
   Bike,
-  ChefHat,
-  ClipboardList,
-  LogOut,
-  MessageSquare,
-  Package,
+  CalendarDays,
+  ChevronRight,
+  CircleDollarSign,
+  CreditCard,
+  Download,
+  PackageCheck,
+  Percent,
   RefreshCw,
-  Settings,
-  Shield,
+  Search,
   ShoppingBag,
-  Tag,
-  Users,
-  UtensilsCrossed,
+  TrendingDown,
+  TrendingUp,
+  Truck,
   Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { client, RestaurantSettings } from '@/lib/api';
+import { Input } from '@/components/ui/input';
+import { getAPIBaseURL } from '@/lib/config';
 
-interface AdminPermissions {
-  orders?: boolean;
-  menu?: boolean;
-  sales?: boolean;
-  customers?: boolean;
-  settings?: boolean;
-  deals?: boolean;
-  notifications?: boolean;
-  feedback?: boolean;
-  accounts?: boolean;
-  riders?: boolean;
-  kitchen?: boolean;
-  logs?: boolean;
+type FinancePeriod =
+  | 'today'
+  | 'yesterday'
+  | 'week'
+  | 'month'
+  | 'year'
+  | 'all'
+  | 'custom';
+
+interface FinanceTotals {
+  orders: number;
+  delivered_orders: number;
+  customer_total: number;
+  food_subtotal: number;
+  discount_amount: number;
+  shop_food_sale: number;
+  service_fee: number;
+  small_order_fee: number;
+  developer_fees: number;
+  delivery_charges: number;
+  rider_tips: number;
+  shop_tips: number;
+  rider_earnings: number;
+  cash_collected: number;
+  cash_payable_to_shop: number;
+  cash_orders: number;
+  card_orders: number;
 }
 
-function readAdminAuth(): {
-  valid: boolean;
-  superAdmin: boolean;
-  permissions: AdminPermissions;
-} {
+interface FinanceSummary {
+  period: {
+    key: FinancePeriod;
+    label: string;
+    date_from: string | null;
+    date_to: string | null;
+  };
+  totals: FinanceTotals;
+  settlements?: {
+    approved_cash: number;
+    awaiting_approval: number;
+    rejected_cash: number;
+    submissions: number;
+  };
+  current_balance?: {
+    cash_due_to_shop: number;
+    approved_cash: number;
+    awaiting_approval: number;
+    remaining_to_submit: number;
+    total_pending_cash: number;
+  };
+}
+
+interface ReportOrder {
+  id: number | string;
+  customer_name?: string;
+  customer_phone?: string;
+  payment_method?: string;
+  status?: string;
+  order_type?: string;
+  total_amount?: number;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  service_fee?: number;
+  small_order_fee?: number;
+  delivery_charge?: number;
+  tip_amount?: number;
+  tip_type?: string;
+  rider_name?: string;
+  items_json?: string;
+  created_at?: string;
+}
+
+interface DailyPoint {
+  date: string;
+  label: string;
+  revenue: number;
+  orders: number;
+}
+
+const PERIODS: Array<{ key: FinancePeriod; label: string }> = [
+  { key: 'today', label: 'Today' },
+  { key: 'yesterday', label: 'Yesterday' },
+  { key: 'week', label: '7 Days' },
+  { key: 'month', label: 'Month' },
+  { key: 'year', label: 'Year' },
+  { key: 'all', label: 'All Time' },
+  { key: 'custom', label: 'Custom' },
+];
+
+const EMPTY_TOTALS: FinanceTotals = {
+  orders: 0,
+  delivered_orders: 0,
+  customer_total: 0,
+  food_subtotal: 0,
+  discount_amount: 0,
+  shop_food_sale: 0,
+  service_fee: 0,
+  small_order_fee: 0,
+  developer_fees: 0,
+  delivery_charges: 0,
+  rider_tips: 0,
+  shop_tips: 0,
+  rider_earnings: 0,
+  cash_collected: 0,
+  cash_payable_to_shop: 0,
+  cash_orders: 0,
+  card_orders: 0,
+};
+
+function money(value: unknown): string {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toFixed(2) : '0.00';
+}
+
+function numeric(value: unknown): number {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function orderGrossSales(order: ReportOrder): number {
+  const riderTip =
+    String(order.tip_type || '').toLowerCase() === 'rider'
+      ? numeric(order.tip_amount)
+      : 0;
+
+  return Math.max(
+    numeric(order.total_amount) -
+      numeric(order.delivery_charge) -
+      riderTip,
+    0,
+  );
+}
+
+function isCountedOrder(order: ReportOrder): boolean {
+  const status = String(order.status || '').toLowerCase();
+  return status === 'completed';
+}
+
+function isCashPayment(method: string | undefined): boolean {
+  return String(method || '').toLowerCase().includes('cash');
+}
+
+function formatDate(value: string | undefined): string {
+  if (!value) return '-';
   try {
-    const auth = JSON.parse(localStorage.getItem('admin_auth') || '{}');
-    return {
-      valid: Boolean(auth.loggedIn),
-      superAdmin: auth.role === 'super_admin',
-      permissions: auth.permissions || {},
-    };
+    return new Date(value).toLocaleString('en-AE', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
   } catch {
-    return { valid: false, superAdmin: false, permissions: {} };
+    return value;
   }
 }
 
-export default function AdminDashboard() {
+function dateKey(value: string | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function escapeCsv(value: unknown): string {
+  const text = String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+export default function AdminSales() {
   const navigate = useNavigate();
 
+  const [period, setPeriod] = useState<FinancePeriod>('today');
+  const [customFrom, setCustomFrom] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [customTo, setCustomTo] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [summary, setSummary] = useState<FinanceSummary | null>(null);
+  const [orders, setOrders] = useState<ReportOrder[]>([]);
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [permissions, setPermissions] = useState<AdminPermissions>({});
-  const [restaurantStatus, setRestaurantStatus] = useState<
-    'open' | 'busy' | 'closed'
-  >('open');
-  const [settingsId, setSettingsId] = useState<number | null>(null);
 
   useEffect(() => {
-    const auth = readAdminAuth();
-    if (!auth.valid) {
+    try {
+      const auth = JSON.parse(localStorage.getItem('admin_auth') || '{}');
+      if (!auth.loggedIn) {
+        navigate('/admin');
+        return;
+      }
+    } catch {
       navigate('/admin');
       return;
     }
 
-    setIsSuperAdmin(auth.superAdmin);
-    setPermissions(auth.permissions);
-    void loadDashboard();
-
-    const interval = window.setInterval(() => {
-      void loadDashboard(true);
-    }, 30000);
-
-    return () => window.clearInterval(interval);
+    void loadData();
   }, []);
 
-  function hasPermission(key: keyof AdminPermissions): boolean {
-    return isSuperAdmin || Boolean(permissions[key]);
-  }
+  useEffect(() => {
+    if (period === 'custom') return;
+    void loadData(true);
+  }, [period]);
 
-  async function loadSettings(): Promise<void> {
-    try {
-      const response = await client.entities.restaurant_settings.query({
-        query: {},
-        limit: 1,
-      });
-
-      const settings = response?.data?.items?.[0] as RestaurantSettings | undefined;
-      if (!settings) return;
-
-      setSettingsId(Number(settings.id));
-      setRestaurantStatus(
-        (settings.restaurant_status || 'open') as 'open' | 'busy' | 'closed',
-      );
-    } catch (error) {
-      console.error('Failed to load restaurant settings:', error);
+  function summaryUrl(): string {
+    const params = new URLSearchParams({ period });
+    if (period === 'custom') {
+      params.set('date_from', customFrom);
+      params.set('date_to', customTo);
     }
+    return `/api/v1/finance/admin/summary?${params.toString()}`;
   }
 
-  async function loadDashboard(silent = false): Promise<void> {
+  async function loadData(silent = false): Promise<void> {
+    if (period === 'custom' && (!customFrom || !customTo)) {
+      toast.error('Select both custom dates');
+      return;
+    }
+
     if (!silent) setLoading(true);
     else setRefreshing(true);
 
     try {
-      await loadSettings();
+      const baseURL = getAPIBaseURL().replace(/\/$/, '');
+      const token = localStorage.getItem('fai_fai_admin_token') || '';
+      const adminHeaders = { Authorization: `Bearer ${token}` };
+      const [summaryResult, ordersResult] = await Promise.allSettled([
+        axios.get(`${baseURL}${summaryUrl()}`, {
+          headers: adminHeaders,
+          timeout: 20000,
+        }),
+        axios.get(`${baseURL}/api/v1/admin/orders`, {
+          params: { sort: '-created_at', limit: 2000 },
+          headers: adminHeaders,
+          timeout: 20000,
+        }),
+      ]);
+
+      if (summaryResult.status === 'fulfilled') {
+        setSummary(summaryResult.value.data as FinanceSummary);
+      } else {
+        console.error('Finance summary failed:', summaryResult.reason);
+        toast.error('Could not load the finance summary');
+      }
+
+      if (ordersResult.status === 'fulfilled') {
+        setOrders((ordersResult.value.data?.items || []) as ReportOrder[]);
+      } else {
+        console.error('Orders report failed:', ordersResult.reason);
+        toast.error('Could not load order details');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }
 
-  async function updateStatus(
-    status: 'open' | 'busy' | 'closed',
-  ): Promise<void> {
-    if (!settingsId) {
-      toast.error('Restaurant settings not loaded');
-      return;
-    }
+  const periodOrders = useMemo(() => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nextDay = new Date(todayStart);
+    nextDay.setDate(nextDay.getDate() + 1);
 
-    try {
-      await client.entities.restaurant_settings.update({
-        id: String(settingsId),
-        data: { restaurant_status: status },
-      });
-      setRestaurantStatus(status);
-      toast.success(`Shop is now ${status.toUpperCase()}`);
-    } catch {
-      toast.error('Could not update shop status');
-    }
-  }
+    return orders.filter(order => {
+      const created = new Date(order.created_at || '');
+      if (Number.isNaN(created.getTime())) return false;
 
-  function logout(): void {
-    localStorage.removeItem('admin_auth');
-    navigate('/admin');
-  }
+      if (period === 'today') {
+        return created >= todayStart && created < nextDay;
+      }
 
+      if (period === 'yesterday') {
+        const yesterdayStart = new Date(todayStart);
+        yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+        return created >= yesterdayStart && created < todayStart;
+      }
 
-  const navItems = useMemo(
-    () => [
-      {
-        path: '/admin/orders',
-        icon: ShoppingBag,
-        label: 'Orders',
-        subtitle: 'Live and past orders',
-        color: 'text-blue-400',
-        perm: 'orders' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/sales',
-        icon: BarChart3,
-        label: 'Sales & Reports',
-        subtitle: 'Revenue, fees and payments',
-        color: 'text-green-400',
-        perm: 'sales' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/finance',
-        icon: Wallet,
-        label: 'Finance & Rider Cash',
-        subtitle: 'Cash collection and settlement',
-        color: 'text-emerald-400',
-        perm: 'sales' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/menu',
-        icon: UtensilsCrossed,
-        label: 'Menu',
-        subtitle: 'Items, prices and categories',
-        color: 'text-cyan-400',
-        perm: 'menu' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/offers',
-        icon: Tag,
-        label: 'Offers',
-        subtitle: 'Discounts and promo codes',
-        color: 'text-pink-400',
-        perm: 'deals' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/deals',
-        icon: Package,
-        label: 'Deal Builder',
-        subtitle: 'Build combination deals',
-        color: 'text-orange-400',
-        perm: 'deals' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/customers',
-        icon: Users,
-        label: 'Customers',
-        subtitle: 'Customer accounts and history',
-        color: 'text-purple-400',
-        perm: 'customers' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/riders',
-        icon: Bike,
-        label: 'Rider Management',
-        subtitle: 'Riders and assignments',
-        color: 'text-fuchsia-400',
-        perm: 'riders' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/notifications',
-        icon: Bell,
-        label: 'Notifications',
-        subtitle: 'Send customer alerts',
-        color: 'text-yellow-400',
-        perm: 'notifications' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/feedback',
-        icon: MessageSquare,
-        label: 'Feedback',
-        subtitle: 'Ratings and comments',
-        color: 'text-sky-400',
-        perm: 'feedback' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/activity-logs',
-        icon: ClipboardList,
-        label: 'Activity Logs',
-        subtitle: 'Admin action history',
-        color: 'text-amber-400',
-        perm: 'logs' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/accounts',
-        icon: Shield,
-        label: 'Admin Accounts',
-        subtitle: 'Staff access and permissions',
-        color: 'text-indigo-400',
-        perm: 'accounts' as keyof AdminPermissions,
-      },
-      {
-        path: '/admin/settings',
-        icon: Settings,
-        label: 'Settings',
-        subtitle: 'Shop and app controls',
-        color: 'text-yellow-400',
-        perm: 'settings' as keyof AdminPermissions,
-      },
-      {
-        path: '/kitchen',
-        icon: ChefHat,
-        label: 'Kitchen Display',
-        subtitle: 'Open kitchen orders screen',
-        color: 'text-orange-400',
-        perm: 'kitchen' as keyof AdminPermissions,
-      },
-    ],
-    [],
+      if (period === 'week') {
+        const start = new Date(todayStart);
+        start.setDate(start.getDate() - 6);
+        return created >= start;
+      }
+
+      if (period === 'month') {
+        return (
+          created.getFullYear() === now.getFullYear() &&
+          created.getMonth() === now.getMonth()
+        );
+      }
+
+      if (period === 'year') {
+        return created.getFullYear() === now.getFullYear();
+      }
+
+      if (period === 'custom') {
+        const from = customFrom ? new Date(`${customFrom}T00:00:00`) : null;
+        const to = customTo ? new Date(`${customTo}T23:59:59`) : null;
+        return (!from || created >= from) && (!to || created <= to);
+      }
+
+      return true;
+    });
+  }, [orders, period, customFrom, customTo]);
+
+  const visibleOrders = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return periodOrders;
+
+    return periodOrders.filter(order =>
+      [
+        order.id,
+        order.customer_name,
+        order.customer_phone,
+        order.payment_method,
+        order.status,
+        order.rider_name,
+      ]
+        .map(value => String(value || '').toLowerCase())
+        .some(value => value.includes(query)),
+    );
+  }, [periodOrders, search]);
+
+  const countedOrders = useMemo(
+    () => periodOrders.filter(isCountedOrder),
+    [periodOrders],
   );
+
+  const paymentSplit = useMemo(() => {
+    return countedOrders.reduce(
+      (result, order) => {
+        const amount = orderGrossSales(order);
+        const isDelivery =
+          String(order.order_type || '').toLowerCase() === 'delivery';
+        const isCash = isCashPayment(order.payment_method);
+
+        if (isDelivery && isCash) {
+          result.deliveryCashSales += amount;
+          result.deliveryCashOrders += 1;
+        } else if (isDelivery) {
+          result.deliveryCardSales += amount;
+          result.deliveryCardOrders += 1;
+        } else if (isCash) {
+          result.pickupCashSales += amount;
+          result.pickupCashOrders += 1;
+        } else {
+          result.pickupCardSales += amount;
+          result.pickupCardOrders += 1;
+        }
+
+        return result;
+      },
+      {
+        pickupCashSales: 0,
+        pickupCardSales: 0,
+        deliveryCashSales: 0,
+        deliveryCardSales: 0,
+        pickupCashOrders: 0,
+        pickupCardOrders: 0,
+        deliveryCashOrders: 0,
+        deliveryCardOrders: 0,
+      },
+    );
+  }, [countedOrders]);
+
+  const bestSellers = useMemo(() => {
+    const items = new Map<string, { quantity: number; revenue: number }>();
+
+    countedOrders.forEach(order => {
+      try {
+        const parsed = JSON.parse(order.items_json || '[]');
+        if (!Array.isArray(parsed)) return;
+
+        parsed.forEach((item: any) => {
+          const name = String(item.name || 'Unknown item');
+          const quantity = Math.max(1, numeric(item.quantity));
+          const price = numeric(item.price);
+          const current = items.get(name) || { quantity: 0, revenue: 0 };
+          current.quantity += quantity;
+          current.revenue += price;
+          items.set(name, current);
+        });
+      } catch {
+        // Ignore invalid historical item JSON.
+      }
+    });
+
+    return [...items.entries()]
+      .map(([name, values]) => ({ name, ...values }))
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 8);
+  }, [countedOrders]);
+
+  const statusBreakdown = useMemo(() => {
+    const result = new Map<string, number>();
+    periodOrders.forEach(order => {
+      const status = String(order.status || 'unknown').toLowerCase();
+      result.set(status, (result.get(status) || 0) + 1);
+    });
+    return [...result.entries()].sort((a, b) => b[1] - a[1]);
+  }, [periodOrders]);
+
+  const dailyTrend = useMemo<DailyPoint[]>(() => {
+    const grouped = new Map<string, DailyPoint>();
+
+    countedOrders.forEach(order => {
+      const key = dateKey(order.created_at);
+      if (!key) return;
+
+      const current = grouped.get(key) || {
+        date: key,
+        label: new Date(`${key}T00:00:00`).toLocaleDateString('en-AE', {
+          day: '2-digit',
+          month: 'short',
+        }),
+        revenue: 0,
+        orders: 0,
+      };
+
+      current.revenue += orderGrossSales(order);
+      current.orders += 1;
+      grouped.set(key, current);
+    });
+
+    return [...grouped.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-14);
+  }, [countedOrders]);
+
+  const maxDailyRevenue = Math.max(
+    1,
+    ...dailyTrend.map(point => point.revenue),
+  );
+
+  const totals = summary?.totals || EMPTY_TOTALS;
+  const shopMustPayApp = numeric(totals.developer_fees);
+  const grossSales = numeric(totals.shop_food_sale) + shopMustPayApp;
+  const netShopSale = numeric(totals.shop_food_sale);
+
+  function exportCsv(): void {
+    const headers = [
+      'Order ID',
+      'Date',
+      'Customer',
+      'Phone',
+      'Payment',
+      'Status',
+      'Order Type',
+      'Subtotal',
+      'Discount',
+      'Service Fee',
+      'Small Order Fee',
+      'Delivery Charge',
+      'Tip',
+      'Customer Total',
+      'Rider',
+    ];
+
+    const rows = visibleOrders.map(order => [
+      order.id,
+      order.created_at,
+      order.customer_name,
+      order.customer_phone,
+      order.payment_method,
+      order.status,
+      order.order_type,
+      numeric(order.subtotal_amount),
+      numeric(order.discount_amount),
+      numeric(order.service_fee),
+      numeric(order.small_order_fee),
+      numeric(order.delivery_charge),
+      numeric(order.tip_amount),
+      numeric(order.total_amount),
+      order.rider_name,
+    ]);
+
+    const csv = [headers, ...rows]
+      .map(row => row.map(escapeCsv).join(','))
+      .join('\n');
+
+    const blob = new Blob([csv], {
+      type: 'text/csv;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `fai-fai-sales-${period}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success('Sales report downloaded');
+  }
 
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400">Loading Fai Fai dashboard...</div>
+        <div className="text-gray-400">Loading complete sales report...</div>
       </div>
     );
   }
@@ -275,95 +534,423 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-start justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-white text-2xl font-bold">Admin Dashboard</h1>
-            <p className="text-gray-400">Fai Fai Juice Management</p>
+        <div className="flex items-start gap-3 mb-5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate('/admin/dashboard')}
+            className="text-gray-400 hover:text-white mt-0.5"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
+
+          <div className="flex-1">
+            <h1 className="text-white text-2xl font-bold">Sales & Reports</h1>
+            <p className="text-gray-500 text-xs mt-1">
+              Clear shop sales, app payment and order report
+            </p>
           </div>
 
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void loadDashboard(true)}
-              disabled={refreshing}
-              className="text-gray-400 hover:text-white"
-              aria-label="Refresh dashboard"
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void loadData(true)}
+            disabled={refreshing}
+            className="text-gray-400 hover:text-white"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
 
-            <Button
-              variant="ghost"
-              onClick={logout}
-              className="text-gray-400 hover:text-white"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            onClick={exportCsv}
+            className="bg-emerald-600 hover:bg-emerald-500"
+          >
+            <Download className="w-4 h-4 mr-2" />
+            CSV
+          </Button>
         </div>
 
-        {hasPermission('settings') && (
-          <Card className="bg-gray-900 border-gray-800 p-4 mb-5">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <h2 className="text-white font-semibold text-sm">Restaurant Status</h2>
-                <p className="text-gray-500 text-xs mt-1">
-                  Controls whether customers can place an order
+        <Card className="bg-gray-900 border-gray-800 p-3 mb-5">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {PERIODS.map(option => (
+              <button
+                key={option.key}
+                onClick={() => setPeriod(option.key)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+                  period === option.key
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          {period === 'custom' && (
+            <div className="grid grid-cols-2 md:grid-cols-[1fr_1fr_auto] gap-2 mt-3">
+              <Input
+                type="date"
+                value={customFrom}
+                onChange={event => setCustomFrom(event.target.value)}
+                className="bg-gray-950 border-gray-700 text-white"
+              />
+              <Input
+                type="date"
+                value={customTo}
+                onChange={event => setCustomTo(event.target.value)}
+                className="bg-gray-950 border-gray-700 text-white"
+              />
+              <Button
+                onClick={() => void loadData(true)}
+                className="col-span-2 md:col-span-1 bg-emerald-600 hover:bg-emerald-500"
+              >
+                Apply Dates
+              </Button>
+            </div>
+          )}
+        </Card>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-[11px] uppercase font-semibold">
+                Gross Sales
+              </p>
+              <CircleDollarSign className="w-4 h-4 text-emerald-400" />
+            </div>
+            <p className="text-white text-2xl font-black mt-2">
+              AED {money(grossSales)}
+            </p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              Rider charges and rider tips excluded
+            </p>
+          </Card>
+
+          <Card className="bg-red-950/20 border-red-900/40 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-red-300 text-[11px] uppercase font-semibold">
+                Shop Must Pay App
+              </p>
+              <Percent className="w-4 h-4 text-red-400" />
+            </div>
+            <p className="text-red-400 text-2xl font-black mt-2">
+              -AED {money(shopMustPayApp)}
+            </p>
+            <p className="text-red-300/60 text-[11px] mt-1">
+              Service fee + small order fee
+            </p>
+          </Card>
+
+          <Card className="bg-emerald-950/25 border-emerald-900/40 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
+                Net Shop Sale
+              </p>
+              <Wallet className="w-4 h-4 text-emerald-400" />
+            </div>
+            <p className="text-white text-2xl font-black mt-2">
+              AED {money(netShopSale)}
+            </p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              Shop amount after app payment
+            </p>
+          </Card>
+
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-[11px] uppercase font-semibold">
+                Completed Orders
+              </p>
+              <PackageCheck className="w-4 h-4 text-blue-400" />
+            </div>
+            <p className="text-white text-2xl font-black mt-2">
+              {countedOrders.length}
+            </p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              Final sales only
+            </p>
+          </Card>
+        </div>
+
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-gray-500 text-xs uppercase font-semibold">
+                Simple Calculation
+              </p>
+              <p className="text-gray-300 text-sm mt-1">
+                Gross Sales AED {money(grossSales)} - Shop Must Pay App AED {money(shopMustPayApp)}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-gray-500 text-[10px] uppercase">Shop Keeps</p>
+              <p className="text-emerald-400 font-black">
+                AED {money(netShopSale)}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Wallet className="w-4 h-4 text-emerald-400" />
+            <div>
+              <h2 className="text-white font-semibold">Payment Split</h2>
+              <p className="text-gray-500 text-[11px] mt-0.5">
+                Rider delivery charges and rider tips are not included.
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              Pickup Sales
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-emerald-300 text-xs font-semibold uppercase">Pickup Cash</p>
+                  <Banknote className="w-5 h-5 text-emerald-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.pickupCashSales)}
+                </p>
+                <p className="text-emerald-300/60 text-[11px] mt-1">
+                  {paymentSplit.pickupCashOrders} completed orders
                 </p>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                {(['open', 'busy', 'closed'] as const).map(status => (
-                  <button
-                    key={status}
-                    onClick={() => void updateStatus(status)}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold capitalize transition ${
-                      restaurantStatus === status
-                        ? status === 'open'
-                          ? 'bg-green-600 text-white'
-                          : status === 'busy'
-                            ? 'bg-amber-500 text-black'
-                            : 'bg-red-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
+              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-blue-300 text-xs font-semibold uppercase">Pickup Card</p>
+                  <CreditCard className="w-5 h-5 text-blue-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.pickupCardSales)}
+                </p>
+                <p className="text-blue-300/60 text-[11px] mt-1">
+                  {paymentSplit.pickupCardOrders} completed orders
+                </p>
               </div>
             </div>
-          </Card>
-        )}
+          </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          {navItems
-            .filter(item =>
-              item.path === '/admin/sales'
-                ? hasPermission('sales') || hasPermission('orders')
-                : hasPermission(item.perm),
-            )
-            .map(item => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.path}
-                  type="button"
-                  onClick={() => navigate(item.path)}
-                  className="text-left"
-                >
-                  <Card className="bg-gray-900 border-gray-800 p-5 h-full hover:bg-gray-800/80 hover:border-gray-700 transition">
-                    <Icon className={`w-7 h-7 ${item.color} mb-4`} />
-                    <h3 className="text-white font-semibold">{item.label}</h3>
-                    <p className="text-gray-500 text-[11px] mt-1 leading-4">
-                      {item.subtitle}
-                    </p>
-                  </Card>
-                </button>
-              );
-            })}
+          <div>
+            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              Delivery Sales
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-emerald-300 text-xs font-semibold uppercase">Delivery Cash</p>
+                  <Truck className="w-5 h-5 text-emerald-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.deliveryCashSales)}
+                </p>
+                <p className="text-emerald-300/60 text-[11px] mt-1">
+                  {paymentSplit.deliveryCashOrders} completed orders
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-blue-300 text-xs font-semibold uppercase">Delivery Card</p>
+                  <CreditCard className="w-5 h-5 text-blue-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.deliveryCardSales)}
+                </p>
+                <p className="text-blue-300/60 text-[11px] mt-1">
+                  {paymentSplit.deliveryCardOrders} completed orders
+                </p>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid lg:grid-cols-2 gap-4 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp className="w-4 h-4 text-emerald-400" />
+              <h2 className="text-white font-semibold">Sales Trend</h2>
+            </div>
+
+            {dailyTrend.length === 0 ? (
+              <div className="h-44 flex items-center justify-center text-gray-600 text-sm">
+                No sales in this period
+              </div>
+            ) : (
+              <div className="h-44 flex items-end gap-2 overflow-x-auto pb-1">
+                {dailyTrend.map(point => (
+                  <div
+                    key={point.date}
+                    className="min-w-[38px] flex-1 h-full flex flex-col justify-end items-center gap-1"
+                    title={`${point.label}: AED ${money(point.revenue)} · ${point.orders} orders`}
+                  >
+                    <span className="text-gray-500 text-[9px]">
+                      {point.orders}
+                    </span>
+                    <div
+                      className="w-full max-w-[34px] bg-emerald-500/70 rounded-t-lg min-h-[4px]"
+                      style={{
+                        height: `${Math.max(
+                          4,
+                          (point.revenue / maxDailyRevenue) * 125,
+                        )}px`,
+                      }}
+                    />
+                    <span className="text-gray-600 text-[9px] whitespace-nowrap">
+                      {point.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
         </div>
+
+        <div className="grid lg:grid-cols-2 gap-4 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <ShoppingBag className="w-4 h-4 text-cyan-400" />
+              <h2 className="text-white font-semibold">Best Sellers</h2>
+            </div>
+
+            {bestSellers.length === 0 ? (
+              <p className="text-gray-600 text-sm">No item sales in this period</p>
+            ) : (
+              <div className="space-y-2">
+                {bestSellers.map((item, index) => (
+                  <div
+                    key={item.name}
+                    className="flex items-center gap-3 bg-gray-950/70 rounded-xl px-3 py-2.5"
+                  >
+                    <span className="w-6 h-6 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-bold flex items-center justify-center">
+                      {index + 1}
+                    </span>
+                    <span className="text-gray-200 text-sm flex-1 truncate">
+                      {item.name}
+                    </span>
+                    <span className="text-white text-sm font-bold">
+                      {item.quantity}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <CalendarDays className="w-4 h-4 text-purple-400" />
+              <h2 className="text-white font-semibold">Order Status</h2>
+            </div>
+
+            {statusBreakdown.length === 0 ? (
+              <p className="text-gray-600 text-sm">No orders in this period</p>
+            ) : (
+              <div className="space-y-2">
+                {statusBreakdown.map(([status, count]) => (
+                  <div
+                    key={status}
+                    className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5"
+                  >
+                    <span className="text-gray-300 text-sm capitalize">{status}</span>
+                    <span className="text-white font-bold">{count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <Card className="bg-gray-900 border-gray-800 overflow-hidden">
+          <div className="p-4 border-b border-gray-800">
+            <div className="flex flex-col md:flex-row md:items-center gap-3">
+              <div>
+                <h2 className="text-white font-semibold">Order Report</h2>
+                <p className="text-gray-500 text-xs mt-1">
+                  Showing {visibleOrders.length} orders
+                </p>
+              </div>
+
+              <div className="md:ml-auto relative w-full md:w-80">
+                <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  value={search}
+                  onChange={event => setSearch(event.target.value)}
+                  placeholder="Order, customer, phone, payment..."
+                  className="pl-9 bg-gray-950 border-gray-700 text-white"
+                />
+              </div>
+            </div>
+          </div>
+
+          {visibleOrders.length === 0 ? (
+            <div className="p-10 text-center text-gray-600">
+              No matching orders
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-800">
+              {visibleOrders.slice(0, 300).map(order => (
+                <div key={String(order.id)} className="p-4 hover:bg-gray-800/30">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                        isCashPayment(order.payment_method)
+                          ? 'bg-green-500/10'
+                          : 'bg-blue-500/10'
+                      }`}
+                    >
+                      {isCashPayment(order.payment_method) ? (
+                        <Banknote className="w-5 h-5 text-green-400" />
+                      ) : (
+                        <CreditCard className="w-5 h-5 text-blue-400" />
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-white font-semibold">
+                          Order #{order.id}
+                        </span>
+                        <span className="text-gray-500 text-xs capitalize">
+                          {order.status || 'unknown'}
+                        </span>
+                        <span className="text-gray-600 text-xs">
+                          {order.order_type || ''}
+                        </span>
+                      </div>
+
+                      <p className="text-gray-300 text-sm mt-1 truncate">
+                        {order.customer_name || 'Guest'} · {order.payment_method || '-'}
+                      </p>
+                      <p className="text-gray-600 text-[11px] mt-1">
+                        {formatDate(order.created_at)}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-white font-black">
+                        AED {money(order.total_amount)}
+                      </p>
+                      <p className="text-gray-600 text-[10px] mt-1">
+                        Fees AED {money(
+                          numeric(order.service_fee) +
+                            numeric(order.small_order_fee) +
+                            numeric(order.delivery_charge),
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   );
