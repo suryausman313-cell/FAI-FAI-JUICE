@@ -18,7 +18,7 @@ function isSupported(): boolean {
 }
 
 function apiUrl(path: string): string {
-  return `${getAPIBaseURL()}${path}`;
+  return `${getAPIBaseURL().replace(/\/$/, '')}${path}`;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
