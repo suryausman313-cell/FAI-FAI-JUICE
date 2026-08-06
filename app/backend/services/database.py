@@ -52,6 +52,18 @@ async def ensure_customer_push_columns() -> None:
         """,
         """
         ALTER TABLE customer_push_subscriptions
+        ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(50) DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ALTER COLUMN customer_phone SET DEFAULT ''
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
+        ALTER COLUMN customer_phone DROP NOT NULL
+        """,
+        """
+        ALTER TABLE customer_push_subscriptions
         ADD COLUMN IF NOT EXISTS endpoint TEXT DEFAULT ''
         """,
         """
@@ -108,7 +120,18 @@ async def ensure_customer_push_columns() -> None:
                         customer_account_id =
                             COALESCE(customer_account_id, 0),
                         customer_phone_key =
-                            COALESCE(customer_phone_key, ''),
+                            COALESCE(
+                                NULLIF(customer_phone_key, ''),
+                                REGEXP_REPLACE(
+                                    COALESCE(customer_phone, ''),
+                                    '[^0-9]',
+                                    '',
+                                    'g'
+                                ),
+                                ''
+                            ),
+                        customer_phone =
+                            COALESCE(customer_phone, ''),
                         endpoint = COALESCE(endpoint, ''),
                         p256dh = COALESCE(p256dh, ''),
                         auth = COALESCE(auth, ''),
