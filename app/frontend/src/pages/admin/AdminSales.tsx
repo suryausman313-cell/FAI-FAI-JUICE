@@ -389,6 +389,41 @@ export default function AdminSales() {
     [periodOrders],
   );
 
+  const paymentSplit = useMemo(() => {
+    return countedOrders.reduce(
+      (result, order) => {
+        const saleAmount = orderGrossSales(order);
+        const isDelivery = String(order.order_type || '').toLowerCase() === 'delivery';
+        const isCash = isCashPayment(order.payment_method);
+
+        if (isDelivery && isCash) {
+          result.deliveryCashSales += saleAmount;
+          result.deliveryCashOrders += 1;
+        } else if (isDelivery) {
+          result.deliveryCardSales += saleAmount;
+          result.deliveryCardOrders += 1;
+        } else if (isCash) {
+          result.pickupCashSales += saleAmount;
+          result.pickupCashOrders += 1;
+        } else {
+          result.pickupCardSales += saleAmount;
+          result.pickupCardOrders += 1;
+        }
+
+        return result;
+      },
+      {
+        pickupCashSales: 0,
+        pickupCardSales: 0,
+        deliveryCashSales: 0,
+        deliveryCardSales: 0,
+        pickupCashOrders: 0,
+        pickupCardOrders: 0,
+        deliveryCashOrders: 0,
+        deliveryCardOrders: 0,
+      },
+    );
+  }, [countedOrders]);
 
   const bestSellers = useMemo(() => {
     const items = new Map<string, { quantity: number; revenue: number }>();
@@ -688,6 +723,91 @@ export default function AdminSales() {
           </div>
         </Card>
 
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Wallet className="w-4 h-4 text-emerald-400" />
+            <div>
+              <h2 className="text-white font-semibold">Payment Split</h2>
+              <p className="text-gray-500 text-[11px] mt-0.5">
+                Pickup and delivery sales are separated by cash and card. Rider charges and tips are excluded.
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              Pickup Sales
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-emerald-300 text-xs font-semibold uppercase">
+                    Pickup Cash
+                  </p>
+                  <Banknote className="w-5 h-5 text-emerald-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.pickupCashSales)}
+                </p>
+                <p className="text-emerald-300/60 text-[11px] mt-1">
+                  {paymentSplit.pickupCashOrders} completed {paymentSplit.pickupCashOrders === 1 ? 'order' : 'orders'}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-blue-300 text-xs font-semibold uppercase">
+                    Pickup Card
+                  </p>
+                  <CreditCard className="w-5 h-5 text-blue-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.pickupCardSales)}
+                </p>
+                <p className="text-blue-300/60 text-[11px] mt-1">
+                  {paymentSplit.pickupCardOrders} completed {paymentSplit.pickupCardOrders === 1 ? 'order' : 'orders'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              Delivery Sales
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-emerald-300 text-xs font-semibold uppercase">
+                    Delivery Cash
+                  </p>
+                  <Banknote className="w-5 h-5 text-emerald-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.deliveryCashSales)}
+                </p>
+                <p className="text-emerald-300/60 text-[11px] mt-1">
+                  {paymentSplit.deliveryCashOrders} completed {paymentSplit.deliveryCashOrders === 1 ? 'order' : 'orders'}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-blue-300 text-xs font-semibold uppercase">
+                    Delivery Card
+                  </p>
+                  <CreditCard className="w-5 h-5 text-blue-400" />
+                </div>
+                <p className="text-white text-xl font-black mt-3">
+                  AED {money(paymentSplit.deliveryCardSales)}
+                </p>
+                <p className="text-blue-300/60 text-[11px] mt-1">
+                  {paymentSplit.deliveryCardOrders} completed {paymentSplit.deliveryCardOrders === 1 ? 'order' : 'orders'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </Card>
 
         <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
           <div className="flex items-center gap-2 mb-4">
