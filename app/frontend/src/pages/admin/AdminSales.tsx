@@ -339,7 +339,11 @@ export default function AdminDashboard() {
 
         <div className="grid grid-cols-2 gap-4">
           {navItems
-            .filter(item => hasPermission(item.perm))
+            .filter(item =>
+              item.path === '/admin/sales'
+                ? hasPermission('sales') || hasPermission('orders')
+                : hasPermission(item.perm),
+            )
             .map(item => {
               const Icon = item.icon;
               return (
