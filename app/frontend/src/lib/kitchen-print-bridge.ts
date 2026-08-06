@@ -34,11 +34,11 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   paper_width: '80mm',
   auto_print_on_accept: true,
 
-  restaurant_name: 'Vita Napoli',
-  show_logo: false,
-  logo_url: '',
-  header_text: 'Kitchen Order',
-  footer_text: 'Thank you',
+  restaurant_name: 'Fai Fai Juice',
+  show_logo: true,
+  logo_url: '/fai-fai-receipt-logo.png',
+  header_text: 'Shop #18, Murbha St - Al Oroba Club Street\nFujairah, UAE\n052 3187415',
+  footer_text: 'Thank you for ordering from Fai Fai Juice!',
 
   show_customer_phone: true,
   show_customer_address: true,
@@ -164,15 +164,42 @@ function itemPrice(item: any): number {
   );
 }
 
+
+function receiptLogoUrl(settings: ReceiptSettings): string {
+  const configured = String(settings.logo_url || '').trim();
+
+  if (configured) {
+    try {
+      return new URL(configured, window.location.origin).toString();
+    } catch {
+      return configured;
+    }
+  }
+
+  return `${window.location.origin}/fai-fai-receipt-logo.png`;
+}
+
 function browserReceiptHtml(
   order: Order,
   settings: ReceiptSettings,
-  mode: PrintMode,
+  _mode: PrintMode,
 ): string {
   const notes = parseOrderNotes(order.order_notes);
   const items = parseItems(order);
-  const width = settings.paper_width === '58mm' ? '220px' : '300px';
-  const title = mode === 'copy' ? 'REPRINT / COPY' : 'KITCHEN ORDER';
+  const receiptWidth = settings.paper_width === '58mm' ? '52mm' : '74mm';
+  const createdAt = new Date(order.created_at);
+  const dateText = createdAt.toLocaleDateString('en-GB', {
+    timeZone: 'Asia/Dubai',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  const timeText = createdAt.toLocaleTimeString('en-AE', {
+    timeZone: 'Asia/Dubai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 
   const escapeHtml = (value: unknown) =>
     String(value ?? '')
@@ -182,81 +209,232 @@ function browserReceiptHtml(
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
 
+  const preserveLines = (value: unknown) =>
+    escapeHtml(value).replace(/\r?\n/g, '<br />');
+
+  const displayPayment = String(order.payment_method || 'Cash')
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+
+  const brandNameHtml = /fai\s*fai\s*juice/i.test(settings.restaurant_name)
+    ? '<span class="brand-green">Fai</span> <span class="brand-orange">Fai</span> <span class="brand-black">Juice</span>'
+    : escapeHtml(settings.restaurant_name);
+
   const itemsHtml = items
     .map(item => {
       const extras = Array.isArray(item?.extras) ? item.extras : [];
       const price = itemPrice(item);
+      const itemName = `${String(item?.name || 'Item')}${
+        item?.size ? ` (${String(item.size)})` : ''
+      }`;
 
       return `
-        <div style="margin:7px 0">
-          <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:bold">
-            <span>${escapeHtml(item?.quantity || 1)}x ${escapeHtml(item?.name || 'Item')}</span>
+        <div class="item-row">
+          <div class="item-qty">${escapeHtml(item?.quantity || 1)}</div>
+          <div class="item-main">
+            <div class="item-name">${escapeHtml(itemName)}</div>
             ${
-              settings.show_item_prices
-                ? `<span>AED ${price.toFixed(2)}</span>`
+              extras.length
+                ? `<div class="item-extras">+ ${escapeHtml(extras.join(', '))}</div>`
                 : ''
             }
           </div>
-          ${
-            item?.size
-              ? `<div style="font-size:12px;margin-left:10px">Size: ${escapeHtml(item.size)}</div>`
-              : ''
-          }
-          ${
-            extras.length
-              ? `<div style="font-size:12px;margin-left:10px">+ ${escapeHtml(extras.join(', '))}</div>`
-              : ''
-          }
+          <div class="item-price">${
+            settings.show_item_prices ? `AED ${price.toFixed(2)}` : ''
+          }</div>
         </div>
       `;
     })
     .join('');
 
-  const logo = settings.show_logo && settings.logo_url
-    ? `<img src="${escapeHtml(settings.logo_url)}" style="max-width:120px;max-height:85px;object-fit:contain;margin:0 auto 6px;display:block" />`
+  const feeRows = [
+    ['Service Fee', money(order.service_fee)],
+    ['Small Order Fee', money(order.small_order_fee)],
+    ['Delivery Fee', money(order.delivery_charge)],
+    ['Tip', money(order.tip_amount)],
+  ]
+    .filter(([, amount]) => Number(amount) > 0)
+    .map(
+      ([label, amount]) => `
+        <div class="money-row">
+          <span>${escapeHtml(label)}</span>
+          <strong>AED ${Number(amount).toFixed(2)}</strong>
+        </div>
+      `,
+    )
+    .join('');
+
+  const logoUrl = receiptLogoUrl(settings);
+  const logo = settings.show_logo
+    ? `<img class="logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(settings.restaurant_name)} logo" />`
     : '';
 
   return `<!doctype html>
 <html>
 <head>
+  <meta charset="utf-8" />
   <title>Order #${order.id}</title>
   <style>
-    @page { margin: 2mm; }
-    body { font-family: Arial, sans-serif; width:100%; max-width:${width}; margin:0 auto; padding:4px; color:#000; }
-    .center { text-align:center; }
-    .line { border-top:1px dashed #000; margin:8px 0; }
-    .row { display:flex; justify-content:space-between; gap:10px; font-size:12px; margin:3px 0; }
+    @page { size: ${settings.paper_width}; margin: 2mm; }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    html, body { margin: 0; padding: 0; background: #fff; color: #111; }
+    body {
+      width: 100%;
+      max-width: ${receiptWidth};
+      margin: 0 auto;
+      padding: 2mm 1.5mm 3mm;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .center { text-align: center; }
+    .logo {
+      display: block;
+      width: auto;
+      max-width: 37mm;
+      max-height: 25mm;
+      object-fit: contain;
+      margin: 0 auto 2mm;
+    }
+    .brand {
+      text-align: center;
+      font-size: 23px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -0.7px;
+      margin: 0 0 1.5mm;
+    }
+    .brand-green { color: #087a3b; }
+    .brand-orange { color: #f05a17; }
+    .brand-black { color: #111; }
+    .shop-details {
+      text-align: center;
+      font-size: 10px;
+      line-height: 1.45;
+      margin-bottom: 3mm;
+    }
+    .solid-line { border-top: 1.5px solid #111; margin: 2.5mm 0; }
+    .dash-line { border-top: 1px dashed #555; margin: 2mm 0; }
+    .order-number {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: 0.2px;
+      margin: 1.5mm 0;
+    }
+    .detail-row {
+      display: grid;
+      grid-template-columns: 27mm 1fr;
+      gap: 2mm;
+      margin: 1.1mm 0;
+      align-items: start;
+    }
+    .detail-label { font-weight: 700; }
+    .detail-value { text-align: right; overflow-wrap: anywhere; }
+    .table-head {
+      display: grid;
+      grid-template-columns: 10mm 1fr 24mm;
+      gap: 1mm;
+      background: #111;
+      color: #fff;
+      border-radius: 1.5mm;
+      padding: 2mm 1.5mm;
+      margin-top: 2.5mm;
+      font-size: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .table-head div:last-child { text-align: right; }
+    .item-row {
+      display: grid;
+      grid-template-columns: 10mm 1fr 24mm;
+      gap: 1mm;
+      align-items: start;
+      padding: 2.4mm 1.5mm;
+      border-bottom: 1px dashed #777;
+    }
+    .item-qty { font-size: 12px; font-weight: 800; }
+    .item-name { font-size: 12px; font-weight: 900; }
+    .item-extras { margin-top: 0.8mm; font-size: 9px; font-weight: 600; }
+    .item-price { text-align: right; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .money-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 4mm;
+      margin: 1.5mm 0;
+      font-size: 11px;
+    }
+    .grand-total {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 3mm;
+      border-top: 1.5px solid #111;
+      border-bottom: 1.5px solid #111;
+      padding: 2.5mm 0;
+      margin-top: 2.5mm;
+      font-weight: 900;
+    }
+    .grand-total .label { font-size: 17px; }
+    .grand-total .amount { font-size: 22px; white-space: nowrap; }
+    .footer {
+      text-align: center;
+      margin-top: 4mm;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+    @media print {
+      body { max-width: ${receiptWidth}; }
+    }
   </style>
 </head>
 <body>
   ${logo}
-  <div class="center" style="font-size:21px;font-weight:bold">${escapeHtml(settings.restaurant_name)}</div>
-  <div class="center" style="font-size:12px">${escapeHtml(settings.header_text)}</div>
-  <div class="center" style="font-size:14px;font-weight:bold;margin-top:5px">${title}</div>
-  <div class="center" style="font-size:26px;font-weight:bold">ORDER #${order.id}</div>
-  <div class="center" style="font-size:12px">${escapeHtml(notes.orderType)} · ${escapeHtml(new Date(order.created_at).toLocaleString('en-AE', { timeZone: 'Asia/Dubai' }))}</div>
-  <div class="line"></div>
-  <div><strong>Customer:</strong> ${escapeHtml(order.customer_name)}</div>
-  ${settings.show_customer_phone ? `<div><strong>Phone:</strong> ${escapeHtml(order.customer_phone)}</div>` : ''}
-  ${settings.show_customer_address && notes.address ? `<div><strong>Address:</strong> ${escapeHtml(notes.address)}</div>` : ''}
-  ${settings.show_payment_method ? `<div><strong>Payment:</strong> ${escapeHtml(order.payment_method || 'Cash')}</div>` : ''}
-  <div class="line"></div>
-  ${itemsHtml}
-  ${notes.customerNote ? `<div class="line"></div><div style="border:1px solid #000;padding:5px;font-weight:bold">NOTE: ${escapeHtml(notes.customerNote)}</div>` : ''}
+  <div class="brand">${brandNameHtml}</div>
+  <div class="shop-details">${preserveLines(settings.header_text)}</div>
+
+  <div class="solid-line"></div>
+  <div class="order-number">ORDER #${order.id}</div>
+  <div class="solid-line"></div>
+
+  <div class="detail-row"><span class="detail-label">Date</span><span class="detail-value">${escapeHtml(dateText)}</span></div>
+  <div class="detail-row"><span class="detail-label">Time</span><span class="detail-value">${escapeHtml(timeText)}</span></div>
+  <div class="detail-row"><span class="detail-label">Order Type</span><span class="detail-value">${escapeHtml(notes.orderType)}</span></div>
+  ${
+    settings.show_payment_method
+      ? `<div class="detail-row"><span class="detail-label">Payment</span><span class="detail-value">${escapeHtml(displayPayment)}</span></div>`
+      : ''
+  }
+
+  <div class="dash-line"></div>
+  <div class="detail-row"><span class="detail-label">Customer</span><span class="detail-value">${escapeHtml(order.customer_name || 'Customer')}</span></div>
+  ${
+    settings.show_customer_phone
+      ? `<div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value">${escapeHtml(order.customer_phone || '')}</span></div>`
+      : ''
+  }
+
+  <div class="table-head"><div>Qty</div><div>Item</div><div>Price</div></div>
+  ${itemsHtml || '<div class="item-row"><div>1</div><div class="item-name">Item</div><div></div></div>'}
+
   ${
     settings.show_order_totals
       ? `
-        <div class="line"></div>
-        <div class="row"><span>Service Fee</span><span>AED ${money(order.service_fee).toFixed(2)}</span></div>
-        <div class="row"><span>Small Order Fee</span><span>AED ${money(order.small_order_fee).toFixed(2)}</span></div>
-        <div class="row"><span>Delivery</span><span>AED ${money(order.delivery_charge).toFixed(2)}</span></div>
-        <div class="row"><span>Tip</span><span>AED ${money(order.tip_amount).toFixed(2)}</span></div>
-        <div class="row" style="font-size:17px;font-weight:bold"><span>TOTAL</span><span>AED ${money(order.total_amount).toFixed(2)}</span></div>
+        <div style="margin-top:2mm">${feeRows}</div>
+        <div class="grand-total">
+          <span class="label">GRAND TOTAL</span>
+          <span class="amount">AED ${money(order.total_amount).toFixed(2)}</span>
+        </div>
       `
       : ''
   }
-  <div class="line"></div>
-  <div class="center" style="font-size:11px">${escapeHtml(settings.footer_text)}</div>
+
+  <div class="footer">${preserveLines(settings.footer_text)}</div>
 </body>
 </html>`;
 }
@@ -313,7 +491,7 @@ function payloadFor(
     receipt: {
       restaurantName: settings.restaurant_name,
       showLogo: settings.show_logo,
-      logoUrl: settings.logo_url,
+      logoUrl: receiptLogoUrl(settings),
       headerText: settings.header_text,
       footerText: settings.footer_text,
       showCustomerPhone: settings.show_customer_phone,
@@ -396,7 +574,7 @@ export async function printKitchenOrder(
   window.setTimeout(() => {
     printWindow.print();
     window.setTimeout(() => printWindow.close(), 800);
-  }, 350);
+  }, 900);
 
   if (mode === 'original') {
     markOriginalPrinted(order.id);
