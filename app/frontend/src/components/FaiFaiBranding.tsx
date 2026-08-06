@@ -81,6 +81,7 @@ function preserveWhitespace(
 ): string {
   const leading = original.match(/^\s*/)?.[0] || '';
   const trailing = original.match(/\s*$/)?.[0] || '';
+
   return `${leading}${replacement}${trailing}`;
 }
 
@@ -112,23 +113,36 @@ function replaceBrandText(
   }
 
   const replacements: Array<[RegExp, string]> = [
-    [/VITA[\s\u00a0_-]*NAPOLI[\s\u00a0_-]*PIZZA/gi, brand.shop_name],
+    [
+      /VITA[\s\u00a0_-]*NAPOLI[\s\u00a0_-]*PIZZA/gi,
+      brand.shop_name,
+    ],
     [/VITA[\s\u00a0_-]*NAPOLI/gi, brand.shop_name],
     [/VITANAPOLI/gi, brand.short_name],
-    [/vita-napoli/gi, brand.short_name.toLowerCase().replace(/\s+/g, '-')],
-    [/FAI[\s\u00a0_-]*FAI[\s\u00a0_-]*JUICE/gi, brand.shop_name],
+    [
+      /vita-napoli/gi,
+      brand.short_name.toLowerCase().replace(/\s+/g, '-'),
+    ],
+    [
+      /FAI[\s\u00a0_-]*FAI[\s\u00a0_-]*JUICE/gi,
+      brand.shop_name,
+    ],
+
+    // Sirf purane restaurant numbers replace honge.
     [/\+971\s*54\s*294\s*0112/g, brand.phone],
     [/\+971\s*52\s*109\s*1092/g, brand.phone],
     [/\+971542940112/g, brand.phone.replace(/\s+/g, '')],
     [/\+971521091092/g, brand.phone.replace(/\s+/g, '')],
     [/971542940112/g, brand.whatsapp],
     [/971521091092/g, brand.whatsapp],
+
     [/Authentic Italian Pizza/gi, brand.slogan],
     [/Italian pizza and pasta/gi, brand.slogan],
     [/Fresh Juices, Desserts & Beverages/gi, brand.slogan],
   ];
 
   let next = value;
+
   for (const [pattern, replacement] of replacements) {
     next = next.replace(pattern, replacement);
   }
@@ -167,7 +181,10 @@ function updateMetadata(brand: BrandSettings): void {
   const themeMeta = document.querySelector<HTMLMetaElement>(
     'meta[name="theme-color"]',
   );
-  if (themeMeta) themeMeta.content = panel.color;
+
+  if (themeMeta) {
+    themeMeta.content = panel.color;
+  }
 
   let iconLink =
     document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -188,6 +205,7 @@ function applyTheme(brand: BrandSettings): void {
     '--brand-primary',
     brand.primary_color,
   );
+
   document.documentElement.style.setProperty(
     '--brand-panel',
     panel.color,
@@ -207,16 +225,20 @@ function applyTheme(brand: BrandSettings): void {
     .bg-red-600, .bg-green-600.brand-primary {
       background-color: ${brand.primary_color} !important;
     }
+
     .hover\\:bg-red-700:hover {
       background-color: ${brand.primary_color} !important;
       filter: brightness(.88);
     }
+
     .text-red-600, .text-red-500 {
       color: ${brand.primary_color} !important;
     }
+
     .border-red-600, .border-red-500 {
       border-color: ${brand.primary_color} !important;
     }
+
     .ring-red-600 {
       --tw-ring-color: ${brand.primary_color} !important;
     }
@@ -244,7 +266,11 @@ function replaceExactContainers(
       'h1, h2, h3, header a, header div, nav a',
     )
     .forEach((element) => {
-      if (element.querySelector('button, input, textarea, select')) {
+      if (
+        element.querySelector(
+          'button, input, textarea, select',
+        )
+      ) {
         return;
       }
 
@@ -271,29 +297,39 @@ function replaceAttributes(
       '[title], [aria-label], [placeholder], [alt], a[href]',
     )
     .forEach((element) => {
-      ['title', 'aria-label', 'placeholder', 'alt'].forEach(
-        (attribute) => {
-          const current = element.getAttribute(attribute);
-          if (!current) return;
+      [
+        'title',
+        'aria-label',
+        'placeholder',
+        'alt',
+      ].forEach((attribute) => {
+        const current = element.getAttribute(attribute);
 
-          const next = replaceBrandText(current, brand);
-          if (next !== current) {
-            element.setAttribute(attribute, next);
-          }
-        },
-      );
+        if (!current) {
+          return;
+        }
+
+        const next = replaceBrandText(current, brand);
+
+        if (next !== current) {
+          element.setAttribute(attribute, next);
+        }
+      });
 
       if (element instanceof HTMLAnchorElement) {
         const href = element.getAttribute('href') || '';
-        let next = replaceBrandText(href, brand);
 
-        if (/^tel:/i.test(href)) {
-          next = `tel:${brand.phone.replace(/\s+/g, '')}`;
-        }
-
-        if (/wa\.me\//i.test(href)) {
-          next = `https://wa.me/${brand.whatsapp.replace(/\D/g, '')}`;
-        }
+        /*
+         * Sirf URL ke andar maujood purane restaurant
+         * numbers aur purana brand replace hoga.
+         *
+         * Har tel: ya wa.me link ko shop number mein
+         * convert nahi karega.
+         *
+         * Is wajah se rider ka dynamic WhatsApp number
+         * bilkul change nahi hoga.
+         */
+        const next = replaceBrandText(href, brand);
 
         if (next !== href) {
           element.setAttribute('href', next);
@@ -308,8 +344,9 @@ function replaceLogos(
 ): void {
   const panel = panelDetails(brand);
 
-  root.querySelectorAll?.<HTMLImageElement>('img').forEach(
-    (image) => {
+  root
+    .querySelectorAll?.<HTMLImageElement>('img')
+    .forEach((image) => {
       const fingerprint = [
         image.getAttribute('src') || '',
         image.getAttribute('alt') || '',
@@ -320,15 +357,16 @@ function replaceLogos(
 
       const oldLogo =
         /vita|napoli/.test(fingerprint) ||
-        (/logo/.test(fingerprint) &&
-          !/menu|product|item|category/.test(fingerprint));
+        (
+          /logo/.test(fingerprint) &&
+          !/menu|product|item|category/.test(fingerprint)
+        );
 
       if (oldLogo) {
         image.src = panel.logo;
         image.alt = brand.shop_name;
       }
-    },
-  );
+    });
 }
 
 function replaceTree(
@@ -339,36 +377,48 @@ function replaceTree(
     root,
     NodeFilter.SHOW_TEXT,
   );
+
   const nodes: Text[] = [];
 
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
 
-    if (node.parentElement?.closest('script, style, textarea')) {
+    if (
+      node.parentElement?.closest(
+        'script, style, textarea',
+      )
+    ) {
       continue;
     }
 
     nodes.push(node);
   }
 
-  nodes.forEach((node) => replaceTextNode(node, brand));
+  nodes.forEach((node) => {
+    replaceTextNode(node, brand);
+  });
+
   replaceAttributes(root, brand);
   replaceLogos(root, brand);
   replaceExactContainers(root, brand);
 }
 
-function saveLocalBrand(brand: BrandSettings): void {
+function saveLocalBrand(
+  brand: BrandSettings,
+): void {
   try {
     localStorage.setItem(
       'fai_fai_brand_settings',
       JSON.stringify(brand),
     );
   } catch {
-    // Branding should never crash the app.
+    // Branding error ki wajah se app crash nahi hogi.
   }
 }
 
-function applyBrand(brand: BrandSettings): void {
+function applyBrand(
+  brand: BrandSettings,
+): void {
   currentBrand = {
     ...DEFAULT_BRAND_SETTINGS,
     ...brand,
@@ -385,26 +435,36 @@ export default function FaiFaiBranding() {
     let active = true;
 
     void loadBrandSettings().then((settings) => {
-      if (active) applyBrand(settings);
+      if (active) {
+        applyBrand(settings);
+      }
     });
 
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.type === 'characterData') {
-          replaceTextNode(mutation.target as Text, currentBrand);
-        }
-
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === Node.TEXT_NODE) {
-            replaceTextNode(node as Text, currentBrand);
-          } else if (node instanceof HTMLElement) {
-            replaceTree(node, currentBrand);
+    const observer = new MutationObserver(
+      (mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === 'characterData') {
+            replaceTextNode(
+              mutation.target as Text,
+              currentBrand,
+            );
           }
-        });
-      });
 
-      updateMetadata(currentBrand);
-    });
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              replaceTextNode(
+                node as Text,
+                currentBrand,
+              );
+            } else if (node instanceof HTMLElement) {
+              replaceTree(node, currentBrand);
+            }
+          });
+        });
+
+        updateMetadata(currentBrand);
+      },
+    );
 
     observer.observe(document.body, {
       childList: true,
@@ -412,9 +472,12 @@ export default function FaiFaiBranding() {
       characterData: true,
     });
 
-    const brandUpdated = (event: Event) => {
+    const brandUpdated = (
+      event: Event,
+    ) => {
       const customEvent =
         event as CustomEvent<BrandSettings>;
+
       applyBrand(customEvent.detail);
     };
 
@@ -432,6 +495,7 @@ export default function FaiFaiBranding() {
       active = false;
       observer.disconnect();
       window.clearInterval(interval);
+
       window.removeEventListener(
         'fai-fai-brand-updated',
         brandUpdated,
