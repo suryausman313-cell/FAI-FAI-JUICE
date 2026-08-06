@@ -4,10 +4,7 @@ import axios from 'axios';
 import {
   ArrowLeft,
   Banknote,
-  BarChart3,
-  Bike,
   CalendarDays,
-  ChevronRight,
   CircleDollarSign,
   CreditCard,
   Download,
@@ -16,9 +13,7 @@ import {
   RefreshCw,
   Search,
   ShoppingBag,
-  TrendingDown,
   TrendingUp,
-  Truck,
   Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -32,9 +27,8 @@ type FinancePeriod =
   | 'today'
   | 'yesterday'
   | 'week'
-  | 'month'
-  | 'year'
-  | 'all'
+  | 'thirty_days'
+  | 'six_months'
   | 'custom';
 
 interface FinanceTotals {
@@ -110,10 +104,9 @@ interface DailyPoint {
 const PERIODS: Array<{ key: FinancePeriod; label: string }> = [
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
-  { key: 'week', label: '7 Days' },
-  { key: 'month', label: 'Month' },
-  { key: 'year', label: 'Year' },
-  { key: 'all', label: 'All Time' },
+  { key: 'week', label: 'Last 7 Days' },
+  { key: 'thirty_days', label: 'Last 30 Days' },
+  { key: 'six_months', label: 'Last 6 Months' },
   { key: 'custom', label: 'Custom' },
 ];
 
@@ -145,6 +138,37 @@ function money(value: unknown): string {
 function numeric(value: unknown): number {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+function localDateInput(value: Date): string {
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function shiftMonths(value: Date, months: number): Date {
+  const result = new Date(value);
+  const wantedDay = result.getDate();
+  result.setDate(1);
+  result.setMonth(result.getMonth() + months);
+  const lastDay = new Date(
+    result.getFullYear(),
+    result.getMonth() + 1,
+    0,
+  ).getDate();
+  result.setDate(Math.min(wantedDay, lastDay));
+  return result;
+}
+
+function orderGrossSales(order: ReportOrder): number {
+  return Math.max(
+    numeric(order.total_amount) -
+      numeric(order.delivery_charge) -
+      numeric(order.tip_amount),
+    0,
+  );
 }
 
 function isCountedOrder(order: ReportOrder): boolean {
@@ -189,10 +213,10 @@ export default function AdminSales() {
 
   const [period, setPeriod] = useState<FinancePeriod>('today');
   const [customFrom, setCustomFrom] = useState(
-    () => new Date().toISOString().slice(0, 10),
+    () => localDateInput(new Date()),
   );
   const [customTo, setCustomTo] = useState(
-    () => new Date().toISOString().slice(0, 10),
+    () => localDateInput(new Date()),
   );
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [orders, setOrders] = useState<ReportOrder[]>([]);
@@ -221,10 +245,33 @@ export default function AdminSales() {
   }, [period]);
 
   function summaryUrl(): string {
-    const params = new URLSearchParams({ period });
-    if (period === 'custom') {
-      params.set('date_from', customFrom);
-      params.set('date_to', customTo);
+    const today = new Date();
+    let apiPeriod: string = period;
+    let dateFrom = customFrom;
+    let dateTo = customTo;
+
+    if (period === 'week') {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 6);
+      apiPeriod = 'custom';
+      dateFrom = localDateInput(start);
+      dateTo = localDateInput(today);
+    } else if (period === 'thirty_days') {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 29);
+      apiPeriod = 'custom';
+      dateFrom = localDateInput(start);
+      dateTo = localDateInput(today);
+    } else if (period === 'six_months') {
+      apiPeriod = 'custom';
+      dateFrom = localDateInput(shiftMonths(today, -6));
+      dateTo = localDateInput(today);
+    }
+
+    const params = new URLSearchParams({ period: apiPeriod });
+    if (apiPeriod === 'custom') {
+      params.set('date_from', dateFrom);
+      params.set('date_to', dateTo);
     }
     return `/api/v1/finance/admin/summary?${params.toString()}`;
   }
@@ -299,15 +346,14 @@ export default function AdminSales() {
         return created >= start;
       }
 
-      if (period === 'month') {
-        return (
-          created.getFullYear() === now.getFullYear() &&
-          created.getMonth() === now.getMonth()
-        );
+      if (period === 'thirty_days') {
+        const start = new Date(todayStart);
+        start.setDate(start.getDate() - 29);
+        return created >= start;
       }
 
-      if (period === 'year') {
-        return created.getFullYear() === now.getFullYear();
+      if (period === 'six_months') {
+        return created >= shiftMonths(todayStart, -6);
       }
 
       if (period === 'custom') {
@@ -343,22 +389,6 @@ export default function AdminSales() {
     [periodOrders],
   );
 
-  const paymentStats = useMemo(() => {
-    return countedOrders.reduce(
-      (result, order) => {
-        const amount = numeric(order.total_amount);
-        if (isCashPayment(order.payment_method)) {
-          result.cashAmount += amount;
-          result.cashOrders += 1;
-        } else {
-          result.cardAmount += amount;
-          result.cardOrders += 1;
-        }
-        return result;
-      },
-      { cashAmount: 0, cardAmount: 0, cashOrders: 0, cardOrders: 0 },
-    );
-  }, [countedOrders]);
 
   const bestSellers = useMemo(() => {
     const items = new Map<string, { quantity: number; revenue: number }>();
@@ -414,7 +444,7 @@ export default function AdminSales() {
         orders: 0,
       };
 
-      current.revenue += numeric(order.total_amount);
+      current.revenue += orderGrossSales(order);
       current.orders += 1;
       grouped.set(key, current);
     });
@@ -430,8 +460,10 @@ export default function AdminSales() {
   );
 
   const totals = summary?.totals || EMPTY_TOTALS;
-  const averageOrder =
-    totals.orders > 0 ? totals.customer_total / totals.orders : 0;
+  const shopMustPayApp = numeric(totals.developer_fees);
+  const grossSales =
+    numeric(totals.shop_food_sale) + shopMustPayApp;
+  const netShopSale = Math.max(grossSales - shopMustPayApp, 0);
 
   function exportCsv(): void {
     const headers = [
@@ -510,9 +542,9 @@ export default function AdminSales() {
           </Button>
 
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Sales & Reports <span className="text-[10px] text-emerald-400">FINAL V5</span></h1>
+            <h1 className="text-white text-2xl font-bold">Sales & Reports</h1>
             <p className="text-gray-500 text-xs mt-1">
-              Complete Fai Fai revenue, fees, payment and rider report
+              Clear shop sales and app payment summary
             </p>
           </div>
 
@@ -578,175 +610,87 @@ export default function AdminSales() {
         </Card>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
-                Customer Paid
+              <p className="text-gray-400 text-[11px] uppercase font-semibold">
+                Gross Sales
               </p>
               <CircleDollarSign className="w-4 h-4 text-emerald-400" />
             </div>
             <p className="text-white text-2xl font-black mt-2">
-              AED {money(totals.customer_total)}
+              AED {money(grossSales)}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              {totals.orders} counted orders
+              Rider money not included
+            </p>
+          </Card>
+
+          <Card className="bg-red-950/20 border-red-900/40 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-red-300 text-[11px] uppercase font-semibold">
+                Shop Must Pay App
+              </p>
+              <Percent className="w-4 h-4 text-red-400" />
+            </div>
+            <p className="text-red-400 text-2xl font-black mt-2">
+              -AED {money(shopMustPayApp)}
+            </p>
+            <p className="text-red-300/60 text-[11px] mt-1">
+              Amount due to the app
+            </p>
+          </Card>
+
+          <Card className="bg-emerald-950/25 border-emerald-900/40 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
+                Net Shop Sale
+              </p>
+              <Wallet className="w-4 h-4 text-emerald-400" />
+            </div>
+            <p className="text-white text-2xl font-black mt-2">
+              AED {money(netShopSale)}
+            </p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              After app payment
             </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Food Subtotal</p>
-              <ShoppingBag className="w-4 h-4 text-blue-400" />
+              <p className="text-gray-400 text-[11px] uppercase font-semibold">
+                Completed Orders
+              </p>
+              <PackageCheck className="w-4 h-4 text-blue-400" />
             </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(totals.food_subtotal)}
-            </p>
-            <p className="text-red-400 text-[11px] mt-1">
-              - AED {money(totals.discount_amount)} discount
-            </p>
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Shop Food Sale</p>
-              <PackageCheck className="w-4 h-4 text-green-400" />
-            </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(totals.shop_food_sale)}
+            <p className="text-white text-2xl font-black mt-2">
+              {totals.orders}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              Food after discount
-            </p>
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Average Order</p>
-              <BarChart3 className="w-4 h-4 text-purple-400" />
-            </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(averageOrder)}
-            </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              {totals.delivered_orders} delivered
+              Final sales only
             </p>
           </Card>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-4 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Percent className="w-4 h-4 text-amber-400" />
-              <h2 className="text-white font-semibold">Fee Breakdown</h2>
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-gray-500 text-xs uppercase font-semibold">
+                Simple Calculation
+              </p>
+              <p className="text-gray-300 text-sm mt-1">
+                Gross Sales AED {money(grossSales)} - Shop Must Pay App AED {money(shopMustPayApp)}
+              </p>
             </div>
-
-            <div className="space-y-2">
-              {[
-                ['Service Fee', totals.service_fee, 'text-cyan-400'],
-                ['Small Order Fee', totals.small_order_fee, 'text-orange-400'],
-                ['Delivery Charges', totals.delivery_charges, 'text-blue-400'],
-                ['Shop Tips', totals.shop_tips, 'text-pink-400'],
-                ['Platform / Developer Fees', totals.developer_fees, 'text-purple-400'],
-              ].map(([label, value, color]) => (
-                <div
-                  key={String(label)}
-                  className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5"
-                >
-                  <span className="text-gray-300 text-sm">{label}</span>
-                  <span className={`font-bold text-sm ${color}`}>
-                    AED {money(value)}
-                  </span>
-                </div>
-              ))}
+            <div className="text-right shrink-0">
+              <p className="text-gray-500 text-[10px] uppercase">Shop Keeps</p>
+              <p className="text-emerald-400 font-black">AED {money(netShopSale)}</p>
             </div>
-          </Card>
+          </div>
+        </Card>
 
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Bike className="w-4 h-4 text-pink-400" />
-              <h2 className="text-white font-semibold">Rider Money</h2>
-            </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
-                <span className="text-gray-300 text-sm">Delivery Charges</span>
-                <span className="text-blue-400 font-bold text-sm">
-                  AED {money(totals.delivery_charges)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
-                <span className="text-gray-300 text-sm">Rider Tips</span>
-                <span className="text-pink-400 font-bold text-sm">
-                  AED {money(totals.rider_tips)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5 border border-emerald-800/40">
-                <span className="text-white text-sm font-semibold">Rider Earnings</span>
-                <span className="text-emerald-400 font-black">
-                  AED {money(totals.rider_earnings)}
-                </span>
-              </div>
-              <button
-                onClick={() => navigate('/admin/finance')}
-                className="w-full flex items-center justify-between text-xs text-gray-400 hover:text-white bg-gray-800 rounded-xl px-3 py-3"
-              >
-                Open Rider Cash Settlement
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </Card>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-4 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Wallet className="w-4 h-4 text-green-400" />
-              <h2 className="text-white font-semibold">Payment Split</h2>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-green-950/30 border border-green-900/40 rounded-2xl p-4">
-                <Banknote className="w-5 h-5 text-green-400 mb-3" />
-                <p className="text-gray-400 text-[11px] uppercase">Cash</p>
-                <p className="text-white font-black text-xl mt-1">
-                  AED {money(paymentStats.cashAmount)}
-                </p>
-                <p className="text-green-400 text-xs mt-1">
-                  {paymentStats.cashOrders} orders
-                </p>
-              </div>
-
-              <div className="bg-blue-950/30 border border-blue-900/40 rounded-2xl p-4">
-                <CreditCard className="w-5 h-5 text-blue-400 mb-3" />
-                <p className="text-gray-400 text-[11px] uppercase">Card</p>
-                <p className="text-white font-black text-xl mt-1">
-                  AED {money(paymentStats.cardAmount)}
-                </p>
-                <p className="text-blue-400 text-xs mt-1">
-                  {paymentStats.cardOrders} orders
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-3 bg-gray-950/70 rounded-xl px-3 py-3 flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Cash Payable to Shop</span>
-              <span className="text-white font-bold">
-                AED {money(totals.cash_payable_to_shop)}
-              </span>
-            </div>
-
-            {summary?.current_balance && (
-              <div className="mt-2 bg-amber-950/20 border border-amber-900/30 rounded-xl px-3 py-3 flex items-center justify-between">
-                <span className="text-amber-200 text-sm">Rider Cash Still Due</span>
-                <span className="text-amber-400 font-bold">
-                  AED {money(summary.current_balance.remaining_to_submit)}
-                </span>
-              </div>
-            )}
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
               <h2 className="text-white font-semibold">Sales Trend</h2>
             </div>
@@ -783,7 +727,6 @@ export default function AdminSales() {
               </div>
             )}
           </Card>
-        </div>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
           <Card className="bg-gray-900 border-gray-800 p-4">
@@ -911,10 +854,9 @@ export default function AdminSales() {
                         AED {money(order.total_amount)}
                       </p>
                       <p className="text-gray-600 text-[10px] mt-1">
-                        Fees AED {money(
+                        App fee AED {money(
                           numeric(order.service_fee) +
-                            numeric(order.small_order_fee) +
-                            numeric(order.delivery_charge),
+                            numeric(order.small_order_fee),
                         )}
                       </p>
                     </div>
