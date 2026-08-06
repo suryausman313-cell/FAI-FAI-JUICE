@@ -132,9 +132,9 @@ function replaceBrandText(
     [/\+971\s*54\s*294\s*0112/g, brand.phone],
     [/\+971\s*52\s*109\s*1092/g, brand.phone],
     [/\+971542940112/g, brand.phone.replace(/\s+/g, '')],
-    [/\+971521091092/g, brand.phone.replace(/\s+/g, '')],
+    [/\+971523187415/g, brand.phone.replace(/\s+/g, '')],
     [/971542940112/g, brand.whatsapp],
-    [/971521091092/g, brand.whatsapp],
+    [/971523187415/g, brand.whatsapp],
 
     [/Authentic Italian Pizza/gi, brand.slogan],
     [/Italian pizza and pasta/gi, brand.slogan],
