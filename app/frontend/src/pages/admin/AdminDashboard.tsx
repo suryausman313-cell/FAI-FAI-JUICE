@@ -6,8 +6,6 @@ import {
   Bike,
   ChefHat,
   ClipboardList,
-  CreditCard,
-  DollarSign,
   LogOut,
   MessageSquare,
   Package,
@@ -16,19 +14,14 @@ import {
   Shield,
   ShoppingBag,
   Tag,
-  TrendingUp,
-  Truck,
   Users,
   UtensilsCrossed,
   Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import axios from 'axios';
-
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { client, RestaurantSettings } from '@/lib/api';
-import { getAPIBaseURL } from '@/lib/config';
 
 interface AdminPermissions {
   orders?: boolean;
@@ -43,70 +36,6 @@ interface AdminPermissions {
   riders?: boolean;
   kitchen?: boolean;
   logs?: boolean;
-}
-
-type FinancePeriod = 'today' | 'week' | 'month' | 'all';
-
-interface FinanceTotals {
-  orders: number;
-  delivered_orders: number;
-  customer_total: number;
-  food_subtotal: number;
-  discount_amount: number;
-  shop_food_sale: number;
-  service_fee: number;
-  small_order_fee: number;
-  developer_fees: number;
-  delivery_charges: number;
-  rider_tips: number;
-  shop_tips: number;
-  rider_earnings: number;
-  cash_collected: number;
-  cash_payable_to_shop: number;
-  cash_orders: number;
-  card_orders: number;
-}
-
-interface FinanceSummary {
-  period: {
-    key: string;
-    label: string;
-    date_from: string | null;
-    date_to: string | null;
-  };
-  totals: FinanceTotals;
-  current_balance?: {
-    cash_due_to_shop: number;
-    approved_cash: number;
-    awaiting_approval: number;
-    remaining_to_submit: number;
-    total_pending_cash: number;
-  };
-}
-
-const EMPTY_TOTALS: FinanceTotals = {
-  orders: 0,
-  delivered_orders: 0,
-  customer_total: 0,
-  food_subtotal: 0,
-  discount_amount: 0,
-  shop_food_sale: 0,
-  service_fee: 0,
-  small_order_fee: 0,
-  developer_fees: 0,
-  delivery_charges: 0,
-  rider_tips: 0,
-  shop_tips: 0,
-  rider_earnings: 0,
-  cash_collected: 0,
-  cash_payable_to_shop: 0,
-  cash_orders: 0,
-  card_orders: 0,
-};
-
-function money(value: unknown): string {
-  const number = Number(value || 0);
-  return Number.isFinite(number) ? number.toFixed(2) : '0.00';
 }
 
 function readAdminAuth(): {
@@ -137,9 +66,6 @@ export default function AdminDashboard() {
     'open' | 'busy' | 'closed'
   >('open');
   const [settingsId, setSettingsId] = useState<number | null>(null);
-  const [summaries, setSummaries] = useState<
-    Partial<Record<FinancePeriod, FinanceSummary>>
-  >({});
 
   useEffect(() => {
     const auth = readAdminAuth();
@@ -161,26 +87,6 @@ export default function AdminDashboard() {
 
   function hasPermission(key: keyof AdminPermissions): boolean {
     return isSuperAdmin || Boolean(permissions[key]);
-  }
-
-  async function loadSummary(period: FinancePeriod): Promise<FinanceSummary | null> {
-    try {
-      // Use the exact same authenticated request as Sales & Reports so the
-      // Dashboard and full report can never disagree because of client state.
-      const baseURL = getAPIBaseURL().replace(/\/$/, '');
-      const token = localStorage.getItem('fai_fai_admin_token') || '';
-      const response = await axios.get(
-        `${baseURL}/api/v1/finance/admin/summary?period=${period}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000,
-        },
-      );
-      return response.data as FinanceSummary;
-    } catch (error) {
-      console.error(`Failed to load ${period} finance summary:`, error);
-      return null;
-    }
   }
 
   async function loadSettings(): Promise<void> {
@@ -207,21 +113,6 @@ export default function AdminDashboard() {
     else setRefreshing(true);
 
     try {
-      const [today, week, month, all] = await Promise.all([
-        loadSummary('today'),
-        loadSummary('week'),
-        loadSummary('month'),
-        loadSummary('all'),
-      ]);
-
-      setSummaries(previous => ({
-        ...previous,
-        ...(today ? { today } : {}),
-        ...(week ? { week } : {}),
-        ...(month ? { month } : {}),
-        ...(all ? { all } : {}),
-      }));
-
       await loadSettings();
     } finally {
       setLoading(false);
@@ -254,10 +145,6 @@ export default function AdminDashboard() {
     navigate('/admin');
   }
 
-  const today = summaries.today?.totals || EMPTY_TOTALS;
-  const week = summaries.week?.totals || EMPTY_TOTALS;
-  const month = summaries.month?.totals || EMPTY_TOTALS;
-  const all = summaries.all?.totals || EMPTY_TOTALS;
 
   const navItems = useMemo(
     () => [
@@ -450,111 +337,27 @@ export default function AdminDashboard() {
           </Card>
         )}
 
-        {(hasPermission('sales') || hasPermission('orders')) && (
-          <>
-            <button
-              type="button"
-              onClick={() => navigate('/admin/sales')}
-              className="w-full text-left"
-            >
-              <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-5 mb-4 hover:border-emerald-600/70 transition">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-emerald-300 text-xs font-semibold uppercase tracking-wider">
-                      Today Customer Payments
-                    </p>
-                    <p className="text-white text-3xl font-black mt-2">
-                      AED {money(today.customer_total)}
-                    </p>
-                    <p className="text-gray-400 text-xs mt-1">
-                      {today.orders} orders · tap for full report
-                    </p>
-                  </div>
-
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 flex items-center justify-center">
-                    <TrendingUp className="w-6 h-6 text-emerald-400" />
-                  </div>
-                </div>
-              </Card>
-            </button>
-
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              <Card className="bg-gray-900 border-gray-800 p-4">
-                <p className="text-gray-500 text-[11px] uppercase">Shop Food Sale</p>
-                <p className="text-white font-bold text-lg mt-1">
-                  AED {money(today.shop_food_sale)}
-                </p>
-                <p className="text-gray-600 text-[11px] mt-1">
-                  After AED {money(today.discount_amount)} discount
-                </p>
-              </Card>
-
-              <Card className="bg-gray-900 border-gray-800 p-4">
-                <p className="text-gray-500 text-[11px] uppercase">Cash / Card Orders</p>
-                <div className="flex items-center gap-3 mt-2">
-                  <span className="text-green-400 font-bold">{today.cash_orders}</span>
-                  <span className="text-gray-600">/</span>
-                  <span className="text-blue-400 font-bold">{today.card_orders}</span>
-                </div>
-                <p className="text-gray-600 text-[11px] mt-1">
-                  Cash AED {money(today.cash_collected)}
-                </p>
-              </Card>
-
-              <Card className="bg-gray-900 border-gray-800 p-4">
-                <p className="text-gray-500 text-[11px] uppercase">Service + Small Fee</p>
-                <p className="text-white font-bold text-lg mt-1">
-                  AED {money(today.service_fee + today.small_order_fee)}
-                </p>
-                <p className="text-gray-600 text-[11px] mt-1">
-                  {money(today.service_fee)} + {money(today.small_order_fee)}
-                </p>
-              </Card>
-
-              <Card className="bg-gray-900 border-gray-800 p-4">
-                <p className="text-gray-500 text-[11px] uppercase">Delivery + Rider</p>
-                <p className="text-white font-bold text-lg mt-1">
-                  AED {money(today.delivery_charges + today.rider_tips)}
-                </p>
-                <p className="text-gray-600 text-[11px] mt-1">
-                  Rider earnings AED {money(today.rider_earnings)}
-                </p>
-              </Card>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3 mb-6">
-              <Card className="bg-gray-900 border-gray-800 p-3">
-                <p className="text-gray-500 text-[10px] uppercase">This Week</p>
-                <p className="text-white font-bold mt-1">AED {money(week.customer_total)}</p>
-                <p className="text-gray-600 text-[10px]">{week.orders} orders</p>
-              </Card>
-
-              <Card className="bg-gray-900 border-gray-800 p-3">
-                <p className="text-gray-500 text-[10px] uppercase">This Month</p>
-                <p className="text-white font-bold mt-1">AED {money(month.customer_total)}</p>
-                <p className="text-gray-600 text-[10px]">{month.orders} orders</p>
-              </Card>
-
-              <Card className="bg-gray-900 border-gray-800 p-3">
-                <p className="text-gray-500 text-[10px] uppercase">All Time</p>
-                <p className="text-white font-bold mt-1">AED {money(all.customer_total)}</p>
-                <p className="text-gray-600 text-[10px]">{all.orders} orders</p>
-              </Card>
-            </div>
-          </>
-        )}
-
         <div className="grid grid-cols-2 gap-4">
           {navItems
-            .filter(item => hasPermission(item.perm))
+            .filter(item =>
+              item.path === '/admin/sales'
+                ? hasPermission('sales') || hasPermission('orders')
+                : hasPermission(item.perm),
+            )
             .map(item => {
               const Icon = item.icon;
               return (
                 <button
                   key={item.path}
                   type="button"
-                  onClick={() => navigate(item.path)}
-                  className="text-left"
+                  onClick={() => {
+                    if (item.path === '/admin/sales') {
+                      window.location.assign('/admin/sales');
+                      return;
+                    }
+                    navigate(item.path);
+                  }}
+                  className="text-left cursor-pointer"
                 >
                   <Card className="bg-gray-900 border-gray-800 p-5 h-full hover:bg-gray-800/80 hover:border-gray-700 transition">
                     <Icon className={`w-7 h-7 ${item.color} mb-4`} />
