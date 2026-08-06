@@ -104,12 +104,12 @@ app.middleware("http")(admin_security_middleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=configured_origins or default_origins,
-    allow_origin_regex=r"^https://[a-z0-9-]+\.fai-fai-juice\.pages\.dev$",
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
+    max_age=86400,
 )
 # MODULE_MIDDLEWARE_END
 
