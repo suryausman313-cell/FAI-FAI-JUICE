@@ -479,8 +479,7 @@ export default function AdminSales() {
       'Order Type',
       'Subtotal',
       'Discount',
-      'Service Fee',
-      'Small Order Fee',
+      'Shop Must Pay App',
       'Delivery Charge',
       'Tip',
       'Customer Total',
@@ -497,8 +496,7 @@ export default function AdminSales() {
       order.order_type,
       numeric(order.subtotal_amount),
       numeric(order.discount_amount),
-      numeric(order.service_fee),
-      numeric(order.small_order_fee),
+      numeric(order.service_fee) + numeric(order.small_order_fee),
       numeric(order.delivery_charge),
       numeric(order.tip_amount),
       numeric(order.total_amount),
@@ -639,7 +637,7 @@ export default function AdminSales() {
               -AED {money(shopMustPayApp)}
             </p>
             <p className="text-red-300/60 text-[11px] mt-1">
-              Service fee + small order fee
+              Amount payable by shop
             </p>
           </Card>
 
