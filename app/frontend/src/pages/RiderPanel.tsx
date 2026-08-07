@@ -404,7 +404,7 @@ export default function RiderPanel() {
       params.set('date_from', customFrom);
       params.set('date_to', customTo);
     }
-    return `/api/v1/finance/rider/${riderId}/summary?${params.toString()}`;
+    return `/api/v1/rider/finance/${riderId}/summary?${params.toString()}`;
   }
 
   async function loadFinance(
@@ -440,7 +440,7 @@ export default function RiderPanel() {
   async function loadCashSubmissions(riderId: number) {
     try {
       const res = await client.apiCall.invoke({
-        url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
+        url: `/api/v1/rider/finance/${riderId}/cash-submissions?limit=100`,
         method: 'GET',
         data: {},
       });
@@ -467,7 +467,7 @@ export default function RiderPanel() {
     setSubmittingCash(true);
     try {
       await client.apiCall.invoke({
-        url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
+        url: `/api/v1/rider/finance/${rider.id}/cash-submissions`,
         method: 'POST',
         data: { amount, note: cashNote.trim() },
       });
@@ -822,6 +822,9 @@ export default function RiderPanel() {
                   </Card>
                 </div>
 
+                <p className="text-gray-500 text-xs px-1">
+                  Delivery Charges = Rider earning. They are shown separately and are not added to Pending to Shop.
+                </p>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
@@ -829,7 +832,7 @@ export default function RiderPanel() {
                   </h3>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                     <div className="bg-gray-800 rounded-lg p-3">
-                      <p className="text-gray-500 text-xs">Cash Due</p>
+                      <p className="text-gray-500 text-xs">Shop Cash Due</p>
                       <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.cash_due_to_shop.toFixed(2)}</p>
                     </div>
                     <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3">
@@ -841,14 +844,15 @@ export default function RiderPanel() {
                       <p className="text-orange-400 font-bold mt-1">AED {financeSummary.current_balance.awaiting_approval.toFixed(2)}</p>
                     </div>
                     <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-3">
-                      <p className="text-red-400/70 text-xs">Total Pending</p>
+                      <p className="text-red-400/70 text-xs">Pending to Shop</p>
                       <p className="text-red-400 font-bold mt-1">AED {financeSummary.current_balance.total_pending_cash.toFixed(2)}</p>
                     </div>
                   </div>
 
                   {financeSummary.current_balance.remaining_to_submit > 0 ? (
                     <div className="border-t border-gray-800 pt-4">
-                      <p className="text-gray-300 text-sm font-medium mb-3">Submit cash to shop</p>
+                      <p className="text-gray-300 text-sm font-medium mb-1">Submit shop cash for Admin approval</p>
+                      <p className="text-gray-500 text-xs mb-3">Delivery charges are your earning and are not included in this pending cash.</p>
                       <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-3">
                         <Input
                           type="number"
