@@ -66,7 +66,6 @@ interface RiderInfo {
   has_gps?: boolean;
   gps_fresh?: boolean;
   eligible_for_assignment?: boolean;
-  can_assign?: boolean;
   availability_reason?: 'available' | 'offline' | 'gps_missing' | 'gps_outdated' | 'inactive' | string;
   current_lat?: number | null;
   current_lng?: number | null;
@@ -280,8 +279,8 @@ export default function AdminOrders() {
       return;
     }
     const selected = riders.find(rider => String(rider.id) === selectedRider);
-    if (!selected?.can_assign) {
-      toast.error('Rider ki GPS location available nahi hai');
+    if (!selected?.eligible_for_assignment) {
+      toast.error('Rider offline hai ya uski GPS location fresh nahi hai');
       return;
     }
     // Parse GPS from order notes
@@ -498,10 +497,9 @@ export default function AdminOrders() {
 
   function getRiderAvailability(rider: RiderInfo): string {
     if (rider.eligible_for_assignment) return 'Online • GPS live';
-    if (rider.can_assign && rider.availability_reason === 'gps_outdated') return 'GPS saved • updating';
-    if (rider.can_assign && rider.availability_reason === 'offline') return 'GPS saved • background offline';
-    if (rider.can_assign) return 'GPS saved';
+    if (rider.availability_reason === 'offline') return 'Offline';
     if (rider.availability_reason === 'gps_missing') return 'GPS unavailable';
+    if (rider.availability_reason === 'gps_outdated') return 'GPS outdated';
     return 'Unavailable';
   }
 
@@ -553,8 +551,7 @@ export default function AdminOrders() {
       const lat = Number(rider.current_lat);
       const lng = Number(rider.current_lng);
       const live = rider.eligible_for_assignment === true;
-      const assignable = rider.can_assign === true;
-      const markerColor = live ? '#16a34a' : assignable ? '#f59e0b' : '#6b7280';
+      const markerColor = live ? '#16a34a' : '#6b7280';
       const icon = L.divIcon({
         html: `<div style="width:32px;height:32px;border-radius:50%;background:${markerColor};border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);font-size:15px">🏍️</div>`,
         className: '',
@@ -676,11 +673,11 @@ export default function AdminOrders() {
             <div>
               <h2 className="text-white font-semibold">Live Rider Map</h2>
               <p className="text-gray-500 text-xs mt-0.5">
-                Green = live GPS • Amber = saved GPS / background update pending • Grey = no GPS
+                Green = online with fresh GPS • Grey = offline or outdated GPS
               </p>
             </div>
             <div className="text-xs text-gray-400">
-              {riders.filter(rider => rider.eligible_for_assignment).length} live • {riders.filter(rider => rider.can_assign).length} GPS / {riders.length} active
+              {riders.filter(rider => rider.eligible_for_assignment).length} live / {riders.length} active
             </div>
           </div>
           <div
@@ -758,7 +755,7 @@ export default function AdminOrders() {
                       <div className="space-y-2 mb-3 max-h-64 overflow-y-auto">
                         {riders.filter(rider => rider.is_active).map(rider => {
                           const isSelected = selectedRider === String(rider.id);
-                          const eligible = rider.can_assign === true;
+                          const eligible = rider.eligible_for_assignment === true;
                           const locationAge = getLocationAge(rider.location_updated_at);
                           return (
                             <button
@@ -806,18 +803,18 @@ export default function AdminOrders() {
                         <Button
                           size="sm"
                           onClick={() => assignToRider(order)}
-                          disabled={!selectedRider || !riders.find(rider => String(rider.id) === selectedRider)?.can_assign}
+                          disabled={!selectedRider || !riders.find(rider => String(rider.id) === selectedRider)?.eligible_for_assignment}
                           className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1 disabled:opacity-50"
                         >
-                          Assign Selected Rider
+                          Assign Selected Live Rider
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
                           ✕
                         </Button>
                       </div>
-                      {riders.filter(rider => rider.can_assign).length === 0 && (
+                      {riders.filter(rider => rider.eligible_for_assignment).length === 0 && (
                         <p className="text-amber-400 text-xs mt-2">
-                          Kisi active rider ki GPS saved nahi hai. Order Waiting Rider mein rahega.
+                          No live rider available. Order Waiting Rider mein rahega.
                         </p>
                       )}
                     </div>
