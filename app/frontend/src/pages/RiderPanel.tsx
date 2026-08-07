@@ -35,6 +35,7 @@ interface Delivery {
   zone_name: string | null;
   tip_amount: number;
   created_at: string;
+  updated_at?: string | null;
 }
 
 interface Rider {
@@ -142,6 +143,7 @@ export default function RiderPanel() {
   const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [financeSummary, setFinanceSummary] = useState<RiderFinanceSummary | null>(null);
+  const [financeError, setFinanceError] = useState('');
   const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [cashAmount, setCashAmount] = useState('');
@@ -160,7 +162,6 @@ export default function RiderPanel() {
         setRider(parsed);
         loadDeliveries(parsed.id);
         loadStats(parsed.id);
-        loadFinance(parsed.id, 'today');
         loadCashSubmissions(parsed.id);
       } catch { /* ignore */ }
     }
@@ -180,16 +181,18 @@ export default function RiderPanel() {
     const interval = setInterval(() => {
       loadDeliveries(rider.id);
       loadStats(rider.id);
-      loadFinance(rider.id, financePeriod);
-      loadCashSubmissions(rider.id);
+      if (view === 'stats') {
+        loadFinance(rider.id, financePeriod, true);
+        loadCashSubmissions(rider.id);
+      }
     }, 8000);
     return () => clearInterval(interval);
-  }, [rider, financePeriod]);
+  }, [rider, financePeriod, view]);
 
   useEffect(() => {
-    if (!rider || financePeriod === 'custom') return;
+    if (!rider || view !== 'stats' || financePeriod === 'custom') return;
     loadFinance(rider.id, financePeriod);
-  }, [financePeriod, rider]);
+  }, [financePeriod, rider, view]);
 
   // Heartbeat to keep rider online status synced (every 15s)
   useEffect(() => {
@@ -316,7 +319,11 @@ export default function RiderPanel() {
   }
 
   function updateMap() {
-    const activeDeliveries = deliveries.filter(d => d.status !== 'delivered' && d.customer_lat && d.customer_lng);
+    const activeDeliveries = deliveries.filter(
+      d => ['assigned', 'accepted', 'picked_up', 'on_the_way'].includes(String(d.status || '').toLowerCase())
+        && d.customer_lat
+        && d.customer_lng
+    );
     if (activeDeliveries.length === 0) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     if (!mapContainerRef.current) return;
@@ -400,21 +407,33 @@ export default function RiderPanel() {
     return `/api/v1/finance/rider/${riderId}/summary?${params.toString()}`;
   }
 
-  async function loadFinance(riderId: number, period: FinancePeriod = financePeriod) {
+  async function loadFinance(
+    riderId: number,
+    period: FinancePeriod = financePeriod,
+    silent = false
+  ) {
     if (period === 'custom' && (!customFrom || !customTo)) return;
-    setFinanceLoading(true);
+    if (!silent) setFinanceLoading(true);
+    setFinanceError('');
     try {
       const res = await client.apiCall.invoke({
         url: getFinanceUrl(riderId, period),
         method: 'GET',
         data: {},
       });
-      if (res?.data) setFinanceSummary(res.data);
+      if (res?.data) {
+        setFinanceSummary(res.data);
+        setFinanceError('');
+      } else {
+        setFinanceSummary(null);
+        setFinanceError('Finance report could not be loaded.');
+      }
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
-      toast.error(e?.data?.detail || 'Could not load finance report');
+      setFinanceSummary(null);
+      setFinanceError(e?.data?.detail || 'Finance report could not be loaded.');
     } finally {
-      setFinanceLoading(false);
+      if (!silent) setFinanceLoading(false);
     }
   }
 
@@ -482,7 +501,14 @@ export default function RiderPanel() {
     try {
       await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
-      if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
+      if (rider) {
+        loadDeliveries(rider.id);
+        loadStats(rider.id);
+        if (view === 'stats') {
+          loadFinance(rider.id, financePeriod, true);
+          loadCashSubmissions(rider.id);
+        }
+      }
     } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
   }
 
@@ -526,11 +552,20 @@ export default function RiderPanel() {
     setMenuOpen(false);
     setView(nextView);
     if (period) setFinancePeriod(period);
-    if (rider) {
-      loadDeliveries(rider.id);
-      loadStats(rider.id);
-      if (period) loadFinance(rider.id, period);
-      else loadFinance(rider.id, financePeriod);
+
+    if (!rider) return;
+
+    loadDeliveries(rider.id);
+    loadStats(rider.id);
+
+    if (nextView === 'stats') {
+      const selectedPeriod = period || financePeriod;
+      if (selectedPeriod !== 'custom') {
+        loadFinance(rider.id, selectedPeriod);
+      } else {
+        setFinanceSummary(null);
+        setFinanceError('');
+      }
       loadCashSubmissions(rider.id);
     }
   }
@@ -565,13 +600,36 @@ export default function RiderPanel() {
     );
   }
 
-  const activeDeliveries = deliveries.filter(d => d.status !== 'delivered');
-  const completedDeliveries = deliveries.filter(d => d.status === 'delivered');
+  // One visible card per order. Rejected assignments are not active orders.
+  const latestByOrder = new Map<number, Delivery>();
+  deliveries.forEach((delivery) => {
+    const existing = latestByOrder.get(delivery.order_id);
+    if (!existing || Number(delivery.id) > Number(existing.id)) {
+      latestByOrder.set(delivery.order_id, delivery);
+    }
+  });
+  const uniqueDeliveries = Array.from(latestByOrder.values());
+
+  const activeStatuses = new Set(['assigned', 'accepted', 'picked_up', 'on_the_way']);
+  const activeDeliveries = uniqueDeliveries.filter(
+    d => activeStatuses.has(String(d.status || '').toLowerCase())
+  );
+  const completedDeliveries = uniqueDeliveries.filter(
+    d => String(d.status || '').toLowerCase() === 'delivered'
+  );
+
+  const deliveryHistoryDate = (d: Delivery) => d.updated_at || d.created_at;
   const todayKey = uaeDateKey(new Date());
   const yesterdayDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const yesterdayKey = uaeDateKey(yesterdayDate);
-  const todayDeliveries = completedDeliveries.filter(d => d.created_at && uaeDateKey(d.created_at) === todayKey);
-  const yesterdayDeliveries = completedDeliveries.filter(d => d.created_at && uaeDateKey(d.created_at) === yesterdayKey);
+  const todayDeliveries = completedDeliveries.filter(d => {
+    const value = deliveryHistoryDate(d);
+    return value && uaeDateKey(value) === todayKey;
+  });
+  const yesterdayDeliveries = completedDeliveries.filter(d => {
+    const value = deliveryHistoryDate(d);
+    return value && uaeDateKey(value) === yesterdayKey;
+  });
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -659,8 +717,10 @@ export default function RiderPanel() {
                     if (rider) {
                       loadDeliveries(rider.id);
                       loadStats(rider.id);
-                      loadFinance(rider.id, financePeriod);
-                      loadCashSubmissions(rider.id);
+                      if (view === 'stats') {
+                        loadFinance(rider.id, financePeriod);
+                        loadCashSubmissions(rider.id);
+                      }
                     }
                   }}
                   className="w-full flex items-center justify-between bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-xl px-4 py-3 text-left"
@@ -857,7 +917,16 @@ export default function RiderPanel() {
                 )}
               </>
             ) : (
-              <div className="py-12 text-center text-gray-500">Finance report is not available.</div>
+              <Card className="bg-gray-900 border-gray-800 p-5 text-center">
+                <p className="text-gray-300 font-medium">Finance report could not be loaded.</p>
+                <p className="text-gray-500 text-xs mt-1">{financeError || 'Please tap Refresh after Render is Live.'}</p>
+                <Button
+                  onClick={() => rider && loadFinance(rider.id, financePeriod)}
+                  className="mt-4 bg-red-600 hover:bg-red-700 text-white"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" /> Retry
+                </Button>
+              </Card>
             )}
           </div>
         )}
@@ -891,7 +960,7 @@ export default function RiderPanel() {
                       <div>
                         <p className="text-white font-semibold">Order #{delivery.order_id}</p>
                         <p className="text-gray-500 text-xs mt-1">{delivery.customer_name}</p>
-                        <p className="text-gray-600 text-xs mt-1">{formatDateTime(delivery.created_at)}</p>
+                        <p className="text-gray-600 text-xs mt-1">{formatDateTime(delivery.updated_at || delivery.created_at)}</p>
                       </div>
                       <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
                     </div>
