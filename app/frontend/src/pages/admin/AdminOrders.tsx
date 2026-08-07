@@ -1,1261 +1,1088 @@
-# @File: backend/routers/rider.py
-# @Desc: Rider panel API routes for delivery management
-import logging
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, and_
-from typing import Optional
-from datetime import datetime, timezone, timedelta
 
-from core.database import get_db
-from models.riders import Riders
-from models.delivery_assignments import Delivery_assignments
-from models.orders import Orders
-from models.rider_cash_settlements import Rider_cash_settlements
-from services.rider_assignment import (
-    auto_assign_order,
-    auto_assign_unassigned_orders,
-    get_auto_assign_enabled,
-    set_auto_assign_enabled,
-    get_restaurant_location,
-    haversine_km,
-    rider_live_status,
-)
-
-router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { toast } from 'sonner';
+import { Order } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 
-def is_delivery_order(order: Orders) -> bool:
-    """Detect delivery orders including older rows where type is stored in notes."""
-    explicit = str(getattr(order, "order_type", "") or "").lower().strip()
-    notes = str(getattr(order, "order_notes", "") or "").lower()
-    payment = str(getattr(order, "payment_method", "") or "").lower()
+type AdminOrder = Order & {
+  order_type?: string;
+  delivery_charge?: number;
+  tip_amount?: number;
+  tip_type?: string;
+};
+
+function adminHeaders() {
+  const adminToken =
+    localStorage.getItem('fai_fai_admin_token') || '';
+
+  return {
+    'Content-Type': 'application/json',
+    ...(adminToken
+      ? { Authorization: `Bearer ${adminToken}` }
+      : {}),
+  };
+}
+
+async function adminRequest<T>(
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  data?: unknown,
+  params?: Record<string, unknown>,
+): Promise<T> {
+  const response = await axios.request<T>({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${path}`,
+    method,
+    data,
+    params,
+    headers: adminHeaders(),
+    timeout: 20000,
+  });
+  return response.data;
+}
+
+function isDeliveryOrder(order: AdminOrder): boolean {
+  if (String(order.order_type || '').toLowerCase() === 'delivery') return true;
+  const notes = String(order.order_notes || '').toLowerCase();
+  return notes.includes('order type: delivery') || notes.includes('delivery address:');
+}
+
+interface RiderInfo {
+  id: number;
+  name: string;
+  phone: string;
+  is_active: boolean;
+  is_online?: boolean;
+  has_gps?: boolean;
+  gps_fresh?: boolean;
+  eligible_for_assignment?: boolean;
+  availability_reason?: 'available' | 'offline' | 'gps_missing' | 'gps_outdated' | 'inactive' | string;
+  current_lat?: number | null;
+  current_lng?: number | null;
+  last_heartbeat?: string | null;
+  location_updated_at?: string | null;
+  heartbeat_age_seconds?: number | null;
+  location_age_seconds?: number | null;
+  active_deliveries?: number;
+  distance_to_shop_km?: number | null;
+  shop_lat?: number | null;
+  shop_lng?: number | null;
+}
+
+const STATUS_OPTIONS = [
+  { value: 'new', label: 'New Order', color: 'bg-blue-600' },
+  { value: 'accepted', label: 'Accepted', color: 'bg-green-600' },
+  { value: 'preparing', label: 'Preparing', color: 'bg-yellow-600' },
+  { value: 'ready', label: 'Ready', color: 'bg-purple-600' },
+  { value: 'out_for_delivery', label: 'Out for Delivery', color: 'bg-blue-700' },
+  { value: 'completed', label: 'Completed', color: 'bg-gray-600' },
+  { value: 'cancelled', label: 'Cancelled', color: 'bg-red-600' },
+];
+
+const TIME_OPTIONS = [
+  { value: 15, label: '15 min' },
+  { value: 20, label: '20 min' },
+  { value: 25, label: '25 min' },
+  { value: 30, label: '30 min' },
+  { value: 40, label: '40 min' },
+  { value: 45, label: '45 min' },
+  { value: 60, label: '1 hour' },
+];
+
+export default function AdminOrders() {
+  const navigate = useNavigate();
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [search, setSearch] = useState('');
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [refreshing, setRefreshing] = useState(false);
+  const [prevOrderCount, setPrevOrderCount] = useState(0);
+  const [acceptingOrder, setAcceptingOrder] = useState<number | null>(null);
+  const [selectedTime, setSelectedTime] = useState<number>(20);
+  const [riders, setRiders] = useState<RiderInfo[]>([]);
+  const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
+  const [selectedRider, setSelectedRider] = useState<string>('');
+  const [deletingOrder, setDeletingOrder] = useState<number | null>(null);
+  const [noteOrder, setNoteOrder] = useState<number | null>(null);
+  const [staffNote, setStaffNote] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
+  const [cancellingOrder, setCancellingOrder] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
+  const [savingAutoAssign, setSavingAutoAssign] = useState(false);
+  const riderMapContainerRef = useRef<HTMLDivElement>(null);
+  const riderMapRef = useRef<L.Map | null>(null);
+  const riderMapLayerRef = useRef<L.LayerGroup | null>(null);
+
+  // Track recently updated order IDs to prevent poll from reverting optimistic updates
+  const recentlyUpdatedRef = useRef<Map<number, number>>(new Map());
+
+  const loadOrders = useCallback(async (showToast = false) => {
+    try {
+      setRefreshing(true);
+      const params: any = { sort: '-created_at', limit: 100 };
+      if (filterStatus && filterStatus !== 'all') params.status = filterStatus;
+      if (search) params.search = search;
+
+      const payload = await adminRequest<{ items?: AdminOrder[] }>(
+        '/api/v1/admin/orders',
+        'GET',
+        undefined,
+        params,
+      );
+      const newOrders = payload?.items || [];
+
+      // Clean old entries from recently-updated map (older than 5s)
+      const now = Date.now();
+      const recentUpdates = recentlyUpdatedRef.current;
+      for (const [id, ts] of recentUpdates.entries()) {
+        if (now - ts > 5000) recentUpdates.delete(id);
+      }
+
+      // Merge: keep local state for recently-updated orders
+      const mergedOrders = newOrders.map((polledOrder: Order) => {
+        if (recentUpdates.has(polledOrder.id)) {
+          const localOrder = orders.find(o => o.id === polledOrder.id);
+          return localOrder || polledOrder;
+        }
+        return polledOrder;
+      });
+
+      // Remove orders that were locally deleted
+      const filteredOrders = mergedOrders.filter((o: Order) => {
+        if (recentUpdates.has(o.id) && !orders.find(lo => lo.id === o.id)) {
+          return false;
+        }
+        return true;
+      });
+      
+      // Check for new orders and notify (no sound in admin - sound only in kitchen)
+      if (prevOrderCount > 0 && filteredOrders.length > prevOrderCount) {
+        const diff = filteredOrders.length - prevOrderCount;
+        toast.success(`🔔 ${diff} new order${diff > 1 ? 's' : ''} received!`);
+      }
+      
+      setPrevOrderCount(filteredOrders.length);
+      setOrders(filteredOrders);
+      setLastRefresh(new Date());
+      if (showToast) toast.success('Orders refreshed!');
+    } catch (e: any) {
+      console.error('Failed to load orders:', e);
+      if (e?.status === 401 || e?.response?.status === 401) {
+        toast.error('Admin session expired or Kitchen PIN was rejected. Logout and login again.');
+      } else if (showToast) {
+        toast.error('Failed to refresh orders. Please try again.');
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [filterStatus, search, prevOrderCount, navigate, orders]);
+
+  useEffect(() => {
+    checkAuthAndLoad();
+    loadRiders();
+    loadAutoAssignSetting();
+    const interval = setInterval(() => {
+      loadOrders();
+      loadRiders();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    renderRiderMap();
+  }, [riders, loading]);
+
+  useEffect(() => {
+    return () => {
+      riderMapRef.current?.remove();
+      riderMapRef.current = null;
+      riderMapLayerRef.current = null;
+    };
+  }, []);
+
+  async function loadRiders() {
+    try {
+      const payload = await adminRequest<{ items?: RiderInfo[] }>(
+        '/api/v1/rider/admin/locations',
+      );
+      setRiders(Array.isArray(payload?.items) ? payload.items : []);
+    } catch (error) {
+      console.error('Failed to load live rider locations:', error);
+      // Do not fall back to a basic list because it has no reliable online/GPS status.
+    }
+  }
+
+  async function loadAutoAssignSetting() {
+    try {
+      const payload = await adminRequest<{ enabled?: boolean }>(
+        '/api/v1/rider/admin/auto-assign',
+      );
+      setAutoAssignEnabled(Boolean(payload?.enabled));
+    } catch (error) {
+      console.error('Failed to load auto assign setting:', error);
+    }
+  }
+
+  async function toggleAutoAssign() {
+    const nextEnabled = !autoAssignEnabled;
+    setSavingAutoAssign(true);
+    try {
+      const payload = await adminRequest<{
+        enabled?: boolean;
+        assigned_count?: number;
+      }>(
+        '/api/v1/rider/admin/auto-assign',
+        'PUT',
+        { enabled: nextEnabled },
+      );
+      const enabled = Boolean(payload?.enabled);
+      setAutoAssignEnabled(enabled);
+
+      if (enabled) {
+        const assignedCount = Number(payload?.assigned_count || 0);
+        toast.success(
+          assignedCount > 0
+            ? `Auto Assign ON — ${assignedCount} delivery order rider ko assign ho gaya`
+            : 'Auto Assign ON — new delivery order nearest available rider ko jayega',
+        );
+      } else {
+        toast.success('Auto Assign OFF — Admin manually rider assign karega');
+      }
+
+      await Promise.all([loadRiders(), loadOrders()]);
+    } catch (error: any) {
+      toast.error(
+        error?.response?.data?.detail ||
+        error?.data?.detail ||
+        'Auto Assign setting save nahi hui',
+      );
+    } finally {
+      setSavingAutoAssign(false);
+    }
+  }
+
+  async function assignToRider(order: Order) {
+    if (!selectedRider) {
+      toast.error('Please select a rider');
+      return;
+    }
+    const selected = riders.find(rider => String(rider.id) === selectedRider);
+    if (!selected?.eligible_for_assignment) {
+      toast.error('Rider offline hai ya uski GPS location fresh nahi hai');
+      return;
+    }
+    // Parse GPS from order notes
+    let lat: number | null = null;
+    let lng: number | null = null;
+    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
+    if (gpsMatch) {
+      lat = parseFloat(gpsMatch[1]);
+      lng = parseFloat(gpsMatch[2]);
+    }
+    // Parse address from order notes
+    let address = '';
+    const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/);
+    if (addrMatch) address = addrMatch[1].trim();
+
+    try {
+      await adminRequest(
+        '/api/v1/rider/admin/assign',
+        'POST',
+        {
+          order_id: order.id,
+          rider_id: Number(selectedRider),
+          customer_lat: lat,
+          customer_lng: lng,
+          customer_address: address,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
+        },
+      );
+      toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      setAssigningOrder(null);
+      setSelectedRider('');
+      await loadRiders();
+      await loadOrders();
+    } catch (e: any) {
+      toast.error(
+        e?.response?.data?.detail ||
+        e?.data?.detail ||
+        'Failed to assign rider',
+      );
+    }
+  }
+
+  useEffect(() => {
+    loadOrders();
+  }, [filterStatus, search]);
+
+  function checkAuthAndLoad() {
+    const auth = localStorage.getItem('admin_auth');
+    if (!auth) {
+      navigate('/admin');
+      setLoading(false);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(auth);
+      if (!parsed.loggedIn) {
+        navigate('/admin');
+        setLoading(false);
+        return;
+      }
+    } catch {
+      navigate('/admin');
+      setLoading(false);
+      return;
+    }
+    loadOrders();
+    setLoading(false);
+  }
+
+  async function acceptOrder(orderId: number, minutes: number) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'accepted', estimated_minutes: minutes },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: 'accepted', estimated_time: `${minutes} min` } : o))
+      );
+      setAcceptingOrder(null);
+      toast.success(`Order #${orderId} accepted — ${minutes} min`);
+    } catch (e) {
+      console.error('Failed to accept order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to accept order');
+    }
+  }
+
+  async function updateStatus(orderId: number, newStatus: string) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      const target = orders.find((item) => item.id === orderId);
+      if (target && isDeliveryOrder(target) && newStatus === 'completed') {
+        toast.error('Delivery order sirf Rider Delivered karke complete karega.');
+        return;
+      }
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: newStatus },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
+      toast.success(`Order #${orderId} → ${newStatus}`);
+    } catch (e) {
+      console.error('Failed to update status:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to update status');
+    }
+  }
+
+  async function cancelOrder(orderId: number, reason?: string) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/status`,
+        'PUT',
+        { status: 'cancelled', cancel_reason: reason || '' },
+      );
+      setOrders(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
+      );
+      toast.success(`Order #${orderId} cancelled`);
+    } catch (e) {
+      console.error('Failed to cancel order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error('Failed to cancel order');
+    }
+  }
+
+  async function deleteOrder(orderId: number) {
+    try {
+      recentlyUpdatedRef.current.set(orderId, Date.now());
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}`,
+        'DELETE',
+      );
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+      setDeletingOrder(null);
+      toast.success(`Order #${orderId} deleted permanently`);
+    } catch (e: any) {
+      console.error('Failed to delete order:', e);
+      recentlyUpdatedRef.current.delete(orderId);
+      toast.error(e?.data?.detail || 'Failed to delete order');
+    }
+  }
+
+  async function addStaffNoteToOrder(orderId: number) {
+    if (!staffNote.trim()) {
+      toast.error('Please enter a note');
+      return;
+    }
+    setAddingNote(true);
+    try {
+      await adminRequest(
+        `/api/v1/admin/orders/${orderId}/notes`,
+        'POST',
+        { note: staffNote, admin_name: 'Admin' },
+      );
+      toast.success('Staff note added');
+      setNoteOrder(null);
+      setStaffNote('');
+      loadOrders();
+    } catch (e: any) {
+      console.error('Failed to add note:', e);
+      toast.error(e?.data?.detail || 'Failed to add note');
+    } finally {
+      setAddingNote(false);
+    }
+  }
+
+  function printReceipt(order: Order) {
+    let items: any[] = [];
+    try { items = JSON.parse(order.items_json); } catch { /* parse error */ }
+
+    const receiptHtml = `
+      <html><head><title>Receipt #${order.id}</title>
+      <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px}
+      h2{text-align:center;margin-bottom:5px}
+      .line{border-top:1px dashed #000;margin:10px 0}
+      .item{display:flex;justify-content:space-between;margin:5px 0}
+      .total{font-weight:bold;font-size:1.2em}</style></head>
+      <body>
+      <h2>Fai Fai Juice</h2>
+      <p style="text-align:center">Murbah, Fujairah, UAE<br>+971 54 294 0112</p>
+      <div class="line"></div>
+      <p><strong>Order #${order.id}</strong><br>
+      Customer: ${order.customer_name}<br>
+      Phone: ${order.customer_phone}<br>
+      ${order.estimated_time ? `Ready in: ${order.estimated_time}<br>` : ''}
+      Payment: ${order.payment_method}</p>
+      <div class="line"></div>
+      ${items.map(i => `<div class="item"><span>${i.quantity}x ${i.name} (${i.size})</span><span>AED ${i.price?.toFixed(2)}</span></div>${i.extras?.length ? `<div style="font-size:0.8em;color:#666;margin-left:10px">+ ${i.extras.join(', ')}</div>` : ''}`).join('')}
+      <div class="line"></div>
+      ${order.delivery_charge ? `<div class="item"><span>Delivery Fee</span><span>AED ${order.delivery_charge?.toFixed(2)}</span></div>` : ''}
+      ${order.tip_amount ? `<div class="item"><span>Tip${order.tip_type ? ` (${order.tip_type})` : ''}</span><span>AED ${order.tip_amount?.toFixed(2)}</span></div>` : ''}
+      <div class="item total"><span>TOTAL</span><span>AED ${order.total_amount?.toFixed(2)}</span></div>
+      ${order.order_notes ? `<div class="line"></div><p>Notes: ${order.order_notes}</p>` : ''}
+      <div class="line"></div>
+      <p style="text-align:center;font-size:0.8em">Thank you for your order!</p>
+      </body></html>
+    `;
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(receiptHtml);
+      printWindow.document.close();
+      printWindow.print();
+    }
+  }
+
+  function getRiderAvailability(rider: RiderInfo): string {
+    if (rider.eligible_for_assignment) return 'Online • GPS live';
+    if (rider.availability_reason === 'offline') return 'Offline';
+    if (rider.availability_reason === 'gps_missing') return 'GPS unavailable';
+    if (rider.availability_reason === 'gps_outdated') return 'GPS outdated';
+    return 'Unavailable';
+  }
+
+  function renderRiderMap() {
+    if (!riderMapContainerRef.current) return;
+
+    const ridersWithGps = riders.filter(
+      rider => rider.current_lat != null && rider.current_lng != null,
+    );
+    const shopLat = riders.find(rider => rider.shop_lat != null)?.shop_lat ?? null;
+    const shopLng = riders.find(rider => rider.shop_lng != null)?.shop_lng ?? null;
+    const firstPoint =
+      shopLat != null && shopLng != null
+        ? ([shopLat, shopLng] as [number, number])
+        : ridersWithGps.length > 0
+          ? ([Number(ridersWithGps[0].current_lat), Number(ridersWithGps[0].current_lng)] as [number, number])
+          : ([25.2747, 56.3450] as [number, number]);
+
+    if (!riderMapRef.current) {
+      const map = L.map(riderMapContainerRef.current).setView(firstPoint, 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+      }).addTo(map);
+      riderMapRef.current = map;
+      riderMapLayerRef.current = L.layerGroup().addTo(map);
+    }
+
+    const map = riderMapRef.current;
+    const layer = riderMapLayerRef.current;
+    if (!map || !layer) return;
+    layer.clearLayers();
+
+    const bounds: [number, number][] = [];
+
+    if (shopLat != null && shopLng != null) {
+      const shopIcon = L.divIcon({
+        html: '<div style="width:34px;height:34px;border-radius:50%;background:#f97316;border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);font-size:17px">🏪</div>',
+        className: '',
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+      L.marker([shopLat, shopLng], { icon: shopIcon })
+        .addTo(layer)
+        .bindPopup('<strong>Fai Fai Juice</strong><br>Pickup shop');
+      bounds.push([shopLat, shopLng]);
+    }
+
+    ridersWithGps.forEach(rider => {
+      const lat = Number(rider.current_lat);
+      const lng = Number(rider.current_lng);
+      const live = rider.eligible_for_assignment === true;
+      const markerColor = live ? '#16a34a' : '#6b7280';
+      const icon = L.divIcon({
+        html: `<div style="width:32px;height:32px;border-radius:50%;background:${markerColor};border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);font-size:15px">🏍️</div>`,
+        className: '',
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+      const distance = rider.distance_to_shop_km != null
+        ? `${Number(rider.distance_to_shop_km).toFixed(2)} km from shop`
+        : 'Shop distance unavailable';
+      const lastGps = getLocationAge(rider.location_updated_at) || 'No GPS update';
+      L.marker([lat, lng], { icon })
+        .addTo(layer)
+        .bindPopup(
+          `<strong>${rider.name}</strong><br>${rider.phone}<br>${getRiderAvailability(rider)}<br>${distance}<br>Pending: ${rider.active_deliveries ?? 0}<br>GPS: ${lastGps}`,
+        );
+      bounds.push([lat, lng]);
+    });
+
+    if (bounds.length > 1) {
+      map.fitBounds(bounds, { padding: [35, 35], maxZoom: 15 });
+    } else if (bounds.length === 1) {
+      map.setView(bounds[0], 14);
+    }
+    setTimeout(() => map.invalidateSize(), 0);
+  }
+
+  // Get human-readable time since last location update
+  function getLocationAge(updatedAt: string | null | undefined): string {
+    if (!updatedAt) return '';
+    const diff = Date.now() - new Date(updatedAt).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    return `${hours}h ago`;
+  }
+
+  if (loading) {
     return (
-        explicit == "delivery"
-        or "order type: delivery" in notes
-        or "delivery address:" in notes
-        or "cash on delivery" in payment
-        or "card on delivery" in payment
-    )
-
-
-def require_live_rider(rider: Riders) -> dict:
-    """Reject manual assignment to offline riders or riders with stale/missing GPS."""
-    live = rider_live_status(rider)
-    if live["eligible_for_assignment"]:
-        return live
-
-    reason = live.get("reason")
-    if reason == "offline":
-        detail = "Rider is offline. Rider app must stay signed in."
-    elif reason == "gps_missing":
-        detail = "Rider GPS is unavailable. Enable location permission in Rider app."
-    elif reason == "gps_outdated":
-        detail = "Rider GPS location is outdated. Wait for a fresh location update."
-    else:
-        detail = "Rider is inactive or unavailable."
-    raise HTTPException(status_code=400, detail=detail)
-
-
-class RiderLoginRequest(BaseModel):
-    phone: str
-    pin: str
-
-
-class DeliveryStatusUpdate(BaseModel):
-    status: str  # accepted, rejected, picked_up, on_the_way, delivered
-
-
-class AssignDeliveryRequest(BaseModel):
-    order_id: int
-    rider_id: int
-    customer_lat: Optional[float] = None
-    customer_lng: Optional[float] = None
-    customer_address: Optional[str] = ""
-    customer_name: Optional[str] = ""
-    customer_phone: Optional[str] = ""
-    delivery_charge: Optional[float] = 0
-    distance_km: Optional[float] = None
-    zone_name: Optional[str] = None
-
-
-class CreateRiderRequest(BaseModel):
-    name: str
-    phone: str
-    pin: str
-    delivery_charge: Optional[float] = 0
-    shift_start: Optional[str] = None
-    shift_end: Optional[str] = None
-
-
-class AutoAssignSettingsUpdate(BaseModel):
-    enabled: bool
-
-
-@router.post("/login")
-async def rider_login(
-    data: RiderLoginRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Rider login with phone + PIN - no auth required"""
-    try:
-        result = await db.execute(
-            select(Riders).where(
-                Riders.phone == data.phone,
-                Riders.pin == data.pin,
-                Riders.is_active == True,
-            )
-        )
-        rider = result.scalar_one_or_none()
-
-        if not rider:
-            raise HTTPException(status_code=401, detail="Invalid phone or PIN")
-
-        # Mark rider as online immediately on login
-        rider.last_heartbeat = datetime.now(timezone.utc)
-        await db.commit()
-
-        return {
-            "success": True,
-            "rider": {
-                "id": rider.id,
-                "name": rider.name,
-                "phone": rider.phone,
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Rider login failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/heartbeat/{rider_id}")
-async def rider_heartbeat(
-    rider_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Rider sends heartbeat every 15s to indicate they are online"""
-    try:
-        result = await db.execute(select(Riders).where(Riders.id == rider_id))
-        rider = result.scalar_one_or_none()
-        if not rider:
-            raise HTTPException(status_code=404, detail="Rider not found")
-        rider.last_heartbeat = datetime.now(timezone.utc)
-        await db.commit()
-        # When Auto Assign is ON, a rider coming online can immediately receive
-        # the oldest waiting delivery order. Heartbeat must still succeed even
-        # if assignment is temporarily unavailable.
-        try:
-            await auto_assign_unassigned_orders(db, limit=25)
-        except Exception:
-            logging.exception("Auto assignment after rider heartbeat failed")
-            await db.rollback()
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to update rider heartbeat: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/deliveries/{rider_id}")
-async def get_rider_deliveries(
-    rider_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get assigned deliveries for a rider"""
-    try:
-        result = await db.execute(
-            select(Delivery_assignments)
-            .where(Delivery_assignments.rider_id == rider_id)
-            .order_by(desc(Delivery_assignments.created_at))
-            .limit(50)
-        )
-        assignments = result.scalars().all()
-
-        items = []
-        for a in assignments:
-            # Get order details
-            order_result = await db.execute(
-                select(Orders).where(Orders.id == a.order_id)
-            )
-            order = order_result.scalar_one_or_none()
-
-            items.append({
-                "id": a.id,
-                "order_id": a.order_id,
-                "status": a.status,
-                "customer_lat": a.customer_lat,
-                "customer_lng": a.customer_lng,
-                "customer_address": a.customer_address,
-                "customer_name": a.customer_name,
-                "customer_phone": a.customer_phone,
-                "order_total": order.total_amount if order else 0,
-                "order_items": order.items_json if order else "[]",
-                "order_status": order.status if order else "unknown",
-                "delivery_charge": a.delivery_charge or 0,
-                "distance_km": a.distance_km,
-                "zone_name": a.zone_name,
-                "tip_amount": (order.tip_amount or 0) if order and hasattr(order, 'tip_amount') and order.tip_type == 'rider' else 0,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            })
-
-        return {"items": items}
-    except Exception as e:
-        logging.error(f"Failed to get rider deliveries: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/deliveries/{assignment_id}/status")
-async def update_delivery_status(
-    assignment_id: int,
-    data: DeliveryStatusUpdate,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Update rider delivery progress.
-
-    Order flow:
-    - assigned: rider must Accept or Reject
-    - accepted: order remains Ready in Kitchen
-    - rejected: order stays Ready and can be assigned again
-    - picked_up / on_the_way: order becomes out_for_delivery and appears in Kitchen Today as Delivery Pending
-    - delivered: order becomes completed automatically
-    """
-    new_status = str(data.status or "").lower().strip()
-    valid_statuses = [
-        "assigned",
-        "accepted",
-        "rejected",
-        "picked_up",
-        "on_the_way",
-        "delivered",
-    ]
-
-    if new_status not in valid_statuses:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid status. Must be one of: {valid_statuses}",
-        )
-
-    try:
-        result = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.id == assignment_id
-            )
-        )
-        assignment = result.scalar_one_or_none()
-
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Assignment not found")
-
-        current_assignment_status = str(
-            assignment.status or "assigned"
-        ).lower().strip()
-
-        transitions = {
-            "assigned": {"accepted", "rejected"},
-            "accepted": {"picked_up", "rejected"},
-            "picked_up": {"on_the_way", "delivered"},
-            "on_the_way": {"delivered"},
-            "rejected": set(),
-            "delivered": set(),
-        }
-
-        if new_status == current_assignment_status:
-            return {
-                "success": True,
-                "status": current_assignment_status,
-                "order_status": None,
-                "order_id": assignment.order_id,
-            }
-
-        if new_status not in transitions.get(current_assignment_status, set()):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Cannot change delivery from {current_assignment_status} "
-                    f"to {new_status}."
-                ),
-            )
-
-        order_result = await db.execute(
-            select(Orders).where(Orders.id == assignment.order_id)
-        )
-        order = order_result.scalar_one_or_none()
-
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-
-        current_order_status = str(order.status or "new").lower().strip()
-        if current_order_status == "cancelled":
-            raise HTTPException(
-                status_code=400,
-                detail="Cancelled order deliver nahi ho sakta.",
-            )
-
-        if not is_delivery_order(order):
-            raise HTTPException(
-                status_code=400,
-                detail="Pickup order Rider delivery flow me nahi ja sakta.",
-            )
-
-        if new_status == "picked_up" and current_order_status != "ready":
-            raise HTTPException(
-                status_code=400,
-                detail="Kitchen ne order abhi Ready nahi kiya.",
-            )
-
-        if new_status in {"on_the_way", "delivered"} and current_order_status != "out_for_delivery":
-            raise HTTPException(
-                status_code=400,
-                detail="Order pehle Picked Up hona chahiye.",
-            )
-
-        assignment.status = new_status
-
-        if new_status in ("assigned", "accepted", "rejected"):
-            # Accept/Reject only changes the assignment. The kitchen order keeps
-            # its current status; a rejected Ready order can be assigned again.
-            pass
-        elif new_status in ("picked_up", "on_the_way"):
-            # Kitchen work is finished, but the sale is not final yet.
-            order.status = "out_for_delivery"
-        elif new_status == "delivered":
-            # Only Rider Delivered finalizes a delivery sale.
-            order.status = "completed"
-
-        await db.commit()
-        await db.refresh(assignment)
-        await db.refresh(order)
-
-        auto_reassigned = None
-        if new_status == "rejected":
-            try:
-                auto_reassigned = await auto_assign_order(
-                    db,
-                    order,
-                    exclude_rider_ids={assignment.rider_id},
-                )
-            except Exception:
-                logging.exception("Automatic reassign after rejection failed")
-                await db.rollback()
-
-        return {
-            "success": True,
-            "status": assignment.status,
-            "order_status": order.status,
-            "order_id": order.id,
-            "auto_reassigned": auto_reassigned,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to update delivery status: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Admin endpoints for rider management; protected by Fai Fai admin middleware.
-# (admin uses localStorage PIN-based auth in frontend)
-@router.post("/admin/create")
-async def create_rider(
-    data: CreateRiderRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin creates a new rider"""
-    try:
-        rider = Riders(
-            name=data.name,
-            phone=data.phone,
-            pin=data.pin,
-            is_active=True,
-            delivery_charge=data.delivery_charge or 0,
-            shift_start=data.shift_start,
-            shift_end=data.shift_end,
-        )
-        db.add(rider)
-        await db.commit()
-        await db.refresh(rider)
-        return {"success": True, "rider": {"id": rider.id, "name": rider.name, "phone": rider.phone, "delivery_charge": rider.delivery_charge}}
-    except Exception as e:
-        logging.error(f"Failed to create rider: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/admin/list")
-async def list_riders(
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin gets all riders; Kitchen can use its configured PIN for reads."""
-    try:
-        result = await db.execute(select(Riders).order_by(desc(Riders.created_at)))
-        riders = result.scalars().all()
-        items = [
-            {
-                "id": r.id, "name": r.name, "phone": r.phone, "is_active": r.is_active,
-                "delivery_charge": r.delivery_charge or 0,
-                "shift_start": r.shift_start,
-                "shift_end": r.shift_end,
-            }
-            for r in riders
-        ]
-        return {"items": items}
-    except Exception as e:
-        logging.error(f"Failed to list riders: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/admin/assign")
-async def assign_delivery(
-    data: AssignDeliveryRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin assigns only an online rider with fresh GPS."""
-    try:
-        existing_result = await db.execute(
-            select(Delivery_assignments, Riders)
-            .join(Riders, Riders.id == Delivery_assignments.rider_id)
-            .where(
-                Delivery_assignments.order_id == data.order_id,
-                Delivery_assignments.status.notin_(["delivered", "rejected"]),
-            )
-            .order_by(desc(Delivery_assignments.created_at), desc(Delivery_assignments.id))
-            .limit(1)
-        )
-        existing_row = existing_result.first()
-        if existing_row:
-            existing_assignment, existing_rider = existing_row
-            return {
-                "success": True,
-                "already_assigned": True,
-                "assignment_id": existing_assignment.id,
-                "assignment": {
-                    "id": existing_assignment.id,
-                    "order_id": existing_assignment.order_id,
-                    "rider_id": existing_assignment.rider_id,
-                    "rider_name": existing_rider.name,
-                    "rider_phone": existing_rider.phone,
-                    "status": existing_assignment.status or "assigned",
-                    "created_at": existing_assignment.created_at.isoformat() if existing_assignment.created_at else None,
-                    "updated_at": existing_assignment.updated_at.isoformat() if existing_assignment.updated_at else None,
-                },
-            }
-
-        order_result = await db.execute(select(Orders).where(Orders.id == data.order_id))
-        order = order_result.scalar_one_or_none()
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        if str(order.status or "").lower().strip() in {"completed", "cancelled"}:
-            raise HTTPException(status_code=400, detail="Completed/cancelled order cannot be assigned")
-        if not is_delivery_order(order):
-            raise HTTPException(status_code=400, detail="Only delivery orders can be assigned to a rider")
-
-        rider_result = await db.execute(
-            select(Riders).where(
-                Riders.id == data.rider_id,
-                Riders.is_active == True,
-            )
-        )
-        rider = rider_result.scalar_one_or_none()
-        if not rider:
-            raise HTTPException(status_code=404, detail="Rider not found or inactive")
-
-        live = require_live_rider(rider)
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        if shop_lat is None or shop_lng is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Shop GPS is missing. Save restaurant latitude and longitude first.",
-            )
-        pickup_distance = haversine_km(
-            float(live["lat"]),
-            float(live["lng"]),
-            shop_lat,
-            shop_lng,
-        )
-
-        assignment = Delivery_assignments(
-            order_id=data.order_id,
-            rider_id=data.rider_id,
-            status="assigned",
-            customer_lat=data.customer_lat,
-            customer_lng=data.customer_lng,
-            customer_address=data.customer_address or "",
-            customer_name=data.customer_name or "",
-            customer_phone=data.customer_phone or "",
-            delivery_charge=data.delivery_charge or 0,
-            distance_km=round(pickup_distance, 2),
-            zone_name=data.zone_name or "Manual Assign",
-        )
-        db.add(assignment)
-        await db.commit()
-        await db.refresh(assignment)
-        return {
-            "success": True,
-            "already_assigned": False,
-            "assignment_id": assignment.id,
-            "assignment": {
-                "id": assignment.id,
-                "order_id": assignment.order_id,
-                "rider_id": assignment.rider_id,
-                "rider_name": rider.name,
-                "rider_phone": rider.phone,
-                "status": assignment.status or "assigned",
-                "distance_to_shop_km": round(pickup_distance, 2),
-                "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
-                "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to assign delivery: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/admin/auto-assign")
-async def get_auto_assign_setting(
-    db: AsyncSession = Depends(get_db),
-):
-    """Return the persistent Admin auto-assignment switch."""
-    try:
-        return {"enabled": await get_auto_assign_enabled(db)}
-    except Exception as e:
-        logging.error(f"Failed to read auto assign setting: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/admin/auto-assign")
-async def update_auto_assign_setting(
-    data: AutoAssignSettingsUpdate,
-    db: AsyncSession = Depends(get_db),
-):
-    """Turn automatic nearest-rider assignment ON/OFF from Admin Orders."""
-    try:
-        enabled = await set_auto_assign_enabled(db, data.enabled)
-        assigned = []
-        if enabled:
-            assigned = await auto_assign_unassigned_orders(db, force=True, limit=100)
-        return {
-            "success": True,
-            "enabled": enabled,
-            "assigned_count": len(assigned),
-            "assignments": assigned,
-        }
-    except Exception as e:
-        logging.error(f"Failed to update auto assign setting: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class UpdateLocationRequest(BaseModel):
-    lat: float
-    lng: float
-
-
-@router.post("/location/{rider_id}")
-async def update_rider_location(
-    rider_id: int,
-    data: UpdateLocationRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Rider sends their GPS location periodically"""
-    try:
-        from datetime import datetime, timezone
-        result = await db.execute(select(Riders).where(Riders.id == rider_id))
-        rider = result.scalar_one_or_none()
-        if not rider:
-            raise HTTPException(status_code=404, detail="Rider not found")
-        rider.current_lat = data.lat
-        rider.current_lng = data.lng
-        rider.location_updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        try:
-            await auto_assign_unassigned_orders(db, limit=25)
-        except Exception:
-            logging.exception("Auto assignment after rider location update failed")
-            await db.rollback()
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to update rider location: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/admin/locations")
-async def get_rider_locations(
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin gets every active rider with strict live status and shop distance."""
-    try:
-        result = await db.execute(select(Riders).where(Riders.is_active == True))
-        riders = result.scalars().all()
-
-        delivery_counts = {}
-        count_result = await db.execute(
-            select(
-                Delivery_assignments.rider_id,
-                func.count(Delivery_assignments.id).label("count"),
-            )
-            .where(
-                Delivery_assignments.status.in_(
-                    ["assigned", "accepted", "picked_up", "on_the_way"]
-                )
-            )
-            .group_by(Delivery_assignments.rider_id)
-        )
-        for row in count_result:
-            delivery_counts[int(row[0])] = int(row[1])
-
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        now = datetime.now(timezone.utc)
-        items = []
-
-        for rider in riders:
-            live = rider_live_status(rider, now)
-            distance_to_shop = None
-            if (
-                live["has_gps"]
-                and shop_lat is not None
-                and shop_lng is not None
-            ):
-                distance_to_shop = haversine_km(
-                    float(live["lat"]),
-                    float(live["lng"]),
-                    shop_lat,
-                    shop_lng,
-                )
-
-            items.append({
-                "id": rider.id,
-                "name": rider.name,
-                "phone": rider.phone,
-                "is_active": rider.is_active,
-                "is_online": live["is_online"],
-                "has_gps": live["has_gps"],
-                "gps_fresh": live["gps_fresh"],
-                "eligible_for_assignment": live["eligible_for_assignment"],
-                "availability_reason": live["reason"],
-                "current_lat": live["lat"],
-                "current_lng": live["lng"],
-                "last_heartbeat": (
-                    rider.last_heartbeat.isoformat()
-                    if getattr(rider, "last_heartbeat", None)
-                    else None
-                ),
-                "location_updated_at": (
-                    rider.location_updated_at.isoformat()
-                    if rider.location_updated_at
-                    else None
-                ),
-                "heartbeat_age_seconds": live["heartbeat_age_seconds"],
-                "location_age_seconds": live["location_age_seconds"],
-                "active_deliveries": delivery_counts.get(rider.id, 0),
-                "distance_to_shop_km": (
-                    round(distance_to_shop, 2)
-                    if distance_to_shop is not None
-                    else None
-                ),
-                "shop_lat": shop_lat,
-                "shop_lng": shop_lng,
-            })
-
-        # Available nearest riders first; offline/stale riders remain visible below.
-        items.sort(key=lambda item: (
-            not item["eligible_for_assignment"],
-            item["distance_to_shop_km"] if item["distance_to_shop_km"] is not None else float("inf"),
-            item["active_deliveries"],
-            item["id"],
-        ))
-        return {
-            "items": items,
-            "shop_lat": shop_lat,
-            "shop_lng": shop_lng,
-            "eligible_count": sum(1 for item in items if item["eligible_for_assignment"]),
-        }
-    except Exception as e:
-        logging.error(f"Failed to get rider locations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/admin/assignments")
-async def list_order_assignments(
-    db: AsyncSession = Depends(get_db),
-):
-    """Return the latest rider assignment for each order for Admin/Kitchen UI."""
-    try:
-        result = await db.execute(
-            select(Delivery_assignments, Riders)
-            .join(Riders, Riders.id == Delivery_assignments.rider_id)
-            .order_by(desc(Delivery_assignments.created_at), desc(Delivery_assignments.id))
-            .limit(1000)
-        )
-        latest_by_order = {}
-        for assignment, rider in result.all():
-            if assignment.order_id in latest_by_order:
-                continue
-            latest_by_order[assignment.order_id] = {
-                "id": assignment.id,
-                "order_id": assignment.order_id,
-                "rider_id": assignment.rider_id,
-                "rider_name": rider.name,
-                "rider_phone": rider.phone,
-                "status": assignment.status or "assigned",
-                "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
-                "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
-            }
-        return {"items": list(latest_by_order.values())}
-    except Exception as e:
-        logging.error(f"Failed to list assignments: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class UpdateRiderRequest(BaseModel):
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    pin: Optional[str] = None
-    is_active: Optional[bool] = None
-    delivery_charge: Optional[float] = None
-    shift_start: Optional[str] = None
-    shift_end: Optional[str] = None
-
-
-@router.put("/admin/{rider_id}")
-async def update_rider(
-    rider_id: int,
-    data: UpdateRiderRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin updates a rider's info"""
-    try:
-        result = await db.execute(select(Riders).where(Riders.id == rider_id))
-        rider = result.scalar_one_or_none()
-        if not rider:
-            raise HTTPException(status_code=404, detail="Rider not found")
-        if data.name is not None:
-            rider.name = data.name
-        if data.phone is not None:
-            rider.phone = data.phone
-        if data.pin is not None:
-            rider.pin = data.pin
-        if data.is_active is not None:
-            rider.is_active = data.is_active
-        if data.delivery_charge is not None:
-            rider.delivery_charge = data.delivery_charge
-        if data.shift_start is not None:
-            rider.shift_start = data.shift_start
-        if data.shift_end is not None:
-            rider.shift_end = data.shift_end
-        await db.commit()
-        await db.refresh(rider)
-        return {"success": True, "rider": {"id": rider.id, "name": rider.name, "phone": rider.phone, "is_active": rider.is_active, "delivery_charge": rider.delivery_charge, "shift_start": rider.shift_start, "shift_end": rider.shift_end}}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to update rider: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/admin/{rider_id}")
-async def delete_rider(
-    rider_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin deletes a rider permanently"""
-    try:
-        result = await db.execute(select(Riders).where(Riders.id == rider_id))
-        rider = result.scalar_one_or_none()
-        if not rider:
-            raise HTTPException(status_code=404, detail="Rider not found")
-        await db.delete(rider)
-        await db.commit()
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to delete rider: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===================== RIDER DASHBOARD STATS =====================
-
-@router.get("/stats/{rider_id}")
-async def get_rider_stats(
-    rider_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get rider's delivery stats: today, week, month, earnings, cash/card breakdown"""
-    try:
-        now = datetime.now(timezone.utc)
-        # "Today" in Admin must follow UAE shop time, not UTC midnight.
-        uae_now = now.astimezone(timezone(timedelta(hours=4)))
-        today_start = uae_now.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        ).astimezone(timezone.utc)
-        week_start = today_start - timedelta(days=now.weekday())
-        month_start = today_start.replace(day=1)
-
-        # Get all delivered assignments for this rider
-        all_deliveries = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.rider_id == rider_id,
-                Delivery_assignments.status == "delivered",
-            )
-        )
-        all_delivered = all_deliveries.scalars().all()
-
-        # Get pending (non-delivered) assignments
-        pending_result = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.rider_id == rider_id,
-                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
-            )
-        )
-        pending_assignments = pending_result.scalars().all()
-
-        # Collect order IDs for delivered
-        delivered_order_ids = [a.order_id for a in all_delivered]
-
-        # Get order details for earnings calculation
-        total_earnings = 0.0
-        delivery_charges_earned = 0.0
-        today_delivery_earnings = 0.0
-        week_delivery_earnings = 0.0
-        month_delivery_earnings = 0.0
-        tips_earned = 0.0
-        today_tips = 0.0
-        week_tips = 0.0
-        month_tips = 0.0
-        cash_collected = 0.0
-        card_orders = 0
-        today_count = 0
-        week_count = 0
-        month_count = 0
-
-        if delivered_order_ids:
-            orders_result = await db.execute(
-                select(Orders).where(Orders.id.in_(delivered_order_ids))
-            )
-            orders_map = {o.id: o for o in orders_result.scalars().all()}
-
-            for assignment in all_delivered:
-                order = orders_map.get(assignment.order_id)
-                if not order:
-                    continue
-
-                order_amount = order.total_amount or 0
-                total_earnings += order_amount
-                # Delivery charge earned = zone-based charge stored on assignment
-                assignment_delivery_charge = assignment.delivery_charge or 0
-                delivery_charges_earned += assignment_delivery_charge
-
-                # Tips earned by rider
-                order_tip = 0.0
-                if hasattr(order, 'tip_amount') and order.tip_amount and order.tip_type == 'rider':
-                    order_tip = order.tip_amount or 0
-                    tips_earned += order_tip
-
-                if order.payment_method and "cash" in order.payment_method.lower():
-                    cash_collected += order_amount
-                else:
-                    card_orders += 1
-
-                # Time-based counts
-                assignment_time = assignment.updated_at or assignment.created_at
-                if assignment_time:
-                    if hasattr(assignment_time, 'tzinfo') and assignment_time.tzinfo is None:
-                        assignment_time = assignment_time.replace(tzinfo=timezone.utc)
-                    if assignment_time >= today_start:
-                        today_count += 1
-                        today_delivery_earnings += assignment_delivery_charge
-                        today_tips += order_tip
-                    if assignment_time >= week_start:
-                        week_count += 1
-                        week_delivery_earnings += assignment_delivery_charge
-                        week_tips += order_tip
-                    if assignment_time >= month_start:
-                        month_count += 1
-                        month_delivery_earnings += assignment_delivery_charge
-                        month_tips += order_tip
-
-        return {
-            "today_deliveries": today_count,
-            "week_deliveries": week_count,
-            "month_deliveries": month_count,
-            "total_deliveries": len(all_delivered),
-            "total_earnings": round(total_earnings, 2),
-            "delivery_charges_earned": round(delivery_charges_earned, 2),
-            "today_delivery_earnings": round(today_delivery_earnings, 2),
-            "week_delivery_earnings": round(week_delivery_earnings, 2),
-            "month_delivery_earnings": round(month_delivery_earnings, 2),
-            "tips_earned": round(tips_earned, 2),
-            "today_tips": round(today_tips, 2),
-            "week_tips": round(week_tips, 2),
-            "month_tips": round(month_tips, 2),
-            "cash_collected": round(cash_collected, 2),
-            "card_orders": card_orders,
-            "pending_orders": len(pending_assignments),
-            "completed_orders": len(all_delivered),
-        }
-    except Exception as e:
-        logging.error(f"Failed to get rider stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===================== ADMIN RIDER REPORTS =====================
-
-@router.get("/admin/reports")
-async def get_admin_rider_reports(
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin gets complete report of all riders with stats"""
-    try:
-        # Get all riders
-        riders_result = await db.execute(select(Riders).order_by(desc(Riders.created_at)))
-        riders = riders_result.scalars().all()
-
-        # Get all delivery assignments
-        all_assignments_result = await db.execute(
-            select(Delivery_assignments)
-        )
-        all_assignments = all_assignments_result.scalars().all()
-
-        # Get all orders for earnings
-        order_ids = list(set(a.order_id for a in all_assignments))
-        orders_map = {}
-        if order_ids:
-            orders_result = await db.execute(
-                select(Orders).where(Orders.id.in_(order_ids))
-            )
-            orders_map = {o.id: o for o in orders_result.scalars().all()}
-
-        settlements_result = await db.execute(select(Rider_cash_settlements))
-        all_settlements = settlements_result.scalars().all()
-
-        now = datetime.now(timezone.utc)
-        # Rider card's "Today" follows UAE shop day.
-        uae_now = now.astimezone(timezone(timedelta(hours=4)))
-        today_start = uae_now.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        ).astimezone(timezone.utc)
-
-        reports = []
-        for rider in riders:
-            rider_assignments = [a for a in all_assignments if a.rider_id == rider.id]
-            delivered = [a for a in rider_assignments if a.status == "delivered"]
-            pending = [a for a in rider_assignments if a.status in ("assigned", "accepted", "picked_up", "on_the_way")]
-
-            total_earnings = 0.0
-            delivery_charges_earned = 0.0
-            cash_collected = 0.0
-            card_orders = 0
-            today_count = 0
-            today_order_value = 0.0
-
-            for a in delivered:
-                order = orders_map.get(a.order_id)
-                if not order:
-                    continue
-                amount = order.total_amount or 0
-                total_earnings += amount
-                delivery_charges_earned += (a.delivery_charge or 0)
-                if order.payment_method and "cash" in order.payment_method.lower():
-                    cash_collected += amount
-                else:
-                    card_orders += 1
-                # Today count
-                a_time = a.updated_at or a.created_at
-                if a_time:
-                    if hasattr(a_time, 'tzinfo') and a_time.tzinfo is None:
-                        a_time = a_time.replace(tzinfo=timezone.utc)
-                    if a_time >= today_start:
-                        today_count += 1
-                        today_order_value += amount
-
-            rider_settlements = [
-                item for item in all_settlements if item.rider_id == rider.id
-            ]
-            approved_cash = sum(
-                float(item.amount or 0)
-                for item in rider_settlements
-                if item.status == "approved"
-            )
-            awaiting_approval = sum(
-                float(item.amount or 0)
-                for item in rider_settlements
-                if item.status == "pending"
-            )
-            cash_pending = max(cash_collected - approved_cash, 0.0)
-
-            # Determine online status based on heartbeat (60s threshold) or location update (2 min threshold)
-            is_online = False
-            if hasattr(rider, 'last_heartbeat') and rider.last_heartbeat:
-                hb_time = rider.last_heartbeat
-                if hasattr(hb_time, 'tzinfo') and hb_time.tzinfo is None:
-                    hb_time = hb_time.replace(tzinfo=timezone.utc)
-                is_online = (now - hb_time).total_seconds() < 60  # 60s heartbeat threshold
-            if not is_online and rider.location_updated_at:
-                loc_time = rider.location_updated_at
-                if hasattr(loc_time, 'tzinfo') and loc_time.tzinfo is None:
-                    loc_time = loc_time.replace(tzinfo=timezone.utc)
-                is_online = (now - loc_time).total_seconds() < 120  # 2 min location threshold
-
-            reports.append({
-                "id": rider.id,
-                "name": rider.name,
-                "phone": rider.phone,
-                "is_active": rider.is_active,
-                "is_online": is_online,
-                "total_orders": len(delivered),
-                "today_orders": today_count,
-                "today_order_value": round(today_order_value, 2),
-                "pending_orders": len(pending),
-                "total_earnings": round(total_earnings, 2),
-                "delivery_charges_earned": round(delivery_charges_earned, 2),
-                "cash_collected": round(cash_collected, 2),
-                "approved_cash": round(approved_cash, 2),
-                "awaiting_approval": round(awaiting_approval, 2),
-                "cash_pending": round(cash_pending, 2),
-                "card_orders": card_orders,
-                "current_lat": rider.current_lat,
-                "current_lng": rider.current_lng,
-                "location_updated_at": rider.location_updated_at.isoformat() if rider.location_updated_at else None,
-                "shift_start": rider.shift_start,
-                "shift_end": rider.shift_end,
-            })
-
-        return {"items": reports}
-    except Exception as e:
-        logging.error(f"Failed to get admin rider reports: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===================== ADMIN REASSIGN ORDER =====================
-
-class ReassignDeliveryRequest(BaseModel):
-    assignment_id: int
-    new_rider_id: int
-
-
-@router.post("/admin/reassign")
-async def reassign_delivery(
-    data: ReassignDeliveryRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin reassigns only to an online rider with fresh GPS."""
-    try:
-        result = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.id == data.assignment_id
-            )
-        )
-        assignment = result.scalar_one_or_none()
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Assignment not found")
-        if assignment.status == "delivered":
-            raise HTTPException(status_code=400, detail="Cannot reassign delivered order")
-
-        rider_result = await db.execute(
-            select(Riders).where(
-                Riders.id == data.new_rider_id,
-                Riders.is_active == True,
-            )
-        )
-        new_rider = rider_result.scalar_one_or_none()
-        if not new_rider:
-            raise HTTPException(status_code=404, detail="Rider not found or inactive")
-
-        live = require_live_rider(new_rider)
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        if shop_lat is None or shop_lng is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Shop GPS is missing. Save restaurant latitude and longitude first.",
-            )
-
-        assignment.rider_id = data.new_rider_id
-        assignment.status = "assigned"
-        assignment.distance_km = round(
-            haversine_km(
-                float(live["lat"]),
-                float(live["lng"]),
-                shop_lat,
-                shop_lng,
-            ),
-            2,
-        )
-        await db.commit()
-        return {
-            "success": True,
-            "new_rider_name": new_rider.name,
-            "new_rider_phone": new_rider.phone,
-            "distance_to_shop_km": assignment.distance_km,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to reassign delivery: {e}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===================== DELIVERY ETA FOR CUSTOMER =====================
-
-@router.get("/delivery-eta/{order_id}")
-async def get_delivery_eta(
-    order_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Customer gets ETA, assigned rider WhatsApp and only fresh live GPS."""
-    try:
-        result = await db.execute(
-            select(Delivery_assignments)
-            .where(
-                Delivery_assignments.order_id == order_id,
-                Delivery_assignments.status.notin_(["delivered", "rejected"]),
-            )
-            .order_by(desc(Delivery_assignments.updated_at), desc(Delivery_assignments.id))
-            .limit(1)
-        )
-        assignment = result.scalar_one_or_none()
-
-        if not assignment:
-            delivered_result = await db.execute(
-                select(Delivery_assignments).where(
-                    Delivery_assignments.order_id == order_id,
-                    Delivery_assignments.status == "delivered",
-                )
-            )
-            if delivered_result.scalar_one_or_none():
-                return {
-                    "status": "delivered",
-                    "eta_minutes": 0,
-                    "eta_seconds": 0,
-                    "rider_name": None,
-                }
-            return {
-                "status": "no_rider",
-                "eta_minutes": None,
-                "eta_seconds": None,
-                "rider_name": None,
-            }
-
-        order_result = await db.execute(select(Orders).where(Orders.id == order_id))
-        order = order_result.scalar_one_or_none()
-
-        rider_result = await db.execute(
-            select(Riders).where(Riders.id == assignment.rider_id)
-        )
-        rider = rider_result.scalar_one_or_none()
-        live = rider_live_status(rider) if rider else {
-            "is_online": False,
-            "gps_fresh": False,
-            "location_age_seconds": None,
-            "lat": None,
-            "lng": None,
-        }
-
-        import math
-
-        eta_seconds = None
-        distance_km = None
-        if (
-            rider
-            and live["gps_fresh"]
-            and assignment.customer_lat is not None
-            and assignment.customer_lng is not None
-        ):
-            distance_km = haversine_km(
-                float(live["lat"]),
-                float(live["lng"]),
-                float(assignment.customer_lat),
-                float(assignment.customer_lng),
-            )
-            eta_seconds = max(
-                3 * 60,
-                min(90 * 60, int((distance_km / 30) * 3600) + 2 * 60),
-            )
-
-        normalized_status = str(assignment.status or "assigned").lower()
-        order_status = str(getattr(order, "status", "") or "").lower()
-
-        if order and order_status not in ("ready", "out_for_delivery", "completed"):
-            raw_ready_time = str(getattr(order, "pickup_time", "") or "")
-            label, separator, deadline_text = raw_ready_time.partition("|")
-            remaining_prep_seconds = 0
-            if separator and deadline_text:
-                try:
-                    deadline = datetime.fromisoformat(deadline_text.replace("Z", "+00:00"))
-                    if deadline.tzinfo is None:
-                        deadline = deadline.replace(tzinfo=timezone.utc)
-                    remaining_prep_seconds = max(
-                        0,
-                        int((deadline - datetime.now(timezone.utc)).total_seconds()),
-                    )
-                except (TypeError, ValueError):
-                    remaining_prep_seconds = 0
-            elif label:
-                import re
-                match = re.search(r"(\d+)", label)
-                if match and getattr(order, "updated_at", None):
-                    deadline = order.updated_at
-                    if deadline.tzinfo is None:
-                        deadline = deadline.replace(tzinfo=timezone.utc)
-                    deadline += timedelta(minutes=int(match.group(1)))
-                    remaining_prep_seconds = max(
-                        0,
-                        int((deadline - datetime.now(timezone.utc)).total_seconds()),
-                    )
-            if eta_seconds is not None:
-                eta_seconds += remaining_prep_seconds
-
-        if normalized_status == "delivered":
-            eta_seconds = 0
-
-        eta_minutes = (
-            None
-            if eta_seconds is None
-            else (0 if eta_seconds == 0 else max(1, math.ceil(eta_seconds / 60)))
-        )
-
-        location_is_fresh = bool(rider and live["gps_fresh"])
-        return {
-            "status": assignment.status,
-            "eta_minutes": eta_minutes,
-            "eta_seconds": eta_seconds,
-            "calculated_at": datetime.now(timezone.utc).isoformat(),
-            "distance_km": round(distance_km, 2) if distance_km is not None else None,
-            "gps_available": location_is_fresh,
-            "rider_name": rider.name if rider else None,
-            "rider_phone": rider.phone if rider else None,
-            # Never label an old coordinate as live.
-            "rider_lat": live["lat"] if location_is_fresh else None,
-            "rider_lng": live["lng"] if location_is_fresh else None,
-            "rider_is_online": bool(rider and live["is_online"]),
-            "rider_location_is_fresh": location_is_fresh,
-            "rider_location_age_seconds": live.get("location_age_seconds"),
-            "rider_location_updated_at": (
-                rider.location_updated_at.isoformat()
-                if rider and rider.location_updated_at
-                else None
-            ),
-        }
-    except Exception as e:
-        logging.error(f"Failed to get delivery ETA: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-950 px-4 py-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center gap-2 mb-6 flex-wrap">
+          <Button variant="ghost" onClick={() => navigate('/admin/dashboard')} className="text-gray-400 cursor-pointer">
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
+          <div className="flex-1">
+            <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-green-400">SAFE LIVE RIDER</span></h1>
+            <p className="text-gray-500 text-xs mt-0.5">
+              Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => loadOrders(true)}
+            disabled={refreshing}
+            className="border-gray-700 text-gray-300 hover:text-white cursor-pointer"
+          >
+            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={toggleAutoAssign}
+            disabled={savingAutoAssign}
+            className={autoAssignEnabled
+              ? 'border-green-600 bg-green-600/15 text-green-400 hover:bg-green-600/25 cursor-pointer'
+              : 'border-gray-700 bg-gray-900 text-gray-400 hover:text-white cursor-pointer'}
+          >
+            {savingAutoAssign ? (
+              <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
+            ) : (
+              <Bike className="w-4 h-4 mr-1" />
+            )}
+            Auto Assign: {autoAssignEnabled ? 'ON' : 'OFF'}
+          </Button>
+          <div className="relative">
+            <Bell className="w-5 h-5 text-gray-400" />
+            {orders.filter(o => o.status === 'new').length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {orders.filter(o => o.status === 'new').length}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="flex gap-3 mb-6 flex-wrap">
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-[180px] bg-gray-900 border-gray-700 text-white">
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent className="bg-gray-900 border-gray-700">
+              <SelectItem value="all">All Orders</SelectItem>
+              {STATUS_OPTIONS.map(s => (
+                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            placeholder="Search by name or phone..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="bg-gray-900 border-gray-700 text-white max-w-[250px]"
+          />
+        </div>
+
+        {/* All rider live locations */}
+        <Card className="bg-gray-900 border-gray-800 p-3 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h2 className="text-white font-semibold">Live Rider Map</h2>
+              <p className="text-gray-500 text-xs mt-0.5">
+                Green = online with fresh GPS • Grey = offline or outdated GPS
+              </p>
+            </div>
+            <div className="text-xs text-gray-400">
+              {riders.filter(rider => rider.eligible_for_assignment).length} live / {riders.length} active
+            </div>
+          </div>
+          <div
+            ref={riderMapContainerRef}
+            className="w-full h-[280px] rounded-xl overflow-hidden border border-gray-700"
+            style={{ zIndex: 1 }}
+          />
+          {riders.length === 0 && (
+            <p className="text-amber-400 text-xs mt-2">No rider location data available.</p>
+          )}
+        </Card>
+
+        {/* Orders List */}
+        <div className="space-y-4">
+          {orders.map(order => {
+            const statusConfig = STATUS_OPTIONS.find(s => s.value === order.status) || STATUS_OPTIONS[0];
+            let items: any[] = [];
+            try { items = JSON.parse(order.items_json); } catch { /* parse error */ }
+
+            return (
+              <Card key={order.id} className="bg-gray-900 border-gray-800 p-4">
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-bold">#{order.id}</span>
+                      <Badge className={`${statusConfig.color} text-white`}>{statusConfig.label}</Badge>
+                      {order.estimated_time && order.status !== 'completed' && order.status !== 'cancelled' && (
+                        <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30">
+                          <Clock className="w-3 h-3 mr-1" />
+                          {order.estimated_time}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-gray-400 text-sm mt-1">
+                      {order.customer_name} • {order.customer_phone}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => printReceipt(order)}
+                    className="text-gray-400 hover:text-white cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div className="space-y-1 mb-3">
+                  {items.map((item: any, idx: number) => (
+                    <div key={idx} className="text-gray-300 text-sm">
+                      {item.quantity}x {item.name} ({item.size}) — AED {item.price?.toFixed(2)}
+                      {item.extras?.length > 0 && (
+                        <span className="text-gray-500 ml-2">+ {item.extras.join(', ')}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {order.order_notes && (
+                  <p className="text-yellow-400/80 text-xs mb-3 italic">📝 {order.order_notes}</p>
+                )}
+
+                {order.status === 'out_for_delivery' && (
+                  <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2 text-sm text-blue-300">
+                    Rider ne order pick kar liya hai. Customer ko deliver hone tak order pending rahega.
+                  </div>
+                )}
+
+                {/* Assign to Rider (for delivery orders) */}
+                {isDeliveryOrder(order) && order.status !== 'completed' && order.status !== 'cancelled' && (
+                  assigningOrder === order.id ? (
+                    <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
+                      <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
+                      {/* Rider cards sorted by nearest shop distance */}
+                      <div className="space-y-2 mb-3 max-h-64 overflow-y-auto">
+                        {riders.filter(rider => rider.is_active).map(rider => {
+                          const isSelected = selectedRider === String(rider.id);
+                          const eligible = rider.eligible_for_assignment === true;
+                          const locationAge = getLocationAge(rider.location_updated_at);
+                          return (
+                            <button
+                              type="button"
+                              key={rider.id}
+                              disabled={!eligible}
+                              onClick={() => setSelectedRider(String(rider.id))}
+                              className={`w-full text-left p-2.5 rounded-lg border transition-colors ${
+                                !eligible
+                                  ? 'border-gray-800 bg-gray-900/60 opacity-60 cursor-not-allowed'
+                                  : isSelected
+                                    ? 'border-blue-500 bg-blue-600/10 cursor-pointer'
+                                    : 'border-gray-700 bg-gray-700/50 hover:border-green-600 cursor-pointer'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <Bike className={`w-4 h-4 shrink-0 ${eligible ? 'text-green-400' : 'text-gray-500'}`} />
+                                  <span className="text-white text-sm font-medium truncate">{rider.name}</span>
+                                  <Badge className={eligible
+                                    ? 'bg-green-600/20 text-green-400 border border-green-600/30 text-[10px] px-1.5'
+                                    : 'bg-gray-700 text-gray-400 border border-gray-600 text-[10px] px-1.5'}>
+                                    {getRiderAvailability(rider)}
+                                  </Badge>
+                                </div>
+                                <span className={eligible ? 'text-green-400 text-xs font-semibold' : 'text-gray-500 text-xs'}>
+                                  {rider.distance_to_shop_km != null
+                                    ? `${Number(rider.distance_to_shop_km).toFixed(2)} km`
+                                    : 'No distance'}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-gray-500">
+                                <span>{rider.phone}</span>
+                                <span>Pending: {rider.active_deliveries ?? 0}</span>
+                                <span className="flex items-center gap-0.5">
+                                  <MapPin className={`w-3 h-3 ${rider.gps_fresh ? 'text-green-500' : 'text-gray-600'}`} />
+                                  {locationAge || 'No GPS update'}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => assignToRider(order)}
+                          disabled={!selectedRider || !riders.find(rider => String(rider.id) === selectedRider)?.eligible_for_assignment}
+                          className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1 disabled:opacity-50"
+                        >
+                          Assign Selected Live Rider
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
+                          ✕
+                        </Button>
+                      </div>
+                      {riders.filter(rider => rider.eligible_for_assignment).length === 0 && (
+                        <p className="text-amber-400 text-xs mt-2">
+                          No live rider available. Order Waiting Rider mein rahega.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); loadRiders(); }}
+                      className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
+                    >
+                      <Bike className="w-3 h-3 mr-1" /> Assign Rider
+                    </Button>
+                  )
+                )}
+
+                {/* Accept Order with Time Selection */}
+                {order.status === 'new' && acceptingOrder === order.id && (
+                  <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-green-600/30">
+                    <p className="text-green-400 text-sm font-medium mb-2">Set estimated ready time:</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {TIME_OPTIONS.map(t => (
+                        <button
+                          key={t.value}
+                          onClick={() => setSelectedTime(t.value)}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                            selectedTime === t.value
+                              ? 'bg-green-600 text-white'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => acceptOrder(order.id, selectedTime)}
+                        className="bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                      >
+                        <Check className="w-3 h-3 mr-1" />
+                        Accept — {selectedTime} min
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setAcceptingOrder(null)}
+                        className="text-gray-400 cursor-pointer"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Staff Notes UI */}
+                {noteOrder === order.id && (
+                  <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-yellow-600/30">
+                    <p className="text-yellow-400 text-sm font-medium mb-2">📝 Add Staff Note:</p>
+                    <Textarea
+                      value={staffNote}
+                      onChange={e => setStaffNote(e.target.value)}
+                      placeholder="Internal note (not visible to customer)..."
+                      className="bg-gray-700 border-gray-600 text-white text-sm mb-2"
+                      rows={2}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => addStaffNoteToOrder(order.id)}
+                        disabled={addingNote}
+                        className="bg-yellow-600 hover:bg-yellow-700 text-white cursor-pointer"
+                      >
+                        <Send className="w-3 h-3 mr-1" /> {addingNote ? 'Adding...' : 'Add Note'}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setNoteOrder(null); setStaffNote(''); }} className="text-gray-400 cursor-pointer">
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cancel with Reason */}
+                {cancellingOrder === order.id && (
+                  <div className="bg-orange-950/50 rounded-lg p-3 mb-3 border border-orange-600/30">
+                    <p className="text-orange-400 text-sm font-medium mb-2">Cancel Order #{order.id} — Select Reason:</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {['Customer requested', 'Out of stock', 'Kitchen too busy', 'Wrong order', 'Duplicate order', 'Other'].map(reason => (
+                        <button
+                          key={reason}
+                          onClick={() => setCancelReason(reason)}
+                          className={`px-2 py-1 rounded text-xs font-medium cursor-pointer ${
+                            cancelReason === reason ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                    {cancelReason === 'Other' && (
+                      <Input
+                        value={cancelReason === 'Other' ? '' : cancelReason}
+                        onChange={e => setCancelReason(e.target.value || 'Other')}
+                        placeholder="Enter custom reason..."
+                        className="bg-gray-800 border-gray-700 text-white text-sm mb-2"
+                      />
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => { cancelOrder(order.id, cancelReason); setCancellingOrder(null); setCancelReason(''); }}
+                        disabled={!cancelReason}
+                        className="bg-orange-600 hover:bg-orange-700 text-white cursor-pointer"
+                      >
+                        <X className="w-3 h-3 mr-1" /> Confirm Cancel
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setCancellingOrder(null); setCancelReason(''); }} className="text-gray-400 cursor-pointer">
+                        Back
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirmation */}
+                {deletingOrder === order.id && (
+                  <div className="bg-red-950/50 rounded-lg p-3 mb-3 border border-red-600/30">
+                    <p className="text-red-400 text-sm font-medium mb-2">⚠️ Are you sure? This will permanently delete Order #{order.id}.</p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => deleteOrder(order.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" /> Yes, Delete
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setDeletingOrder(null)} className="text-gray-400 cursor-pointer">
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-3 border-t border-gray-800">
+                  <div className="text-sm text-gray-500">
+                    {order.payment_method}
+                    <br />
+                    {new Date(order.created_at).toLocaleString()}
+                  </div>
+                  <div className="flex flex-col items-end gap-0.5">
+                    {order.delivery_charge > 0 && (
+                      <span className="text-xs text-gray-400">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
+                    )}
+                    {order.tip_amount > 0 && (
+                      <span className="text-xs text-green-400">Tip{order.tip_type ? ` (${order.tip_type})` : ''}: AED {order.tip_amount?.toFixed(2)}</span>
+                    )}
+                    <span className="text-red-400 font-bold">Total: AED {order.total_amount?.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* Staff note button */}
+                    {noteOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setNoteOrder(order.id); setStaffNote(''); }}
+                        className="text-yellow-400 hover:text-yellow-300 cursor-pointer p-1 h-auto"
+                        title="Add staff note"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {/* Delete button */}
+                    {deletingOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeletingOrder(order.id)}
+                        className="text-red-400 hover:text-red-300 cursor-pointer p-1 h-auto"
+                        title="Delete order"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {/* Action buttons based on status */}
+                    {order.status === 'new' && acceptingOrder !== order.id && (
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          onClick={() => { setAcceptingOrder(order.id); setSelectedTime(20); }}
+                          className="bg-green-600 hover:bg-green-700 text-white text-xs cursor-pointer"
+                        >
+                          <Check className="w-3 h-3 mr-1" />
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                          className="text-red-400 hover:text-red-300 text-xs cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Cancel button for active orders (not new, not completed/cancelled) */}
+                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && cancellingOrder !== order.id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                        className="text-orange-400 hover:text-orange-300 text-xs cursor-pointer p-1 h-auto"
+                        title="Cancel order"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+
+                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && order.status !== 'out_for_delivery' && (
+                      <Select
+                        value={order.status}
+                        onValueChange={(val) => updateStatus(order.id, val)}
+                      >
+                        <SelectTrigger className="w-[140px] bg-gray-800 border-gray-700 text-white text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-gray-700">
+                          {STATUS_OPTIONS.filter((status) => {
+                            if (status.value === 'new' || status.value === 'out_for_delivery') return false;
+                            if (isDeliveryOrder(order) && status.value === 'completed') return false;
+                            return true;
+                          }).map((status) => (
+                            <SelectItem key={status.value} value={status.value}>
+                              {status.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+
+          {orders.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-gray-500 text-4xl mb-4">📋</div>
+              <p className="text-gray-400 font-medium text-lg mb-2">No orders yet</p>
+              <p className="text-gray-600 text-sm max-w-sm mx-auto">
+                When customers place orders through the app, they will appear here automatically.
+                The page refreshes every 15 seconds.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadOrders(true)}
+                className="mt-4 border-gray-700 text-gray-300 hover:text-white cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Check Now
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
