@@ -40,20 +40,21 @@ def is_delivery_order(order: Orders) -> bool:
     )
 
 
-def require_assignable_rider(rider: Riders) -> dict:
-    """Manual assignment needs an active rider with a saved GPS coordinate.
-
-    Heartbeat/GPS age does not block assignment. The Android Rider app will be
-    responsible for keeping the saved coordinate fresh in the background.
-    """
+def require_live_rider(rider: Riders) -> dict:
+    """Reject manual assignment to offline riders or riders with stale/missing GPS."""
     live = rider_live_status(rider)
-    if live["can_assign"]:
+    if live["eligible_for_assignment"]:
         return live
 
-    if not bool(getattr(rider, "is_active", False)):
-        detail = "Rider is inactive."
+    reason = live.get("reason")
+    if reason == "offline":
+        detail = "Rider is offline. Rider app must stay signed in."
+    elif reason == "gps_missing":
+        detail = "Rider GPS is unavailable. Enable location permission in Rider app."
+    elif reason == "gps_outdated":
+        detail = "Rider GPS location is outdated. Wait for a fresh location update."
     else:
-        detail = "Rider GPS is unavailable. Open Rider app once and allow location."
+        detail = "Rider is inactive or unavailable."
     raise HTTPException(status_code=400, detail=detail)
 
 
@@ -414,7 +415,7 @@ async def assign_delivery(
     data: AssignDeliveryRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin assigns an active rider using the latest saved GPS."""
+    """Admin assigns only an online rider with fresh GPS."""
     try:
         existing_result = await db.execute(
             select(Delivery_assignments, Riders)
@@ -464,7 +465,7 @@ async def assign_delivery(
         if not rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        live = require_assignable_rider(rider)
+        live = require_live_rider(rider)
         shop_lat, shop_lng = await get_restaurant_location(db)
         if shop_lat is None or shop_lng is None:
             raise HTTPException(
@@ -593,7 +594,7 @@ async def update_rider_location(
 async def get_rider_locations(
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin gets every active rider with live status, saved GPS and shop distance."""
+    """Admin gets every active rider with strict live status and shop distance."""
     try:
         result = await db.execute(select(Riders).where(Riders.is_active == True))
         riders = result.scalars().all()
@@ -642,7 +643,6 @@ async def get_rider_locations(
                 "has_gps": live["has_gps"],
                 "gps_fresh": live["gps_fresh"],
                 "eligible_for_assignment": live["eligible_for_assignment"],
-                "can_assign": live["can_assign"],
                 "availability_reason": live["reason"],
                 "current_lat": live["lat"],
                 "current_lng": live["lng"],
@@ -668,10 +668,9 @@ async def get_rider_locations(
                 "shop_lng": shop_lng,
             })
 
-        # Riders with saved GPS first, then nearest to shop.
-        # True live/fresh status is still returned separately for the Admin map.
+        # Available nearest riders first; offline/stale riders remain visible below.
         items.sort(key=lambda item: (
-            not item["can_assign"],
+            not item["eligible_for_assignment"],
             item["distance_to_shop_km"] if item["distance_to_shop_km"] is not None else float("inf"),
             item["active_deliveries"],
             item["id"],
@@ -681,7 +680,6 @@ async def get_rider_locations(
             "shop_lat": shop_lat,
             "shop_lng": shop_lng,
             "eligible_count": sum(1 for item in items if item["eligible_for_assignment"]),
-            "assignable_count": sum(1 for item in items if item["can_assign"]),
         }
     except Exception as e:
         logging.error(f"Failed to get rider locations: {e}")
@@ -1060,7 +1058,7 @@ async def reassign_delivery(
     data: ReassignDeliveryRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin reassigns to an active rider using the latest saved GPS."""
+    """Admin reassigns only to an online rider with fresh GPS."""
     try:
         result = await db.execute(
             select(Delivery_assignments).where(
@@ -1083,7 +1081,7 @@ async def reassign_delivery(
         if not new_rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        live = require_assignable_rider(new_rider)
+        live = require_live_rider(new_rider)
         shop_lat, shop_lng = await get_restaurant_location(db)
         if shop_lat is None or shop_lng is None:
             raise HTTPException(
