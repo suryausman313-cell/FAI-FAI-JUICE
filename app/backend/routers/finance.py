@@ -384,11 +384,11 @@ async def _get_admin_order_totals(
     start: Optional[datetime],
     end: Optional[datetime],
 ) -> dict:
-    # A sale becomes final only after pickup is completed or the rider
-    # presses Delivered. Pending/preparing/ready/out_for_delivery orders
-    # must never inflate the sales report.
+    # Sales/finance are final only after Pickup Completed or Rider Delivered.
+    # Rider Delivered also updates the order status to "completed".
     query = select(Orders).where(
-        func.lower(func.coalesce(Orders.status, "")) == "completed"
+        func.lower(func.coalesce(Orders.status, ""))
+        .in_(["completed", "delivered"])
     )
 
     query = _apply_datetime_filter(

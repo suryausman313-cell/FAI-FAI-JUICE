@@ -201,6 +201,7 @@ async def get_rider_deliveries(
                 "zone_name": a.zone_name,
                 "tip_amount": (order.tip_amount or 0) if order and hasattr(order, 'tip_amount') and order.tip_type == 'rider' else 0,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
             })
 
         return {"items": items}
@@ -1001,7 +1002,9 @@ async def get_admin_rider_reports(
                 for item in rider_settlements
                 if item.status == "pending"
             )
-            cash_pending = max(cash_collected - approved_cash, 0.0)
+            # Delivery charge belongs to the rider and is not cash owed to the shop.
+            cash_due_to_shop = max(cash_collected - delivery_charges_earned, 0.0)
+            cash_pending = max(cash_due_to_shop - approved_cash, 0.0)
 
             # Determine online status based on heartbeat (60s threshold) or location update (2 min threshold)
             is_online = False
@@ -1029,6 +1032,7 @@ async def get_admin_rider_reports(
                 "total_earnings": round(total_earnings, 2),
                 "delivery_charges_earned": round(delivery_charges_earned, 2),
                 "cash_collected": round(cash_collected, 2),
+                "cash_due_to_shop": round(cash_due_to_shop, 2),
                 "approved_cash": round(approved_cash, 2),
                 "awaiting_approval": round(awaiting_approval, 2),
                 "cash_pending": round(cash_pending, 2),
