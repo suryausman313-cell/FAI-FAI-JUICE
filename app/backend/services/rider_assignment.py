@@ -1,13 +1,12 @@
-"""Nearest-rider assignment helpers using each active rider's latest saved GPS.
+"""Safe nearest-live-rider assignment helpers.
 
 Assignment rules:
 1. Only active delivery orders can be assigned.
 2. Existing active assignments are never duplicated.
-3. Rider must be active and have a valid saved GPS coordinate.
-4. Heartbeat age / GPS age do NOT block assignment.
+3. Rider must be active, have a fresh heartbeat, valid GPS and fresh GPS.
+4. Offline riders and stale/missing GPS riders are never used as fallback.
 5. Shop coordinates are required; customer coordinates are never used as pickup fallback.
-6. Riders are ranked by distance to shop first, then active deliveries, then rider ID.
-7. Android Rider app is expected to keep the saved GPS fresh in the background.
+6. Eligible riders are ranked by distance to shop first, then active deliveries, then rider ID.
 """
 
 from __future__ import annotations
@@ -123,12 +122,7 @@ def seconds_old(value: Optional[datetime], now: Optional[datetime] = None) -> fl
 
 
 def rider_live_status(rider: Riders, now: Optional[datetime] = None) -> dict:
-    """Return display freshness plus assignment eligibility.
-
-    `eligible_for_assignment` means truly live right now (fresh heartbeat + fresh GPS).
-    `can_assign` means active rider with a valid saved GPS. Auto/manual assignment uses
-    `can_assign`, so a temporary heartbeat/GPS delay does not block the rider.
-    """
+    """Return strict online/GPS eligibility used by auto and manual assignment."""
     current = now or datetime.now(timezone.utc)
     rider_lat = _as_float(getattr(rider, "current_lat", None))
     rider_lng = _as_float(getattr(rider, "current_lng", None))
@@ -140,17 +134,15 @@ def rider_live_status(rider: Riders, now: Optional[datetime] = None) -> dict:
     has_gps = _valid_coordinates(rider_lat, rider_lng)
     gps_fresh = has_gps and location_age <= GPS_MAX_AGE_SECONDS
     is_active = bool(getattr(rider, "is_active", False))
-
-    live_now = is_active and is_online and gps_fresh
-    can_assign = is_active and has_gps
+    eligible = is_active and is_online and gps_fresh
 
     reason = "available"
     if not is_active:
         reason = "inactive"
-    elif not has_gps:
-        reason = "gps_missing"
     elif not is_online:
         reason = "offline"
+    elif not has_gps:
+        reason = "gps_missing"
     elif not gps_fresh:
         reason = "gps_outdated"
 
@@ -158,8 +150,7 @@ def rider_live_status(rider: Riders, now: Optional[datetime] = None) -> dict:
         "is_online": is_online,
         "has_gps": has_gps,
         "gps_fresh": gps_fresh,
-        "eligible_for_assignment": live_now,
-        "can_assign": can_assign,
+        "eligible_for_assignment": eligible,
         "heartbeat_age_seconds": None if math.isinf(heartbeat_age) else int(heartbeat_age),
         "location_age_seconds": None if math.isinf(location_age) else int(location_age),
         "reason": reason,
@@ -261,9 +252,7 @@ async def select_best_rider(
 
     for rider in riders:
         live = rider_live_status(rider, now)
-        # Assignment uses the rider's latest saved GPS. Freshness is display-only here;
-        # Android Rider app will keep this coordinate updated in the background.
-        if not live["can_assign"]:
+        if not live["eligible_for_assignment"]:
             continue
 
         distance = haversine_km(
@@ -274,12 +263,12 @@ async def select_best_rider(
         )
         active_count = active_counts.get(rider.id, 0)
 
-        # Nearest rider to shop is first priority. Workload only breaks a distance tie.
+        # Nearest live rider is first priority. Workload only breaks a distance tie.
         score = (distance, active_count, rider.id)
         scored.append((score, rider, distance))
 
     if not scored:
-        logger.info("Auto Assign waiting: no active rider with saved GPS")
+        logger.info("Auto Assign waiting: no online rider with fresh GPS")
         return None, None
 
     scored.sort(key=lambda item: item[0])
@@ -316,7 +305,7 @@ async def auto_assign_order(
 
     rider, pickup_distance = await select_best_rider(db, order, exclude_rider_ids)
     if rider is None:
-        # Keep order unassigned / Waiting Rider when no active rider has saved GPS.
+        # Keep order unassigned / Waiting Rider. Never use an offline fallback.
         return None
 
     customer_lat, customer_lng, customer_address = _order_location(order)
@@ -338,7 +327,7 @@ async def auto_assign_order(
     await db.refresh(assignment)
 
     logger.info(
-        "Auto assigned order %s to nearest rider %s (%s), %.2f km from shop",
+        "Auto assigned order %s to nearest live rider %s (%s), %.2f km from shop",
         order.id,
         rider.id,
         rider.name,
