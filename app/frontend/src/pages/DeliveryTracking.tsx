@@ -26,6 +26,9 @@ interface ETAData {
   rider_phone: string | null;
   rider_lat: number | null;
   rider_lng: number | null;
+  rider_is_online?: boolean;
+  rider_location_is_fresh?: boolean;
+  rider_location_age_seconds?: number | null;
   rider_location_updated_at?: string | null;
 }
 
@@ -57,8 +60,17 @@ export default function DeliveryTracking() {
   }, [orderId]);
 
   useEffect(() => {
-    if (eta && eta.rider_lat && eta.rider_lng) {
+    const fresh = eta?.rider_location_is_fresh === true;
+    if (fresh && eta?.rider_lat != null && eta?.rider_lng != null) {
       updateMap(eta.rider_lat, eta.rider_lng);
+      return;
+    }
+
+    // Never keep an old marker visible as a live location.
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+      riderMarkerRef.current = null;
     }
   }, [eta]);
 
@@ -142,6 +154,7 @@ export default function DeliveryTracking() {
   const etaDeadlineMs = etaBaseMs + Number(eta?.eta_seconds || eta?.eta_minutes || 0) * (eta?.eta_seconds ? 1000 : 60_000);
   const remainingEtaSeconds = Math.max(0, Math.floor((etaDeadlineMs - now) / 1000));
   const etaClock = `${Math.floor(remainingEtaSeconds / 60)}:${String(remainingEtaSeconds % 60).padStart(2, '0')}`;
+  const riderLocationFresh = eta?.rider_location_is_fresh === true;
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -231,12 +244,12 @@ export default function DeliveryTracking() {
             })()}
 
             {/* Map */}
-            {eta.rider_lat != null && eta.rider_lng != null && (
+            {riderLocationFresh && eta.rider_lat != null && eta.rider_lng != null && (
               <div ref={mapContainerRef} className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700 mb-4" style={{ zIndex: 1 }} />
             )}
-            {eta.rider_name && (eta.rider_lat == null || eta.rider_lng == null) && (
+            {eta.rider_name && !riderLocationFresh && (
               <Card className="bg-amber-950/30 border-amber-700/40 p-4 mb-4 text-amber-300 text-sm">
-                Rider live location is waiting for GPS. The Rider app must stay signed in with location permission enabled.
+                Rider location is updating. Live map fresh GPS milte hi nazar aayega.
               </Card>
             )}
 
