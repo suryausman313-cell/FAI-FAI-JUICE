@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +7,25 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+
+type RiderApiOptions = {
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  data?: unknown;
+};
+
+function riderApi(options: RiderApiOptions) {
+  return axios.request({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${options.url}`,
+    method: options.method,
+    data: options.data,
+    timeout: 25000,
+  });
+}
 
 // Fix leaflet default marker icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -194,7 +211,7 @@ export default function RiderPanel() {
   useEffect(() => {
     if (!rider) return;
     function sendHeartbeat() {
-      client.apiCall.invoke({
+      riderApi({
         url: `/api/v1/rider/heartbeat/${rider.id}`,
         method: 'POST',
         data: {},
@@ -211,7 +228,7 @@ export default function RiderPanel() {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          client.apiCall.invoke({
+          riderApi({
             url: `/api/v1/rider/location/${rider.id}`,
             method: 'POST',
             data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
@@ -247,18 +264,31 @@ export default function RiderPanel() {
 
   useEffect(() => {
     if (!rider || deliveries.length === 0) return;
-    const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
+    const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
     const newIds = activeIds.filter(id => !prevDeliveryIdsRef.current.includes(id));
     if (newIds.length > 0 && prevDeliveryIdsRef.current.length > 0) {
       const newDelivery = deliveries.find(d => newIds.includes(d.id));
       if (newDelivery) {
-        toast.success(`🍕 New Order #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
+        toast.success(`🛵 New Delivery #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
       }
     }
     prevDeliveryIdsRef.current = activeIds;
     if (swRegistrationRef.current?.active) {
       swRegistrationRef.current.active.postMessage({ type: 'UPDATE_DELIVERIES', data: { deliveryIds: activeIds } });
     }
+  }, [deliveries, rider]);
+
+  // Keep ringing while a newly assigned delivery is waiting for Accept/Reject.
+  useEffect(() => {
+    const waitingForDecision = Boolean(
+      rider && deliveries.some(delivery => delivery.status === 'assigned'),
+    );
+
+    if (waitingForDecision) {
+    }
+
+    return () => {
+    };
   }, [deliveries, rider]);
 
   async function registerServiceWorker() {
@@ -275,8 +305,8 @@ export default function RiderPanel() {
         });
       }
       if (registration.active && rider) {
-        const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
+        const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
+        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
       }
     } catch (error) { console.error('SW registration failed:', error); }
   }
@@ -306,8 +336,8 @@ export default function RiderPanel() {
         setNotificationsEnabled(true);
         localStorage.setItem('rider_notifications', 'on');
         if (swRegistrationRef.current?.active && rider) {
-          const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
+          const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status)).map(d => d.id);
+          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
         }
         toast.success('Notifications on');
       } else { requestNotificationPermission(); }
@@ -322,9 +352,10 @@ export default function RiderPanel() {
         latestByOrder.set(delivery.order_id, delivery);
       }
     });
-    const activeStatuses = new Set(['assigned', 'accepted', 'picked_up', 'on_the_way']);
     const activeDeliveries = Array.from(latestByOrder.values()).filter(
-      d => activeStatuses.has(String(d.status || '').toLowerCase()) && d.customer_lat && d.customer_lng
+      d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
+        && d.customer_lat
+        && d.customer_lng
     );
     if (activeDeliveries.length === 0) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
@@ -349,7 +380,7 @@ export default function RiderPanel() {
     if (!phone || !pin) { toast.error('Please enter phone and PIN'); return; }
     setLoginLoading(true);
     try {
-      const res = await client.apiCall.invoke({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
+      const res = await riderApi({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
       if (res?.data?.success) {
         const riderData = res.data.rider;
         setRider(riderData);
@@ -363,7 +394,7 @@ export default function RiderPanel() {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
       }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Invalid phone or PIN'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Invalid phone or PIN'); }
     finally { setLoginLoading(false); }
   }
 
@@ -383,7 +414,7 @@ export default function RiderPanel() {
 
   async function loadDeliveries(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
       const items = res?.data?.items || [];
       setDeliveries(items);
       setLastRefresh(new Date());
@@ -395,7 +426,7 @@ export default function RiderPanel() {
 
   async function loadStats(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
       if (res?.data) { setStats(res.data); }
     } catch (e) { console.error('Failed to load stats:', e); }
   }
@@ -413,7 +444,7 @@ export default function RiderPanel() {
     if (period === 'custom' && (!customFrom || !customTo)) return;
     setFinanceLoading(true);
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: getFinanceUrl(riderId, period),
         method: 'GET',
         data: {},
@@ -421,7 +452,7 @@ export default function RiderPanel() {
       if (res?.data) setFinanceSummary(res.data);
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
-      toast.error(e?.data?.detail || 'Could not load finance report');
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not load finance report');
     } finally {
       setFinanceLoading(false);
     }
@@ -429,7 +460,7 @@ export default function RiderPanel() {
 
   async function loadCashSubmissions(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
         method: 'GET',
         data: {},
@@ -456,7 +487,7 @@ export default function RiderPanel() {
 
     setSubmittingCash(true);
     try {
-      await client.apiCall.invoke({
+      await riderApi({
         url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
         method: 'POST',
         data: { amount, note: cashNote.trim() },
@@ -469,7 +500,7 @@ export default function RiderPanel() {
         loadCashSubmissions(rider.id),
       ]);
     } catch (e: any) {
-      toast.error(e?.data?.detail || 'Cash submission failed');
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Cash submission failed');
     } finally {
       setSubmittingCash(false);
     }
@@ -489,10 +520,10 @@ export default function RiderPanel() {
 
   async function updateStatus(assignmentId: number, newStatus: string) {
     try {
-      await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
+      await riderApi({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
       if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to update status'); }
   }
 
   function openInMaps(lat: number, lng: number) {
@@ -502,6 +533,8 @@ export default function RiderPanel() {
   function getStatusColor(status: string) {
     switch (status) {
       case 'assigned': return 'bg-blue-600/20 text-blue-400 border-blue-600/30';
+      case 'accepted': return 'bg-emerald-600/20 text-emerald-400 border-emerald-600/30';
+      case 'rejected': return 'bg-red-600/20 text-red-400 border-red-600/30';
       case 'picked_up': return 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30';
       case 'on_the_way': return 'bg-orange-600/20 text-orange-400 border-orange-600/30';
       case 'delivered': return 'bg-green-600/20 text-green-400 border-green-600/30';
@@ -511,9 +544,9 @@ export default function RiderPanel() {
 
   function getNextStatus(current: string): { label: string; value: string } | null {
     switch (current) {
-      case 'assigned': return { label: '🏪 Picked Up', value: 'picked_up' };
-      case 'picked_up': return { label: '🚗 On the Way', value: 'on_the_way' };
-      case 'on_the_way': return { label: '✅ Delivered', value: 'delivered' };
+      case 'accepted': return { label: '🏪 Picked Up from Kitchen', value: 'picked_up' };
+      case 'picked_up': return { label: '✅ Delivered to Customer', value: 'delivered' };
+      case 'on_the_way': return { label: '✅ Delivered to Customer', value: 'delivered' };
       default: return null;
     }
   }
@@ -527,8 +560,8 @@ export default function RiderPanel() {
             <div className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Bike className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-white text-2xl font-bold">Rider Panel</h1>
-            <p className="text-gray-400 text-sm mt-1">Vita Napoli Delivery</p>
+            <h1 className="text-white text-2xl font-bold">Rider Panel <span className="text-[10px] text-emerald-400">FINAL RIDER FLOW</span></h1>
+            <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -556,10 +589,8 @@ export default function RiderPanel() {
     }
   });
   const uniqueDeliveries = Array.from(latestByOrder.values());
-
-  const activeStatuses = new Set(['assigned', 'accepted', 'picked_up', 'on_the_way']);
   const activeDeliveries = uniqueDeliveries.filter(
-    d => activeStatuses.has(String(d.status || '').toLowerCase())
+    d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
   );
   const completedDeliveries = uniqueDeliveries.filter(
     d => String(d.status || '').toLowerCase() === 'delivered'
@@ -614,7 +645,7 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold flex items-center gap-2">
                     <CalendarDays className="w-4 h-4 text-red-400" /> Finance Period
                   </h3>
-                  <p className="text-gray-500 text-xs mt-1">View orders, delivery earning, shop cash and pending settlement</p>
+                  <p className="text-gray-500 text-xs mt-1">View delivered orders, delivery charges and cash settlement</p>
                 </div>
                 <select
                   value={financePeriod}
@@ -662,7 +693,7 @@ export default function RiderPanel() {
                   {financeLoading && <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />}
                 </div>
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <Card className="bg-gray-900 border-gray-800 p-4">
                     <Package className="w-5 h-5 text-blue-400 mb-2" />
                     <p className="text-2xl font-bold text-white">{financeSummary.totals.delivered_orders}</p>
@@ -671,36 +702,9 @@ export default function RiderPanel() {
                   <Card className="bg-gray-900 border-gray-800 p-4">
                     <MapPin className="w-5 h-5 text-purple-400 mb-2" />
                     <p className="text-xl font-bold text-purple-400">AED {financeSummary.totals.delivery_charges.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">Delivery Charges</p>
-                  </Card>
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <span className="text-xl block mb-2">💝</span>
-                    <p className="text-xl font-bold text-pink-400">AED {financeSummary.totals.rider_tips.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">Rider Tips</p>
-                  </Card>
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <DollarSign className="w-5 h-5 text-green-400 mb-2" />
-                    <p className="text-xl font-bold text-green-400">AED {financeSummary.totals.rider_earnings.toFixed(2)}</p>
-                    <p className="text-gray-500 text-xs">My Earning</p>
+                    <p className="text-gray-500 text-xs">My Delivery Charges</p>
                   </Card>
                 </div>
-
-                <Card className="bg-gray-900 border-gray-800 p-4">
-                  <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-blue-400" /> Order Money Breakdown
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Customer Total</span><span className="text-white font-medium">AED {financeSummary.totals.customer_total.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Shop Food Sale</span><span className="text-green-400 font-medium">AED {financeSummary.totals.shop_food_sale.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Menu Discount</span><span className="text-red-400 font-medium">- AED {financeSummary.totals.discount_amount.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Developer Fees</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.developer_fees.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Collected</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.cash_collected.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Payable to Shop</span><span className="text-orange-400 font-medium">AED {financeSummary.totals.cash_payable_to_shop.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Orders</span><span className="text-white font-medium">{financeSummary.totals.cash_orders}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Card Orders</span><span className="text-white font-medium">{financeSummary.totals.card_orders}</span></div>
-                  </div>
-                  <p className="text-gray-600 text-xs mt-3">Discount is calculated on menu items only. Delivery charge, service fee, small-order fee and tip are not discounted.</p>
-                </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
@@ -785,15 +789,6 @@ export default function RiderPanel() {
                   )}
                 </Card>
 
-                {stats && (
-                  <Card className="bg-gray-900 border-gray-800 p-4">
-                    <h3 className="text-white font-semibold mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Current Order Status</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-orange-400">{stats.pending_orders}</p><p className="text-orange-400/70 text-xs mt-1">Pending</p></div>
-                      <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-green-400">{stats.completed_orders}</p><p className="text-green-400/70 text-xs mt-1">All-Time Completed</p></div>
-                    </div>
-                  </Card>
-                )}
               </>
             ) : (
               <div className="py-12 text-center text-gray-500">Finance report is not available.</div>
@@ -868,11 +863,32 @@ export default function RiderPanel() {
                                 <Navigation className="w-4 h-4 mr-1" /> Navigate
                               </Button>
                             )}
-                            {nextStatus && (
+                            {delivery.status === 'assigned' ? (
+                              <>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'accepted')}
+                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ✅ Accept
+                                </Button>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'rejected')}
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ❌ Reject
+                                </Button>
+                              </>
+                            ) : delivery.status === 'accepted' && delivery.order_status !== 'ready' ? (
+                              <Button disabled className="flex-1 bg-gray-700 text-gray-300 cursor-not-allowed" size="sm">
+                                Waiting for Kitchen Ready
+                              </Button>
+                            ) : nextStatus ? (
                               <Button onClick={() => updateStatus(delivery.id, nextStatus.value)} className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer" size="sm">
                                 {nextStatus.label}
                               </Button>
-                            )}
+                            ) : null}
                           </div>
                         </Card>
                       );
