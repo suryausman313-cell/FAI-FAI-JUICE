@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
+import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, BarChart3, Clock, DollarSign, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,6 +35,7 @@ interface Delivery {
   zone_name: string | null;
   tip_amount: number;
   created_at: string;
+  updated_at?: string | null;
 }
 
 interface Rider {
@@ -134,13 +135,12 @@ export default function RiderPanel() {
   const [pin, setPin] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [activeTab, setActiveTab] = useState<'orders' | 'stats'>('orders');
   const [financePeriod, setFinancePeriod] = useState<FinancePeriod>('today');
   const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [financeSummary, setFinanceSummary] = useState<RiderFinanceSummary | null>(null);
+  const [financeError, setFinanceError] = useState('');
   const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [cashAmount, setCashAmount] = useState('');
@@ -148,8 +148,6 @@ export default function RiderPanel() {
   const [submittingCash, setSubmittingCash] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
-  const prevDeliveryIdsRef = useRef<number[]>([]);
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -159,36 +157,28 @@ export default function RiderPanel() {
         setRider(parsed);
         loadDeliveries(parsed.id);
         loadStats(parsed.id);
-        loadFinance(parsed.id, 'today');
-        loadCashSubmissions(parsed.id);
       } catch { /* ignore */ }
     }
-    if ('Notification' in window) {
-      setNotificationPermission(Notification.permission);
-      setNotificationsEnabled(Notification.permission === 'granted' && localStorage.getItem('rider_notifications') !== 'off');
-    }
   }, []);
-
-  useEffect(() => {
-    if (!rider) return;
-    registerServiceWorker();
-  }, [rider]);
 
   useEffect(() => {
     if (!rider) return;
     const interval = setInterval(() => {
       loadDeliveries(rider.id);
       loadStats(rider.id);
-      loadFinance(rider.id, financePeriod);
-      loadCashSubmissions(rider.id);
+      if (activeTab === 'stats') {
+        loadFinance(rider.id, financePeriod, true);
+        loadCashSubmissions(rider.id);
+      }
     }, 8000);
     return () => clearInterval(interval);
-  }, [rider, financePeriod]);
+  }, [rider, financePeriod, activeTab]);
 
   useEffect(() => {
-    if (!rider || financePeriod === 'custom') return;
+    if (!rider || activeTab !== 'stats' || financePeriod === 'custom') return;
     loadFinance(rider.id, financePeriod);
-  }, [financePeriod, rider]);
+    loadCashSubmissions(rider.id);
+  }, [financePeriod, rider, activeTab]);
 
   // Heartbeat to keep rider online status synced (every 15s)
   useEffect(() => {
@@ -232,107 +222,24 @@ export default function RiderPanel() {
     }
   }, [deliveries, activeTab]);
 
-  useEffect(() => {
-    if (!('serviceWorker' in navigator)) return;
-    function handleSWMessage(event: MessageEvent) {
-      if (event.data?.type === 'DELIVERIES_UPDATE') {
-        const items = event.data.data?.items || [];
-        setDeliveries(items);
-        setLastRefresh(new Date());
-      }
-    }
-    navigator.serviceWorker.addEventListener('message', handleSWMessage);
-    return () => navigator.serviceWorker.removeEventListener('message', handleSWMessage);
-  }, []);
-
-  useEffect(() => {
-    if (!rider || deliveries.length === 0) return;
-    const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-    const newIds = activeIds.filter(id => !prevDeliveryIdsRef.current.includes(id));
-    if (newIds.length > 0 && prevDeliveryIdsRef.current.length > 0) {
-      const newDelivery = deliveries.find(d => newIds.includes(d.id));
-      if (newDelivery) {
-        toast.success(`🍕 New Order #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
-        playNotificationSound();
-      }
-    }
-    prevDeliveryIdsRef.current = activeIds;
-    if (swRegistrationRef.current?.active) {
-      swRegistrationRef.current.active.postMessage({ type: 'UPDATE_DELIVERIES', data: { deliveryIds: activeIds } });
-    }
-  }, [deliveries, rider]);
-
-  function playNotificationSound() {
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      oscillator.frequency.value = 800;
-      oscillator.type = 'sine';
-      gainNode.gain.value = 0.3;
-      oscillator.start();
-      setTimeout(() => { oscillator.frequency.value = 1000; setTimeout(() => { oscillator.frequency.value = 1200; setTimeout(() => { oscillator.stop(); audioContext.close(); }, 150); }, 150); }, 150);
-    } catch { /* ignore */ }
-  }
-
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return;
-    try {
-      const registration = await navigator.serviceWorker.register('/rider-sw.js', { scope: '/rider' });
-      swRegistrationRef.current = registration;
-      const sw = registration.active || registration.waiting || registration.installing;
-      if (sw && sw.state !== 'activated') {
-        await new Promise<void>((resolve) => {
-          sw.addEventListener('statechange', function handler() {
-            if (sw.state === 'activated') { sw.removeEventListener('statechange', handler); resolve(); }
-          });
-        });
-      }
-      if (registration.active && rider) {
-        const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
-      }
-    } catch (error) { console.error('SW registration failed:', error); }
-  }
-
-  async function requestNotificationPermission() {
-    if (!('Notification' in window)) { toast.error('Notifications not supported'); return; }
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-    if (permission === 'granted') {
-      setNotificationsEnabled(true);
-      localStorage.setItem('rider_notifications', 'on');
-      toast.success('🔔 Notifications enabled!');
-      if (swRegistrationRef.current) {
-        swRegistrationRef.current.showNotification('🍕 Notifications Active!', { body: 'You will receive alerts for new orders.', icon: '/vite.svg', tag: 'test-notification' });
-      }
-    } else if (permission === 'denied') { toast.error('Notifications blocked.'); }
-  }
-
-  function toggleNotifications() {
-    if (notificationsEnabled) {
-      setNotificationsEnabled(false);
-      localStorage.setItem('rider_notifications', 'off');
-      if (swRegistrationRef.current?.active) { swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGOUT' }); }
-      toast.info('Notifications off');
-    } else {
-      if (notificationPermission === 'granted') {
-        setNotificationsEnabled(true);
-        localStorage.setItem('rider_notifications', 'on');
-        if (swRegistrationRef.current?.active && rider) {
-          const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
-        }
-        toast.success('Notifications on');
-      } else { requestNotificationPermission(); }
-    }
-  }
-
   function updateMap() {
-    const activeDeliveries = deliveries.filter(d => d.status !== 'delivered' && d.customer_lat && d.customer_lng);
-    if (activeDeliveries.length === 0) return;
+    const latestByOrder = new Map<number, Delivery>();
+    deliveries.forEach((delivery) => {
+      const existing = latestByOrder.get(delivery.order_id);
+      if (!existing || Number(delivery.id) > Number(existing.id)) latestByOrder.set(delivery.order_id, delivery);
+    });
+    const activeStatuses = new Set(['assigned', 'accepted', 'picked_up', 'on_the_way']);
+    const activeDeliveries = Array.from(latestByOrder.values()).filter(
+      d => activeStatuses.has(String(d.status || '').toLowerCase()) && d.customer_lat && d.customer_lng
+    );
+
+    if (activeDeliveries.length === 0) {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+      return;
+    }
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     if (!mapContainerRef.current) return;
     const firstDelivery = activeDeliveries[0];
@@ -363,18 +270,12 @@ export default function RiderPanel() {
         toast.success(`Welcome, ${riderData.name}!`);
         loadDeliveries(riderData.id);
         loadStats(riderData.id);
-        loadFinance(riderData.id, 'today');
-        loadCashSubmissions(riderData.id);
-        if ('Notification' in window && Notification.permission === 'default') {
-          setTimeout(() => requestNotificationPermission(), 2000);
-        }
       }
     } catch (e: any) { toast.error(e?.data?.detail || 'Invalid phone or PIN'); }
     finally { setLoginLoading(false); }
   }
 
   function handleLogout() {
-    if (swRegistrationRef.current?.active) { swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGOUT' }); }
     setRider(null);
     setDeliveries([]);
     setStats(null);
@@ -383,7 +284,6 @@ export default function RiderPanel() {
     setCashAmount('');
     setCashNote('');
     localStorage.removeItem('rider_auth');
-    prevDeliveryIdsRef.current = [];
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   }
 
@@ -412,31 +312,43 @@ export default function RiderPanel() {
       params.set('date_from', customFrom);
       params.set('date_to', customTo);
     }
-    return `/api/v1/finance/rider/${riderId}/summary?${params.toString()}`;
+    return `/api/v1/rider/finance/${riderId}/summary?${params.toString()}`;
   }
 
-  async function loadFinance(riderId: number, period: FinancePeriod = financePeriod) {
+  async function loadFinance(
+    riderId: number,
+    period: FinancePeriod = financePeriod,
+    silent = false
+  ) {
     if (period === 'custom' && (!customFrom || !customTo)) return;
-    setFinanceLoading(true);
+    if (!silent) setFinanceLoading(true);
+    setFinanceError('');
     try {
       const res = await client.apiCall.invoke({
         url: getFinanceUrl(riderId, period),
         method: 'GET',
         data: {},
       });
-      if (res?.data) setFinanceSummary(res.data);
+      if (res?.data) {
+        setFinanceSummary(res.data);
+        setFinanceError('');
+      } else {
+        setFinanceSummary(null);
+        setFinanceError('Finance report could not be loaded.');
+      }
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
-      toast.error(e?.data?.detail || 'Could not load finance report');
+      setFinanceSummary(null);
+      setFinanceError(e?.data?.detail || 'Finance report could not be loaded.');
     } finally {
-      setFinanceLoading(false);
+      if (!silent) setFinanceLoading(false);
     }
   }
 
   async function loadCashSubmissions(riderId: number) {
     try {
       const res = await client.apiCall.invoke({
-        url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
+        url: `/api/v1/rider/finance/${riderId}/cash-submissions?limit=100`,
         method: 'GET',
         data: {},
       });
@@ -463,7 +375,7 @@ export default function RiderPanel() {
     setSubmittingCash(true);
     try {
       await client.apiCall.invoke({
-        url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
+        url: `/api/v1/rider/finance/${rider.id}/cash-submissions`,
         method: 'POST',
         data: { amount, note: cashNote.trim() },
       });
@@ -497,7 +409,14 @@ export default function RiderPanel() {
     try {
       await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
-      if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
+      if (rider) {
+        loadDeliveries(rider.id);
+        loadStats(rider.id);
+        if (activeTab === 'stats') {
+          loadFinance(rider.id, financePeriod, true);
+          loadCashSubmissions(rider.id);
+        }
+      }
     } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
   }
 
@@ -533,8 +452,8 @@ export default function RiderPanel() {
             <div className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Bike className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-white text-2xl font-bold">Rider Panel</h1>
-            <p className="text-gray-400 text-sm mt-1">Vita Napoli Delivery</p>
+            <h1 className="text-white text-2xl font-bold">Fai Fai Rider</h1>
+            <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -554,8 +473,21 @@ export default function RiderPanel() {
     );
   }
 
-  const activeDeliveries = deliveries.filter(d => d.status !== 'delivered');
-  const completedDeliveries = deliveries.filter(d => d.status === 'delivered');
+  const latestByOrder = new Map<number, Delivery>();
+  deliveries.forEach((delivery) => {
+    const existing = latestByOrder.get(delivery.order_id);
+    if (!existing || Number(delivery.id) > Number(existing.id)) {
+      latestByOrder.set(delivery.order_id, delivery);
+    }
+  });
+  const uniqueDeliveries = Array.from(latestByOrder.values());
+  const activeStatuses = new Set(['assigned', 'accepted', 'picked_up', 'on_the_way']);
+  const activeDeliveries = uniqueDeliveries.filter(
+    d => activeStatuses.has(String(d.status || '').toLowerCase())
+  );
+  const completedDeliveries = uniqueDeliveries.filter(
+    d => String(d.status || '').toLowerCase() === 'delivered'
+  );
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -572,10 +504,20 @@ export default function RiderPanel() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={toggleNotifications} variant="ghost" size="sm" className={`cursor-pointer ${notificationsEnabled ? 'text-green-400' : 'text-gray-400'}`}>
-              {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-            </Button>
-            <Button onClick={() => { if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); } }} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
+            <Button
+              onClick={() => {
+                if (!rider) return;
+                loadDeliveries(rider.id);
+                loadStats(rider.id);
+                if (activeTab === 'stats') {
+                  loadFinance(rider.id, financePeriod);
+                  loadCashSubmissions(rider.id);
+                }
+              }}
+              variant="ghost"
+              size="sm"
+              className="text-gray-400 cursor-pointer"
+            >
               <RefreshCw className="w-4 h-4" />
             </Button>
             <Button onClick={handleLogout} variant="ghost" size="sm" className="text-gray-400 cursor-pointer">
@@ -593,30 +535,18 @@ export default function RiderPanel() {
             📦 My Orders
           </button>
           <button
-            onClick={() => setActiveTab('stats')}
+            onClick={() => {
+              setActiveTab('stats');
+              if (rider) {
+                loadFinance(rider.id, financePeriod);
+                loadCashSubmissions(rider.id);
+              }
+            }}
             className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${activeTab === 'stats' ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
           >
             📊 Dashboard
           </button>
         </div>
-
-        {/* Notification Permission Banner */}
-        {notificationPermission === 'default' && (
-          <div className="mb-4 p-3 rounded-xl bg-blue-600/10 border border-blue-600/30">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-blue-400 text-sm font-medium">🔔 Enable Notifications</p>
-                <p className="text-blue-400/70 text-xs mt-0.5">Get alerts for new orders in background</p>
-              </div>
-              <Button onClick={requestNotificationPermission} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer">Enable</Button>
-            </div>
-          </div>
-        )}
-        {notificationPermission === 'denied' && (
-          <div className="mb-4 p-3 rounded-xl bg-red-600/10 border border-red-600/30">
-            <p className="text-red-400 text-sm">⚠️ Notifications blocked. Enable in browser settings.</p>
-          </div>
-        )}
 
         {/* FINANCE / DASHBOARD TAB */}
         {activeTab === 'stats' && (
@@ -627,7 +557,7 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold flex items-center gap-2">
                     <CalendarDays className="w-4 h-4 text-red-400" /> Finance Period
                   </h3>
-                  <p className="text-gray-500 text-xs mt-1">View orders, delivery earning, shop cash and pending settlement</p>
+                  <p className="text-gray-500 text-xs mt-1">Delivery earning, shop cash due and Admin approval</p>
                 </div>
                 <select
                   value={financePeriod}
@@ -721,7 +651,7 @@ export default function RiderPanel() {
                   </h3>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                     <div className="bg-gray-800 rounded-lg p-3">
-                      <p className="text-gray-500 text-xs">Cash Due</p>
+                      <p className="text-gray-500 text-xs">Shop Cash Due</p>
                       <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.cash_due_to_shop.toFixed(2)}</p>
                     </div>
                     <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3">
@@ -733,14 +663,15 @@ export default function RiderPanel() {
                       <p className="text-orange-400 font-bold mt-1">AED {financeSummary.current_balance.awaiting_approval.toFixed(2)}</p>
                     </div>
                     <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-3">
-                      <p className="text-red-400/70 text-xs">Total Pending</p>
+                      <p className="text-red-400/70 text-xs">Pending to Shop</p>
                       <p className="text-red-400 font-bold mt-1">AED {financeSummary.current_balance.total_pending_cash.toFixed(2)}</p>
                     </div>
                   </div>
 
                   {financeSummary.current_balance.remaining_to_submit > 0 ? (
                     <div className="border-t border-gray-800 pt-4">
-                      <p className="text-gray-300 text-sm font-medium mb-3">Submit cash to shop</p>
+                      <p className="text-gray-300 text-sm font-medium mb-1">Submit shop cash for Admin approval</p>
+                      <p className="text-gray-500 text-xs mb-3">Delivery charge is your earning and is not included in Pending to Shop.</p>
                       <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-3">
                         <Input
                           type="number"
@@ -809,7 +740,16 @@ export default function RiderPanel() {
                 )}
               </>
             ) : (
-              <div className="py-12 text-center text-gray-500">Finance report is not available.</div>
+              <Card className="bg-gray-900 border-gray-800 p-5 text-center">
+                <p className="text-gray-300 font-medium">Finance report could not be loaded.</p>
+                <p className="text-gray-500 text-xs mt-1">{financeError || 'Tap Retry.'}</p>
+                <Button
+                  onClick={() => rider && loadFinance(rider.id, financePeriod)}
+                  className="mt-4 bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" /> Retry
+                </Button>
+              </Card>
             )}
           </div>
         )}
@@ -896,7 +836,6 @@ export default function RiderPanel() {
                     <Bike className="w-12 h-12 text-gray-700 mx-auto mb-3" />
                     <p className="text-gray-500">No active deliveries</p>
                     <p className="text-gray-600 text-sm mt-1">New deliveries will appear here automatically</p>
-                    {notificationsEnabled && <p className="text-green-500/70 text-xs mt-3">🔔 You'll be notified when new orders arrive</p>}
                   </div>
                 )}
 
