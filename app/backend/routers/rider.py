@@ -1,7 +1,7 @@
 # @File: backend/routers/rider.py
 # @Desc: Rider panel API routes for delivery management
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_
@@ -13,6 +13,13 @@ from models.riders import Riders
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
+from routers.finance import (
+    CashSubmissionCreate as FinanceCashSubmissionCreate,
+    PeriodName as FinancePeriodName,
+    get_rider_finance_summary as _finance_rider_summary,
+    get_rider_cash_submissions as _finance_rider_cash_submissions,
+    submit_rider_cash as _finance_submit_rider_cash,
+)
 from services.rider_assignment import (
     auto_assign_order,
     auto_assign_unassigned_orders,
@@ -914,6 +921,55 @@ async def get_rider_stats(
     except Exception as e:
         logging.error(f"Failed to get rider stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ===================== RIDER FINANCE (RIDER-SAFE PATH) =====================
+# The Admin finance URLs live under /api/v1/finance and may require Admin auth.
+# Rider app uses these /api/v1/rider/finance/... wrappers instead, while keeping
+# the exact same finance calculations and cash-approval records.
+
+@router.get("/finance/{rider_id}/summary")
+async def get_rider_finance_summary_safe(
+    rider_id: int,
+    period: FinancePeriodName = Query(default="today"),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _finance_rider_summary(
+        rider_id=rider_id,
+        period=period,
+        date_from=date_from,
+        date_to=date_to,
+        db=db,
+    )
+
+
+@router.get("/finance/{rider_id}/cash-submissions")
+async def get_rider_cash_submissions_safe(
+    rider_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _finance_rider_cash_submissions(
+        rider_id=rider_id,
+        limit=limit,
+        db=db,
+    )
+
+
+@router.post("/finance/{rider_id}/cash-submissions", status_code=201)
+async def submit_rider_cash_safe(
+    rider_id: int,
+    data: FinanceCashSubmissionCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    return await _finance_submit_rider_cash(
+        rider_id=rider_id,
+        data=data,
+        db=db,
+    )
 
 
 # ===================== ADMIN RIDER REPORTS =====================
