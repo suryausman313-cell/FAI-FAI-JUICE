@@ -215,9 +215,9 @@ export default function CustomerAuth() {
   const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(
     hasKnownAccountOnDevice,
   );
-  const [mode, setMode] = useState<ScreenMode>(() =>
-    hasKnownAccountOnDevice() ? 'login' : 'signup',
-  );
+  // Always start with Login on every device.
+  // New customers can switch to Sign Up manually.
+  const [mode, setMode] = useState<ScreenMode>('login');
   const [loading, setLoading] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(
     Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
@@ -263,10 +263,28 @@ export default function CustomerAuth() {
         setActiveCustomer(customer || getStoredCustomer());
         setRegisteredOnThisDevice(true);
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
-        clearCustomerSession();
-        setActiveCustomer(null);
+
+        const status = Number((error as any)?.response?.status || 0);
+
+        // Only remove the saved login when the backend clearly says
+        // the token is invalid/expired. A temporary network, Safari/PWA,
+        // Render wake-up, timeout, or offline error must NOT log the
+        // customer out and ask for the PIN again.
+        if (status === 401 || status === 403) {
+          clearCustomerSession();
+          setActiveCustomer(null);
+          return;
+        }
+
+        const storedCustomer = getStoredCustomer();
+        if (storedCustomer) {
+          setActiveCustomer(storedCustomer);
+          setRegisteredOnThisDevice(true);
+        } else {
+          setActiveCustomer(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setSessionChecking(false);
@@ -295,12 +313,12 @@ export default function CustomerAuth() {
       mode !== 'changePin'
     ) {
       const timer = window.setTimeout(() => {
-        window.location.replace('/');
+        navigate('/', { replace: true });
       }, 50);
 
       return () => window.clearTimeout(timer);
     }
-  }, [manageMode, sessionChecking, activeCustomer, mode]);
+  }, [manageMode, sessionChecking, activeCustomer, mode, navigate]);
 
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
@@ -354,7 +372,7 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setLoginPin('');
       toast.success('Login successful');
-      window.location.replace('/');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Login failed');
       toast.error(message);
@@ -406,7 +424,7 @@ export default function CustomerAuth() {
       setSignupPin('');
       setSignupConfirmPin('');
       toast.success('Account created successfully');
-      window.location.replace('/');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Could not create account');
       toast.error(message);
@@ -595,7 +613,7 @@ export default function CustomerAuth() {
           </div>
         )}
 
-        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && !registeredOnThisDevice && (
+        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && (
           <div className="mb-7 grid grid-cols-2 rounded-xl border border-slate-800 bg-slate-950 p-1">
             <button
               type="button"
@@ -693,7 +711,7 @@ export default function CustomerAuth() {
           </form>
         )}
 
-        {!sessionChecking && !activeCustomer && mode === 'signup' && !registeredOnThisDevice && (
+        {!sessionChecking && !activeCustomer && mode === 'signup' && (
           <form onSubmit={handleSignup} className={cardClass}>
             <div>
               <h2 className="text-xl font-bold">Create Customer Account</h2>
