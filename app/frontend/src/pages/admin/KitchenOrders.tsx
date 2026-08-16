@@ -44,6 +44,7 @@ declare global {
   interface Window {
     VitaPrinter?: {
       printReceipt: (payload: string) => string | void;
+      stopOrderAlarm?: () => void;
     };
     webkitAudioContext?: typeof AudioContext;
   }
@@ -571,6 +572,13 @@ export default function KitchenOrders() {
     status: string,
     estimatedMinutes?: number
   ) {
+    // Stop both WebView and native Android alarm immediately when Accept is pressed.
+    // Do not wait for the API response or the next 8-10 second poll.
+    if (status === 'accepted') {
+      kitchenAlarm.stop();
+      try { window.VitaPrinter?.stopOrderAlarm?.(); } catch {}
+    }
+
     try {
       const response = await axios.put(
         `${getAPIBaseURL()}/api/v1/admin/kitchen/orders/${order.id}/status`,
@@ -632,6 +640,9 @@ export default function KitchenOrders() {
       toast.success(`Order #${order.id} → ${status}`);
       setTimeout(() => void loadOrders(), 700);
     } catch (error: any) {
+      if (status === 'accepted' && soundEnabled && orders.some((item) => item.status === 'new')) {
+        kitchenAlarm.start();
+      }
       console.error('Kitchen status update failed:', error);
       const message = error?.response?.data?.detail || 'Order update failed';
       toast.error(String(message));
