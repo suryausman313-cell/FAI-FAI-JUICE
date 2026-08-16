@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 def customer_phone_key(value: str) -> str:
-    """Return one stable UAE/international digit key for matching orders."""
     digits = re.sub(r"\D", "", str(value or ""))
     if digits.startswith("00"):
         digits = digits[2:]
@@ -38,8 +37,47 @@ def _is_delivery_order(order: Orders) -> bool:
     )
 
 
-async def send_customer_order_ready_push(db: AsyncSession, order: Orders) -> int:
-    """Notify every active device registered by the order's customer."""
+def _notification_text(order: Orders, event: str, rider_name: str = "") -> tuple[str, str]:
+    order_id = order.id
+    event = str(event or "").lower().strip()
+    delivery = _is_delivery_order(order)
+
+    if event == "accepted":
+        return "Your order is confirmed", f"Order #{order_id} has been confirmed."
+    if event == "preparing":
+        return "Your order is being prepared", f"Kitchen started preparing order #{order_id}."
+    if event == "ready":
+        return (
+            ("Your order is ready", f"Order #{order_id} is ready. We are preparing it for the rider.")
+            if delivery
+            else ("Your order is ready", f"Order #{order_id} is ready for pickup.")
+        )
+    if event == "rider_assigned":
+        rider = rider_name.strip() or "Your rider"
+        return "Rider assigned", f"{rider} has been assigned to order #{order_id}."
+    if event == "rider_accepted":
+        rider = rider_name.strip() or "Your rider"
+        return "Rider accepted your order", f"{rider} accepted delivery of order #{order_id}."
+    if event == "picked_up":
+        return "Your rider picked up the order", f"Order #{order_id} has been picked up from Fai Fai Juice."
+    if event == "on_the_way":
+        return "Your order is on the way", f"Order #{order_id} is on the way to your selected delivery location."
+    if event == "delivered":
+        return "Order delivered", f"Order #{order_id} has been delivered. Enjoy!"
+    if event == "cancelled":
+        return "Order cancelled", f"Order #{order_id} has been cancelled."
+    if event == "completed":
+        return "Order completed", f"Order #{order_id} is complete."
+    return "Fai Fai Juice", f"Order #{order_id} status was updated."
+
+
+async def send_customer_order_update_push(
+    db: AsyncSession,
+    order: Orders,
+    event: str,
+    *,
+    rider_name: str = "",
+) -> int:
     phone_key = customer_phone_key(order.customer_phone)
     if not phone_key:
         return 0
@@ -55,19 +93,14 @@ async def send_customer_order_ready_push(db: AsyncSession, order: Orders) -> int
     if not subscriptions:
         return 0
 
-    delivery = _is_delivery_order(order)
-    body = (
-        f"Your order #{order.id} is ready. A rider will bring it to you."
-        if delivery
-        else f"Your order #{order.id} is ready for pickup."
-    )
+    title, body = _notification_text(order, event, rider_name)
     payload = json.dumps(
         {
-            "title": "Your order is ready",
+            "title": title,
             "body": body,
             "url": f"/my-orders?order_id={order.id}",
-            "tag": f"customer-ready:{order.id}",
-            "kind": "customer_ready",
+            "tag": f"customer-order:{order.id}:{event}",
+            "kind": f"customer_{event}",
             "order_id": order.id,
         },
         separators=(",", ":"),
@@ -76,14 +109,13 @@ async def send_customer_order_ready_push(db: AsyncSession, order: Orders) -> int
 
     jobs = []
     for item in subscriptions:
-        subscription_info = {
-            "endpoint": item.endpoint,
-            "keys": {"p256dh": item.p256dh, "auth": item.auth},
-        }
         jobs.append(
             asyncio.to_thread(
                 _send_one_sync,
-                subscription_info,
+                {
+                    "endpoint": item.endpoint,
+                    "keys": {"p256dh": item.p256dh, "auth": item.auth},
+                },
                 payload,
                 vapid.private_key_der_b64,
                 vapid.subject,
@@ -101,28 +133,48 @@ async def send_customer_order_ready_push(db: AsyncSession, order: Orders) -> int
         ok, status_code, message = result
         if ok:
             sent += 1
-            continue
-
-        logger.warning(
-            "Customer push failed for subscription %s (HTTP %s): %s",
-            item.id,
-            status_code,
-            message,
-        )
-        if status_code in {404, 410}:
-            item.is_active = False
-            changed = True
+        else:
+            logger.warning(
+                "Customer push failed for subscription %s (HTTP %s): %s",
+                item.id,
+                status_code,
+                message,
+            )
+            if status_code in {404, 410}:
+                item.is_active = False
+                changed = True
 
     if changed:
         await db.commit()
-
     return sent
 
 
-async def notify_customer_order_ready_safely(db: AsyncSession, order: Orders) -> int:
-    """Do not let a push-provider problem block the Kitchen status update."""
+async def notify_customer_order_update_safely(
+    db: AsyncSession,
+    order: Orders,
+    event: str,
+    *,
+    rider_name: str = "",
+) -> int:
     try:
-        return await send_customer_order_ready_push(db, order)
+        return await send_customer_order_update_push(
+            db,
+            order,
+            event,
+            rider_name=rider_name,
+        )
     except Exception:
-        logger.exception("Could not send ready notification for order %s", order.id)
+        logger.exception(
+            "Could not send customer %s notification for order %s",
+            event,
+            order.id,
+        )
         return 0
+
+
+async def send_customer_order_ready_push(db: AsyncSession, order: Orders) -> int:
+    return await send_customer_order_update_push(db, order, "ready")
+
+
+async def notify_customer_order_ready_safely(db: AsyncSession, order: Orders) -> int:
+    return await notify_customer_order_update_safely(db, order, "ready")

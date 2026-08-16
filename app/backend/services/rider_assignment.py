@@ -1,12 +1,11 @@
-"""Safe nearest-live-rider assignment helpers.
+"""Shared rider assignment helpers used by Admin, Kitchen and order placement.
 
-Assignment rules:
+The rules are intentionally simple and predictable:
 1. Only active delivery orders can be assigned.
-2. Existing active assignments are never duplicated.
-3. Rider must be active, have a fresh heartbeat, valid GPS and fresh GPS.
-4. Offline riders and stale/missing GPS riders are never used as fallback.
-5. Shop coordinates are required; customer coordinates are never used as pickup fallback.
-6. Eligible riders are ranked by distance to shop first, then active deliveries, then rider ID.
+2. An existing active assignment is never duplicated.
+3. Prefer riders who are online/recently located.
+4. Prefer riders with no active delivery, then the least-busy rider.
+5. Within the same workload, choose the rider nearest to the restaurant pickup point.
 """
 
 from __future__ import annotations
@@ -24,24 +23,12 @@ from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
 from models.riders import Riders
+from services.customer_push_service import notify_customer_order_update_safely
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_ASSIGNMENT_STATUSES = ("assigned", "accepted", "picked_up", "on_the_way")
-ACTIVE_ORDER_STATUSES = (
-    "new",
-    "pending",
-    "placed",
-    "order_placed",
-    "created",
-    "accepted",
-    "preparing",
-    "ready",
-)
-
-# Rider app sends heartbeat every 15 seconds and GPS every 30 seconds.
-HEARTBEAT_MAX_AGE_SECONDS = 60
-GPS_MAX_AGE_SECONDS = 120
+ACTIVE_ORDER_STATUSES = ("new", "pending", "placed", "order_placed", "created", "accepted", "preparing", "ready")
 
 
 def is_delivery_order(order: Orders) -> bool:
@@ -65,28 +52,17 @@ def _as_float(value: object) -> Optional[float]:
     return result if math.isfinite(result) else None
 
 
-def _valid_coordinates(lat: Optional[float], lng: Optional[float]) -> bool:
-    return (
-        lat is not None
-        and lng is not None
-        and -90 <= lat <= 90
-        and -180 <= lng <= 180
-    )
-
-
 def _order_location(order: Orders) -> tuple[Optional[float], Optional[float], str]:
     lat = _as_float(getattr(order, "customer_lat", None))
     lng = _as_float(getattr(order, "customer_lng", None))
     address = str(getattr(order, "customer_address", "") or "").strip()
     notes = str(getattr(order, "order_notes", "") or "")
 
-    if not _valid_coordinates(lat, lng):
+    if lat is None or lng is None:
         match = re.search(r"GPS:\s*([-\d.]+)\s*,\s*([-\d.]+)", notes, re.IGNORECASE)
         if match:
-            parsed_lat = _as_float(match.group(1))
-            parsed_lng = _as_float(match.group(2))
-            if _valid_coordinates(parsed_lat, parsed_lng):
-                lat, lng = parsed_lat, parsed_lng
+            lat = _as_float(match.group(1))
+            lng = _as_float(match.group(2))
 
     if not address:
         match = re.search(r"Delivery Address:\s*([^|]+)", notes, re.IGNORECASE)
@@ -109,68 +85,31 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1 - a)))
 
 
-def seconds_old(value: Optional[datetime], now: Optional[datetime] = None) -> float:
+def _seconds_old(value: Optional[datetime], now: datetime) -> float:
     if value is None:
         return float("inf")
-
-    current = now or datetime.now(timezone.utc)
     normalized = value
     if normalized.tzinfo is None:
         normalized = normalized.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - normalized).total_seconds())
 
-    return max(0.0, (current - normalized).total_seconds())
 
-
-def rider_live_status(rider: Riders, now: Optional[datetime] = None) -> dict:
-    """Return strict online/GPS eligibility used by auto and manual assignment."""
-    current = now or datetime.now(timezone.utc)
-    rider_lat = _as_float(getattr(rider, "current_lat", None))
-    rider_lng = _as_float(getattr(rider, "current_lng", None))
-
-    heartbeat_age = seconds_old(getattr(rider, "last_heartbeat", None), current)
-    location_age = seconds_old(getattr(rider, "location_updated_at", None), current)
-
-    is_online = heartbeat_age <= HEARTBEAT_MAX_AGE_SECONDS
-    has_gps = _valid_coordinates(rider_lat, rider_lng)
-    gps_fresh = has_gps and location_age <= GPS_MAX_AGE_SECONDS
-    is_active = bool(getattr(rider, "is_active", False))
-    eligible = is_active and is_online and gps_fresh
-
-    reason = "available"
-    if not is_active:
-        reason = "inactive"
-    elif not is_online:
-        reason = "offline"
-    elif not has_gps:
-        reason = "gps_missing"
-    elif not gps_fresh:
-        reason = "gps_outdated"
-
-    return {
-        "is_online": is_online,
-        "has_gps": has_gps,
-        "gps_fresh": gps_fresh,
-        "eligible_for_assignment": eligible,
-        "heartbeat_age_seconds": None if math.isinf(heartbeat_age) else int(heartbeat_age),
-        "location_age_seconds": None if math.isinf(location_age) else int(location_age),
-        "reason": reason,
-        "lat": rider_lat,
-        "lng": rider_lng,
-    }
+def _is_online(rider: Riders, now: datetime) -> bool:
+    # Heartbeat is sent every 15 seconds; location every 30 seconds.
+    return (
+        _seconds_old(getattr(rider, "last_heartbeat", None), now) <= 120
+        or _seconds_old(getattr(rider, "location_updated_at", None), now) <= 300
+    )
 
 
 async def get_auto_assign_enabled(db: AsyncSession) -> bool:
-    result = await db.execute(
-        select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
-    )
+    result = await db.execute(select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1))
     settings = result.scalar_one_or_none()
     return bool(settings and getattr(settings, "auto_assign_rider_enabled", False))
 
 
 async def set_auto_assign_enabled(db: AsyncSession, enabled: bool) -> bool:
-    result = await db.execute(
-        select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
-    )
+    result = await db.execute(select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1))
     settings = result.scalar_one_or_none()
     if settings is None:
         settings = Restaurant_settings(
@@ -184,10 +123,7 @@ async def set_auto_assign_enabled(db: AsyncSession, enabled: bool) -> bool:
     return bool(enabled)
 
 
-async def latest_active_assignment(
-    db: AsyncSession,
-    order_id: int,
-) -> Optional[Delivery_assignments]:
+async def latest_active_assignment(db: AsyncSession, order_id: int) -> Optional[Delivery_assignments]:
     result = await db.execute(
         select(Delivery_assignments)
         .where(
@@ -200,21 +136,12 @@ async def latest_active_assignment(
     return result.scalar_one_or_none()
 
 
-async def get_restaurant_location(
-    db: AsyncSession,
-) -> tuple[Optional[float], Optional[float]]:
-    result = await db.execute(
-        select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
-    )
+async def _restaurant_location(db: AsyncSession) -> tuple[Optional[float], Optional[float]]:
+    result = await db.execute(select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1))
     settings = result.scalar_one_or_none()
-    if settings is None:
+    if not settings:
         return None, None
-
-    lat = _as_float(getattr(settings, "restaurant_lat", None))
-    lng = _as_float(getattr(settings, "restaurant_lng", None))
-    if not _valid_coordinates(lat, lng):
-        return None, None
-    return lat, lng
+    return _as_float(settings.restaurant_lat), _as_float(settings.restaurant_lng)
 
 
 async def select_best_rider(
@@ -223,16 +150,7 @@ async def select_best_rider(
     exclude_rider_ids: Optional[Iterable[int]] = None,
 ) -> tuple[Optional[Riders], Optional[float]]:
     excluded = {int(value) for value in (exclude_rider_ids or [])}
-
-    # Shop GPS is mandatory because riders collect the order from the shop.
-    shop_lat, shop_lng = await get_restaurant_location(db)
-    if shop_lat is None or shop_lng is None:
-        logger.warning("Auto Assign skipped: restaurant GPS is missing")
-        return None, None
-
-    rider_result = await db.execute(
-        select(Riders).where(Riders.is_active == True)  # noqa: E712
-    )
+    rider_result = await db.execute(select(Riders).where(Riders.is_active == True))  # noqa: E712
     riders = [rider for rider in rider_result.scalars().all() if rider.id not in excluded]
     if not riders:
         return None, None
@@ -247,29 +165,38 @@ async def select_best_rider(
     )
     active_counts = {int(row[0]): int(row[1]) for row in count_result.all()}
 
+    customer_lat, customer_lng, _ = _order_location(order)
+    restaurant_lat, restaurant_lng = await _restaurant_location(db)
+    # Riders collect from the shop, so restaurant coordinates are the preferred target.
+    target_lat = restaurant_lat if restaurant_lat is not None else customer_lat
+    target_lng = restaurant_lng if restaurant_lng is not None else customer_lng
+
     now = datetime.now(timezone.utc)
-    scored: list[tuple[tuple[float, int, int], Riders, float]] = []
+    online_riders = [rider for rider in riders if _is_online(rider, now)]
+    pool = online_riders or riders
 
-    for rider in riders:
-        live = rider_live_status(rider, now)
-        if not live["eligible_for_assignment"]:
-            continue
+    scored: list[tuple[tuple[int, int, float, int], Riders, Optional[float]]] = []
+    for rider in pool:
+        rider_lat = _as_float(rider.current_lat)
+        rider_lng = _as_float(rider.current_lng)
+        distance: Optional[float] = None
+        if (
+            rider_lat is not None
+            and rider_lng is not None
+            and target_lat is not None
+            and target_lng is not None
+        ):
+            distance = haversine_km(rider_lat, rider_lng, target_lat, target_lng)
 
-        distance = haversine_km(
-            float(live["lat"]),
-            float(live["lng"]),
-            shop_lat,
-            shop_lng,
-        )
         active_count = active_counts.get(rider.id, 0)
-
-        # Nearest live rider is first priority. Workload only breaks a distance tie.
-        score = (distance, active_count, rider.id)
+        # Idle riders first; after that least busy; then nearest.
+        score = (
+            1 if active_count > 0 else 0,
+            active_count,
+            distance if distance is not None else float("inf"),
+            rider.id,
+        )
         scored.append((score, rider, distance))
-
-    if not scored:
-        logger.info("Auto Assign waiting: no online rider with fresh GPS")
-        return None, None
 
     scored.sort(key=lambda item: item[0])
     _, selected, selected_distance = scored[0]
@@ -305,7 +232,6 @@ async def auto_assign_order(
 
     rider, pickup_distance = await select_best_rider(db, order, exclude_rider_ids)
     if rider is None:
-        # Keep order unassigned / Waiting Rider. Never use an offline fallback.
         return None
 
     customer_lat, customer_lng, customer_address = _order_location(order)
@@ -325,14 +251,14 @@ async def auto_assign_order(
     db.add(assignment)
     await db.commit()
     await db.refresh(assignment)
-
-    logger.info(
-        "Auto assigned order %s to nearest live rider %s (%s), %.2f km from shop",
-        order.id,
-        rider.id,
-        rider.name,
-        pickup_distance or 0,
+    await notify_customer_order_update_safely(
+        db,
+        order,
+        "rider_assigned",
+        rider_name=rider.name,
     )
+
+    logger.info("Auto assigned order %s to rider %s (%s)", order.id, rider.id, rider.name)
     return {
         "id": assignment.id,
         "order_id": assignment.order_id,
@@ -341,7 +267,6 @@ async def auto_assign_order(
         "rider_phone": rider.phone,
         "status": assignment.status or "assigned",
         "already_assigned": False,
-        "distance_to_shop_km": round(pickup_distance, 2) if pickup_distance is not None else None,
     }
 
 
@@ -361,7 +286,6 @@ async def auto_assign_unassigned_orders(
         .order_by(Orders.created_at.asc())
         .limit(limit)
     )
-
     assignments: list[dict] = []
     for order in result.scalars().all():
         if not is_delivery_order(order):
@@ -378,5 +302,4 @@ async def auto_assign_unassigned_orders(
         except Exception:
             logger.exception("Failed to auto assign order %s", order.id)
             await db.rollback()
-
     return assignments
