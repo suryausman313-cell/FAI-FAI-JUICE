@@ -60,6 +60,10 @@ class Orders(Base):
     customer_lat = Column(Float, nullable=True)
     customer_lng = Column(Float, nullable=True)
     customer_address = Column(String, nullable=True, default="", server_default="")
+    delivery_area_name = Column(String(160), nullable=True, default="", server_default="")
+    delivery_country = Column(String(120), nullable=True, default="", server_default="")
+    delivery_distance_km = Column(Float, nullable=True)
+    delivery_zone_name = Column(String(100), nullable=True, default="", server_default="")
 
     status = Column(
         String(50),
