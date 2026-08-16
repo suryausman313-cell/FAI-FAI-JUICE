@@ -53,13 +53,6 @@ type KitchenOrder = Order & {
   tax_amount?: number | string;
   delivery_charge?: number | string;
   tip_amount?: number | string;
-  accepted_at?: string | null;
-  promised_ready_at?: string | null;
-  preparing_at?: string | null;
-  ready_at?: string | null;
-  rider_picked_up_at?: string | null;
-  promised_delivery_at?: string | null;
-  delivered_at?: string | null;
 };
 
 type ReceiptSettings = {
@@ -137,17 +130,6 @@ function normalizeOrder(raw: any): KitchenOrder {
     items_json: itemsJson || '[]',
     created_at: String(raw?.created_at || new Date().toISOString()),
     updated_at: String(raw?.updated_at || raw?.created_at || new Date().toISOString()),
-    accepted_at: raw?.accepted_at || null,
-    promised_ready_at: raw?.promised_ready_at || (
-      typeof raw?.pickup_time === 'string' && raw.pickup_time.includes('|')
-        ? raw.pickup_time.split('|')[1]
-        : null
-    ),
-    preparing_at: raw?.preparing_at || null,
-    ready_at: raw?.ready_at || null,
-    rider_picked_up_at: raw?.rider_picked_up_at || null,
-    promised_delivery_at: raw?.promised_delivery_at || null,
-    delivered_at: raw?.delivered_at || null,
   } as KitchenOrder;
 }
 
@@ -203,26 +185,17 @@ function formatUaeTime(value: string): string {
   });
 }
 
-function signedReadyMinutes(order: KitchenOrder): number | null {
-  const deadline = order.promised_ready_at || (
-    typeof (order as any).pickup_time === 'string' && String((order as any).pickup_time).includes('|')
-      ? String((order as any).pickup_time).split('|')[1]
-      : null
-  );
-  if (!deadline) return null;
-
-  const deadlineMs = new Date(deadline).getTime();
-  if (!Number.isFinite(deadlineMs)) return null;
-
-  const differenceMs = deadlineMs - Date.now();
-  if (differenceMs >= 0) return Math.ceil(differenceMs / 60_000);
-  return -Math.max(1, Math.floor(Math.abs(differenceMs) / 60_000));
+function getCountdownMinutes(order: KitchenOrder): number | null {
+  if (!order.estimated_time) return null;
+  const eta = new Date(order.estimated_time).getTime();
+  if (!Number.isFinite(eta)) return null;
+  return Math.max(0, Math.ceil((eta - Date.now()) / 60000));
 }
 
 function getElapsedMinutes(value: string): number {
   const created = new Date(value).getTime();
   if (!Number.isFinite(created)) return 0;
-  return Math.max(0, Math.floor((Date.now() - created) / 60_000));
+  return Math.max(0, Math.floor((Date.now() - created) / 60000));
 }
 
 function totalItems(order: KitchenOrder): number {
@@ -231,56 +204,97 @@ function totalItems(order: KitchenOrder): number {
 
 function paymentLabel(order: KitchenOrder): string {
   const raw = String(order.payment_method || 'Cash').toLowerCase();
-  if (raw.includes('cash')) return isDeliveryOrder(order) ? 'Cash on delivery' : 'Cash on pickup';
+  if (raw.includes('cash')) return 'Cash on delivery';
   if (raw.includes('card')) return 'Card';
   return String(order.payment_method || 'Cash');
 }
 
-function TimerCircle({
-  order,
-  onBecameLate,
-}: {
-  order: KitchenOrder;
-  onBecameLate?: (order: KitchenOrder) => void;
-}) {
+class KitchenAlarm {
+  private audioContext: AudioContext | null = null;
+  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private enabled = true;
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+    if (!enabled) this.stop();
+  }
+
+  private getContext(): AudioContext | null {
+    try {
+      if (!this.audioContext) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return null;
+        this.audioContext = new AudioContextClass();
+      }
+      void this.audioContext.resume().catch(() => undefined);
+      return this.audioContext;
+    } catch {
+      return null;
+    }
+  }
+
+  unlock() {
+    const context = this.getContext();
+    if (!context) return;
+    void context.resume().catch(() => undefined);
+  }
+
+  playOnce() {
+    if (!this.enabled) return;
+    const context = this.getContext();
+    if (!context) return;
+
+    const tones = [880, 1100, 1320];
+    tones.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const start = context.currentTime + index * 0.24;
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+      gain.gain.setValueAtTime(0.38, start);
+      gain.gain.exponentialRampToValueAtTime(0.01, start + 0.18);
+      oscillator.start(start);
+      oscillator.stop(start + 0.2);
+    });
+  }
+
+  start() {
+    if (!this.enabled || this.intervalId) return;
+    this.playOnce();
+    this.intervalId = setInterval(() => this.playOnce(), 3000);
+  }
+
+  stop() {
+    if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
+    try {
+      window.VitaPrinter?.stopOrderAlarm?.();
+    } catch {
+      // ignore native stop failures
+    }
+  }
+}
+
+const kitchenAlarm = new KitchenAlarm();
+
+function TimerCircle({ order }: { order: KitchenOrder }) {
   const [, setTick] = useState(0);
-  const lateAnnouncedRef = useRef(false);
 
   useEffect(() => {
-    const timer = setInterval(() => setTick((value) => value + 1), 1000);
+    const timer = setInterval(() => setTick((value) => value + 1), 30000);
     return () => clearInterval(timer);
   }, []);
 
-  const signed = signedReadyMinutes(order);
-  const elapsed = getElapsedMinutes(order.created_at);
-  const isLate = signed !== null && signed < 0;
-  const value = signed !== null ? signed : elapsed;
-
-  useEffect(() => {
-    if (isLate && !lateAnnouncedRef.current) {
-      lateAnnouncedRef.current = true;
-      onBecameLate?.(order);
-    }
-    if (!isLate) lateAnnouncedRef.current = false;
-  }, [isLate, onBecameLate, order]);
-
-  if (isLate) {
-    const lateBy = Math.abs(value);
-    return (
-      <div className="flex shrink-0 flex-col items-center gap-1">
-        <div className="w-16 h-16 rounded-full border-[3px] border-red-500 flex flex-col items-center justify-center text-red-700 bg-red-50">
-          <span className="text-2xl leading-none font-black">{value}</span>
-          <span className="text-[10px] uppercase tracking-wide font-semibold">min</span>
-        </div>
-        <span className="text-xs font-black text-red-600">{lateBy} min late</span>
-      </div>
-    );
-  }
+  const countdown = getCountdownMinutes(order);
+  const value = countdown !== null ? countdown : getElapsedMinutes(order.created_at);
+  const label = countdown !== null ? 'mins' : 'min';
 
   return (
     <div className="w-16 h-16 rounded-full border-[3px] border-emerald-500 flex flex-col items-center justify-center text-emerald-700 bg-emerald-50 shrink-0">
       <span className="text-2xl leading-none font-black">{value}</span>
-      <span className="text-[10px] uppercase tracking-wide font-semibold">{signed !== null ? 'mins' : 'min'}</span>
+      <span className="text-[10px] uppercase tracking-wide font-semibold">{label}</span>
     </div>
   );
 }
@@ -318,12 +332,11 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
   );
 }
 
-function BoardSection({ title, orders, emptyText, onOpen, onBecameLate }: {
+function BoardSection({ title, orders, emptyText, onOpen }: {
   title: string;
   orders: KitchenOrder[];
   emptyText: string;
   onOpen: (orderId: number) => void;
-  onBecameLate?: (order: KitchenOrder) => void;
 }) {
   return (
     <section className="mb-7">
@@ -356,7 +369,7 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate }: {
                       : order.status === 'ready' ? 'Ready for pickup' : 'Kitchen in progress'}
                   </p>
                 </div>
-                <TimerCircle order={order} onBecameLate={onBecameLate} />
+                <TimerCircle order={order} />
               </div>
             </button>
           ))}
@@ -722,42 +735,10 @@ export default function KitchenOrders() {
   const newOrders = useMemo(() => activeOrders.filter((order) => order.status === 'new'), [activeOrders]);
   const acceptedOrders = useMemo(() => activeOrders.filter((order) => ['accepted', 'preparing'].includes(order.status)), [activeOrders]);
   const upcomingOrders = useMemo(() => activeOrders.filter((order) => order.status === 'ready'), [activeOrders]);
-  const todayCompletedTotal = useMemo(
-    () => todayHistory
-      .filter((order) => order.status === 'completed')
-      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0),
-    [todayHistory],
-  );
-  const yesterdayCompletedTotal = useMemo(
-    () => yesterdayHistory
-      .filter((order) => order.status === 'completed')
-      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0),
-    [yesterdayHistory],
-  );
-
   const selectedOrder = useMemo(
     () => (selectedOrderId === null ? null : orders.find((order) => order.id === selectedOrderId) || null),
     [orders, selectedOrderId],
   );
-
-  const announceLateOrder = useCallback((order: KitchenOrder) => {
-    const key = `kitchen_late_voice_${order.id}_${order.promised_ready_at || 'deadline'}`;
-    if (sessionStorage.getItem(key) === '1') return;
-    sessionStorage.setItem(key, '1');
-
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const message = new SpeechSynthesisUtterance(`Order number ${order.id} is late`);
-        message.lang = 'en-US';
-        message.rate = 0.95;
-        message.volume = 1;
-        window.speechSynthesis.speak(message);
-      }
-    } catch {
-      // Voice alert is helpful but must never break the Kitchen screen.
-    }
-  }, []);
 
   function renderOrderDetail(order: KitchenOrder) {
     const items = parseItems(order.items_json);
@@ -802,7 +783,7 @@ export default function KitchenOrders() {
                   <h2 className="mt-4 text-3xl font-black text-slate-900">{order.customer_name}</h2>
                   {order.customer_phone && <p className="mt-1 text-lg text-slate-500">{order.customer_phone}</p>}
                 </div>
-                <TimerCircle order={order} onBecameLate={announceLateOrder} />
+                <TimerCircle order={order} />
               </div>
 
               <div className="mt-5 grid gap-3">
@@ -931,22 +912,8 @@ export default function KitchenOrders() {
   }
 
   function renderHistory(ordersForDay: KitchenOrder[]) {
-    const completedTotal = ordersForDay
-      .filter((order) => order.status === 'completed')
-      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
-
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">Orders</p>
-            <p className="mt-1 text-4xl font-black text-slate-900">{ordersForDay.length}</p>
-          </Card>
-          <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">Completed Sale</p>
-            <p className="mt-1 text-3xl font-black text-emerald-600">AED {money(completedTotal)}</p>
-          </Card>
-        </div>
         {ordersForDay.length === 0 ? (
           <div className="rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center text-lg text-slate-400 shadow-sm">No orders found for this day.</div>
         ) : (
@@ -1031,6 +998,11 @@ export default function KitchenOrders() {
               </button>
             )}
             {!selectedOrder && (
+              <button type="button" onClick={() => void loadOrders()} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100" disabled={refreshing}>
+                <RefreshCw className={`h-6 w-6 ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+            {!selectedOrder && (
               <button type="button" onClick={logoutKitchen} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
                 <LogOut className="h-6 w-6" />
               </button>
@@ -1060,9 +1032,9 @@ export default function KitchenOrders() {
           <EmptyState />
         ) : (
           <div>
-            <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
-            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
-            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
+            <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} />
+            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} />
+            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} />
           </div>
         )}
       </div>
@@ -1085,8 +1057,8 @@ export default function KitchenOrders() {
             <div className="space-y-3">
               {[
                 { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, note: `${activeOrders.length} active orders` },
-                { key: 'today' as const, label: 'Today Orders', icon: PackageCheck, note: `${todayHistory.length} orders · AED ${money(todayCompletedTotal)}` },
-                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, note: `${yesterdayHistory.length} orders · AED ${money(yesterdayCompletedTotal)}` },
+                { key: 'today' as const, label: 'Today Orders', icon: PackageCheck, note: `${todayHistory.length} orders` },
+                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, note: `${yesterdayHistory.length} orders` },
                 { key: 'menu' as const, label: 'Menu Availability', icon: UtensilsCrossed, note: 'Available / Sold out' },
               ].map((item) => {
                 const Icon = item.icon;
