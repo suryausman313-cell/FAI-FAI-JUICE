@@ -1,3 +1,4 @@
+import re
 # @File: backend/routers/kitchen_orders.py
 # @Desc: Kitchen-PIN protected order list and status updates
 
@@ -5,6 +6,7 @@ import logging
 import os
 import secrets
 from typing import Optional
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
@@ -44,6 +46,14 @@ def verify_kitchen_pin(
             detail="Invalid Kitchen PIN. Login to Kitchen again.",
         )
     return supplied
+
+
+
+def parse_delivery_target_minutes(value: Optional[str]) -> Optional[int]:
+    numbers = [int(item) for item in re.findall(r"\d+", str(value or ""))]
+    if not numbers:
+        return None
+    return max(1, min(max(numbers), 240))
 
 
 def normalize_status(value: Optional[str]) -> str:
@@ -120,6 +130,13 @@ def serialize_order(order: Orders) -> dict:
         "items_json": order.items_json or "[]",
         "created_at": iso(getattr(order, "created_at", None)),
         "updated_at": iso(getattr(order, "updated_at", None)),
+        "accepted_at": iso(getattr(order, "accepted_at", None)),
+        "promised_ready_at": iso(getattr(order, "promised_ready_at", None)),
+        "preparing_at": iso(getattr(order, "preparing_at", None)),
+        "ready_at": iso(getattr(order, "ready_at", None)),
+        "rider_picked_up_at": iso(getattr(order, "rider_picked_up_at", None)),
+        "promised_delivery_at": iso(getattr(order, "promised_delivery_at", None)),
+        "delivered_at": iso(getattr(order, "delivered_at", None)),
     }
 
 
@@ -188,10 +205,36 @@ async def update_kitchen_order_status(
             detail=f"Cannot change order from {current_status} to {new_status}",
         )
 
+    now = datetime.now(timezone.utc)
     order.status = new_status
-    if data.estimated_minutes is not None:
-        minutes = max(1, min(int(data.estimated_minutes), 240))
-        order.pickup_time = f"{minutes} min"
+
+    if new_status == "accepted":
+        if getattr(order, "accepted_at", None) is None:
+            order.accepted_at = now
+
+        if data.estimated_minutes is not None:
+            minutes = max(1, min(int(data.estimated_minutes), 240))
+            promised_ready_at = now + timedelta(minutes=minutes)
+            order.promised_ready_at = promised_ready_at
+            # Preserve readable minutes while also storing the exact deadline.
+            order.pickup_time = f"{minutes} min|{promised_ready_at.isoformat()}"
+
+        if is_delivery_order(order) and getattr(order, "promised_delivery_at", None) is None:
+            settings_result = await db.execute(
+                select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
+            )
+            settings = settings_result.scalar_one_or_none()
+            target_minutes = parse_delivery_target_minutes(
+                getattr(settings, "estimated_delivery_time", None) if settings else None
+            )
+            if target_minutes:
+                order.promised_delivery_at = now + timedelta(minutes=target_minutes)
+
+    elif new_status == "preparing" and getattr(order, "preparing_at", None) is None:
+        order.preparing_at = now
+
+    elif new_status == "ready" and getattr(order, "ready_at", None) is None:
+        order.ready_at = now
 
     if new_status == "cancelled" and data.cancel_reason:
         current_notes = order.order_notes or ""

@@ -104,6 +104,13 @@ def serialize_order(order: Orders) -> dict:
         "items_json": order.items_json,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        "accepted_at": order.accepted_at.isoformat() if getattr(order, "accepted_at", None) else None,
+        "promised_ready_at": order.promised_ready_at.isoformat() if getattr(order, "promised_ready_at", None) else None,
+        "preparing_at": order.preparing_at.isoformat() if getattr(order, "preparing_at", None) else None,
+        "ready_at": order.ready_at.isoformat() if getattr(order, "ready_at", None) else None,
+        "rider_picked_up_at": order.rider_picked_up_at.isoformat() if getattr(order, "rider_picked_up_at", None) else None,
+        "promised_delivery_at": order.promised_delivery_at.isoformat() if getattr(order, "promised_delivery_at", None) else None,
+        "delivered_at": order.delivered_at.isoformat() if getattr(order, "delivered_at", None) else None,
     }
 
 

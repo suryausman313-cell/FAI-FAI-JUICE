@@ -304,9 +304,13 @@ async def update_delivery_status(
         elif new_status in ("picked_up", "on_the_way"):
             # Kitchen work is finished, but the sale is not final yet.
             order.status = "out_for_delivery"
+            if new_status == "picked_up" and getattr(order, "rider_picked_up_at", None) is None:
+                order.rider_picked_up_at = datetime.now(timezone.utc)
         elif new_status == "delivered":
             # Only Rider Delivered finalizes a delivery sale.
             order.status = "completed"
+            if getattr(order, "delivered_at", None) is None:
+                order.delivered_at = datetime.now(timezone.utc)
 
         await db.commit()
         await db.refresh(assignment)
