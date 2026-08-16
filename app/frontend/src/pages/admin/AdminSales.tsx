@@ -104,6 +104,13 @@ interface ReportOrder {
   delivery_zone_name?: string;
   items_json?: string;
   created_at?: string;
+  accepted_at?: string | null;
+  promised_ready_at?: string | null;
+  preparing_at?: string | null;
+  ready_at?: string | null;
+  rider_picked_up_at?: string | null;
+  promised_delivery_at?: string | null;
+  delivered_at?: string | null;
 }
 
 interface DailyPoint {
@@ -183,6 +190,26 @@ function dateKey(value: string | undefined): string {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+
+function minutesBetween(start?: string | null, end?: string | null): number | null {
+  if (!start || !end) return null;
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  return Math.round((endMs - startMs) / 60_000);
+}
+
+function timingResult(actual?: string | null, promised?: string | null): {
+  text: string;
+  className: string;
+} | null {
+  const difference = minutesBetween(promised, actual);
+  if (difference === null) return null;
+  if (difference > 0) return { text: `${difference} min late`, className: 'text-red-400' };
+  if (difference < 0) return { text: `${Math.abs(difference)} min early`, className: 'text-green-400' };
+  return { text: 'On time', className: 'text-green-400' };
 }
 
 function orderAreaName(order: ReportOrder): string {
@@ -967,6 +994,27 @@ export default function AdminSales() {
                       <p className="text-gray-600 text-[11px] mt-1">
                         {formatDate(order.created_at)}
                       </p>
+                      {(() => {
+                        const kitchenResult = timingResult(order.ready_at, order.promised_ready_at);
+                        const deliveryResult = timingResult(order.delivered_at, order.promised_delivery_at);
+                        const kitchenActual = minutesBetween(order.accepted_at, order.ready_at);
+                        const riderActual = minutesBetween(order.rider_picked_up_at, order.delivered_at);
+                        const totalActual = minutesBetween(order.created_at, order.delivered_at);
+
+                        if (!kitchenResult && !deliveryResult && kitchenActual === null && riderActual === null && totalActual === null) {
+                          return null;
+                        }
+
+                        return (
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                            {kitchenActual !== null && <span className="text-gray-400">Kitchen time: {kitchenActual} min</span>}
+                            {kitchenResult && <span className={kitchenResult.className}>Kitchen: {kitchenResult.text}</span>}
+                            {riderActual !== null && <span className="text-gray-400">Rider delivery: {riderActual} min</span>}
+                            {deliveryResult && <span className={deliveryResult.className}>Delivery: {deliveryResult.text}</span>}
+                            {totalActual !== null && <span className="text-blue-400">Order → Delivered: {totalActual} min</span>}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="text-right">
