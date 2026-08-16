@@ -261,27 +261,63 @@ class KitchenAlarm {
 
 const kitchenAlarm = new KitchenAlarm();
 
-function OrderTimer({ createdAt }: { createdAt: string }) {
-  const [elapsed, setElapsed] = useState('0:00');
+function OrderTimer({ order }: { order: KitchenOrder }) {
+  const [now, setNow] = useState(Date.now());
+  const lateSpokenRef = useRef(false);
 
   useEffect(() => {
-    const update = () => {
-      const created = new Date(createdAt).getTime();
-      if (!Number.isFinite(created)) {
-        setElapsed('0:00');
-        return;
-      }
-      const seconds = Math.max(0, Math.floor((Date.now() - created) / 1000));
-      const minutes = Math.floor(seconds / 60);
-      setElapsed(`${minutes}:${String(seconds % 60).padStart(2, '0')}`);
-    };
-
-    update();
-    const timer = setInterval(update, 1000);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [createdAt]);
+  }, []);
 
-  return <span className="text-orange-400 text-xs font-mono font-bold">{elapsed}</span>;
+  const estimated = order.estimated_time ? new Date(order.estimated_time).getTime() : NaN;
+  const hasDeadline = Number.isFinite(estimated) && order.status !== 'new';
+
+  if (hasDeadline) {
+    const diffMs = estimated - now;
+    const signedMinutes = diffMs >= 0
+      ? Math.max(0, Math.ceil(diffMs / 60000))
+      : -Math.max(1, Math.floor(Math.abs(diffMs) / 60000));
+    const late = signedMinutes < 0;
+
+    if (late && !lateSpokenRef.current) {
+      lateSpokenRef.current = true;
+      try {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const voice = new SpeechSynthesisUtterance(`Order number ${order.id} is late`);
+          voice.lang = 'en-US';
+          voice.rate = 0.95;
+          window.speechSynthesis.speak(voice);
+        }
+      } catch {
+        // Voice alert must never break the Kitchen screen.
+      }
+    }
+
+    return (
+      <div className="flex flex-col items-end">
+        <div className={`h-16 w-16 rounded-full border-[3px] flex flex-col items-center justify-center ${
+          late
+            ? 'border-red-500 bg-red-50 text-red-600'
+            : 'border-emerald-500 bg-emerald-50 text-emerald-700'
+        }`}>
+          <span className="text-2xl font-black leading-none">{signedMinutes}</span>
+          <span className="text-[10px] font-bold uppercase">min</span>
+        </div>
+        {late && <span className="mt-1 text-xs font-black text-red-600">{Math.abs(signedMinutes)} min late</span>}
+      </div>
+    );
+  }
+
+  const created = new Date(order.created_at).getTime();
+  const elapsedMinutes = Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 60000)) : 0;
+  return (
+    <div className="h-16 w-16 rounded-full border-[3px] border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-700">
+      <span className="text-2xl font-black leading-none">{elapsedMinutes}</span>
+      <span className="text-[10px] font-bold uppercase">min</span>
+    </div>
+  );
 }
 
 export default function KitchenOrders() {
@@ -574,6 +610,16 @@ export default function KitchenOrders() {
         )
       );
 
+      setSelectedOrder((current) => {
+        if (!current || current.id !== order.id) return current;
+        return serverOrder || {
+          ...current,
+          status,
+          updated_at: new Date().toISOString(),
+          estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : current.estimated_time,
+        };
+      });
+
       if (selectedOrder?.id === order.id) {
         setSelectedOrder((current) =>
           current?.id === order.id
@@ -737,91 +783,167 @@ export default function KitchenOrders() {
     const assignment = assignments[order.id];
     const assignmentStatus = String(assignment?.status || '').toLowerCase();
     const activeAssignment = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
+    const items = parseItems(order.items_json);
+    const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-white text-3xl font-black">#{order.id}</span>
-            <Badge className={delivery
-              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-              : 'bg-green-600/20 text-green-300 border-green-600/30'}>
-              {delivery ? 'Delivery' : 'Pickup'}
-            </Badge>
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <span className="text-slate-900 text-4xl font-black">#{order.id}</span>
+              <Badge className={delivery
+                ? 'bg-blue-100 text-blue-700 border-blue-200'
+                : 'bg-emerald-100 text-emerald-700 border-emerald-200'}>
+                {delivery ? 'Delivery' : 'Pickup'}
+              </Badge>
+            </div>
+            <p className="mt-1 text-slate-500 text-sm">{formatUaeTime(order.created_at)} · {itemCount} item{itemCount === 1 ? '' : 's'}</p>
           </div>
-          <div className="text-right">
-            <OrderTimer createdAt={order.created_at} />
-            <p className="text-gray-500 text-xs">{formatUaeTime(order.created_at)}</p>
-          </div>
+          <OrderTimer order={order} />
         </div>
 
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-          <p className="text-gray-500 text-xs uppercase mb-1">Customer</p>
-          <p className="text-white font-semibold">{order.customer_name}</p>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-slate-400 text-xs font-bold uppercase mb-2">Customer</p>
+          <p className="text-slate-900 text-2xl font-black">{order.customer_name}</p>
           {order.customer_phone && (
-            <a href={`tel:${order.customer_phone}`} className="text-blue-400 text-sm">
+            <a href={`tel:${order.customer_phone}`} className="mt-1 block text-blue-600 text-lg">
               {order.customer_phone}
             </a>
           )}
         </div>
 
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-          <p className="text-gray-500 text-xs uppercase mb-2">Items</p>
-          <div className="space-y-2">{renderItems(order)}</div>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-slate-900 text-2xl font-black mb-4">Items</p>
+          <div className="space-y-3">
+            {items.length === 0 ? (
+              <p className="text-slate-400">Items details unavailable</p>
+            ) : items.map((item, index) => (
+              <div key={`${order.id}-${index}`} className="rounded-2xl bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-slate-900 text-xl font-bold">{item.quantity} × {item.name}</p>
+                    {item.size && <p className="text-slate-500 mt-1">{item.size}</p>}
+                    {item.extras.length > 0 && <p className="text-slate-500 text-sm mt-1">+ {item.extras.join(', ')}</p>}
+                  </div>
+                  <p className="text-slate-900 font-bold">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {order.order_notes && (
-          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3">
-            <p className="text-yellow-300 text-xs font-semibold mb-1">Order Notes</p>
-            <p className="text-yellow-100 text-sm whitespace-pre-wrap">{order.order_notes}</p>
+          <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
+            <p className="text-amber-700 text-xs font-bold uppercase mb-1">Order Notes</p>
+            <p className="text-amber-900 text-base whitespace-pre-wrap">{order.order_notes}</p>
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-            <p className="text-gray-500 text-xs uppercase">Payment</p>
-            <p className="text-white text-sm font-semibold mt-1">{order.payment_method || 'Cash'}</p>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-slate-400 text-xs uppercase font-bold">Payment</p>
+            <p className="text-slate-900 text-lg font-bold mt-1">{order.payment_method || 'Cash'}</p>
           </div>
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-right">
-            <p className="text-gray-500 text-xs uppercase">Total</p>
-            <p className="text-green-400 text-lg font-black mt-1">AED {money(order.total_amount)}</p>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 text-right shadow-sm">
+            <p className="text-slate-400 text-xs uppercase font-bold">Total</p>
+            <p className="text-emerald-600 text-2xl font-black mt-1">AED {money(order.total_amount)}</p>
           </div>
         </div>
 
         {delivery && (
-          <div className={`rounded-xl border p-3 ${
-            activeAssignment
-              ? 'border-blue-700/40 bg-blue-950/40'
-              : 'border-amber-600/30 bg-amber-600/10'
+          <div className={`rounded-3xl border p-5 ${
+            activeAssignment ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'
           }`}>
             {activeAssignment ? (
               <>
-                <p className="text-blue-300 font-semibold">Rider: {assignment.rider_name}</p>
-                {assignment.rider_phone && (
-                  <a href={`tel:${assignment.rider_phone}`} className="text-blue-200 text-sm">
-                    {assignment.rider_phone}
-                  </a>
-                )}
-                <p className="text-blue-400/80 text-xs mt-1">
-                  Status: {assignmentStatus.replaceAll('_', ' ')}
-                </p>
+                <p className="text-blue-800 text-lg font-bold">Rider: {assignment.rider_name}</p>
+                {assignment.rider_phone && <p className="text-blue-700">{assignment.rider_phone}</p>}
+                <p className="text-blue-600 text-sm mt-1">Status: {assignmentStatus.replaceAll('_', ' ')}</p>
               </>
             ) : (
               <>
-                <p className="text-amber-300 font-semibold">Waiting Rider</p>
-                <p className="text-amber-200/70 text-xs mt-1">Waiting for a rider to be assigned.</p>
+                <p className="text-amber-800 text-lg font-bold">Waiting Rider</p>
+                <p className="text-amber-700 text-sm mt-1">Waiting for a rider to be assigned.</p>
               </>
             )}
           </div>
         )}
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => printReceipt(order, true)}
-          className="w-full border-gray-700"
-        >
-          <Printer className="w-4 h-4 mr-2" /> Reprint Order
+        {order.status === 'new' && acceptingOrder !== order.id && (
+          <div className="grid grid-cols-2 gap-3">
+            <Button onClick={() => setAcceptingOrder(order.id)} className="h-14 rounded-2xl bg-emerald-600 text-lg hover:bg-emerald-700">
+              <Check className="w-5 h-5 mr-2" /> Accept
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (window.confirm(`Cancel order #${order.id}?`)) void updateOrderStatus(order, 'cancelled');
+              }}
+              className="h-14 rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+            >
+              <X className="w-5 h-5 mr-2" /> Cancel
+            </Button>
+          </div>
+        )}
+
+        {order.status === 'new' && acceptingOrder === order.id && (
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-slate-900 text-xl font-black mb-3">Select ready time</p>
+            <div className="grid grid-cols-5 gap-2 mb-3">
+              {TIME_OPTIONS.map((minutes) => (
+                <button
+                  key={minutes}
+                  type="button"
+                  onClick={() => { setSelectedTime(minutes); setCustomTime(''); }}
+                  className={`rounded-2xl py-3 font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                >{minutes}</button>
+              ))}
+            </div>
+            <input
+              value={customTime}
+              onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+              placeholder="Custom minutes"
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-lg mb-3 outline-none focus:border-emerald-500"
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                onClick={() => {
+                  const minutes = Number(customTime || selectedTime);
+                  void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
+                }}
+                className="h-14 rounded-2xl bg-emerald-600 text-lg hover:bg-emerald-700"
+              >Accept & Print</Button>
+              <Button variant="outline" onClick={() => setAcceptingOrder(null)} className="h-14 rounded-2xl">Back</Button>
+            </div>
+          </div>
+        )}
+
+        {order.status === 'accepted' && (
+          <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
+            Preparing
+          </Button>
+        )}
+
+        {order.status === 'preparing' && (
+          <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 w-full rounded-3xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
+            {delivery ? 'Ready for delivery' : 'Ready for pickup'}
+          </Button>
+        )}
+
+        {order.status === 'ready' && !delivery && (
+          <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-16 w-full rounded-3xl bg-slate-900 text-xl font-black hover:bg-slate-800">
+            Completed
+          </Button>
+        )}
+
+        {order.status === 'ready' && delivery && (
+          <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5 text-center text-blue-800 font-bold">Waiting for Rider Pickup</div>
+        )}
+
+        <Button type="button" variant="outline" onClick={() => printReceipt(order, true)} className="h-14 w-full rounded-2xl border-slate-200 text-slate-700">
+          <Printer className="w-5 h-5 mr-2" /> Reprint Order
         </Button>
       </div>
     );
@@ -832,167 +954,39 @@ export default function KitchenOrders() {
     const assignment = assignments[order.id];
     const assignmentStatus = String(assignment?.status || '').toLowerCase();
     const hasActiveRider = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
+    const itemCount = parseItems(order.items_json).reduce((sum, item) => sum + item.quantity, 0);
 
     return (
-      <Card className="bg-gray-900 border-gray-800 overflow-hidden">
-        <button
-          type="button"
-          onClick={() => openOrder(order)}
-          className="w-full p-4 text-left hover:bg-gray-800/50 transition-colors"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-white font-black text-2xl">#{order.id}</span>
-              <Badge className={delivery
-                ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-                : 'bg-green-600/20 text-green-300 border-green-600/30'}>
-                {delivery ? 'Delivery' : 'Pickup'}
-              </Badge>
-            </div>
-            <div className="text-right shrink-0">
-              <OrderTimer createdAt={order.created_at} />
-              <p className="text-gray-600 text-[10px]">{formatUaeTime(order.created_at)}</p>
-            </div>
-          </div>
-
-          {order.estimated_time && section !== 'new' && (
-            <div className="mt-3">
-              <ReadyTimeCountdown
-                estimatedTime={order.estimated_time}
-                referenceTime={order.updated_at || order.created_at}
-                status={order.status}
-                compact
-              />
-            </div>
-          )}
-
-          {delivery && (
-            <div className={`mt-3 rounded-lg border px-3 py-2 ${
-              hasActiveRider
-                ? 'border-blue-700/30 bg-blue-950/30'
-                : 'border-amber-600/30 bg-amber-600/10'
-            }`}>
-              <p className={`text-sm font-semibold ${hasActiveRider ? 'text-blue-300' : 'text-amber-300'}`}>
-                {hasActiveRider ? `Rider: ${assignment.rider_name}` : 'Waiting Rider'}
+      <button type="button" onClick={() => openOrder(order)} className="block w-full text-left">
+        <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-3">
+                <span className="text-slate-900 font-black text-4xl">#{order.id}</span>
+                <Badge className={delivery
+                  ? 'bg-blue-100 text-blue-700 border-blue-200'
+                  : 'bg-emerald-100 text-emerald-700 border-emerald-200'}>
+                  {delivery ? 'Delivery' : 'Pickup'}
+                </Badge>
+              </div>
+              <p className="mt-1 text-slate-500 text-base">{itemCount} item{itemCount === 1 ? '' : 's'} · {formatUaeTime(order.created_at)}</p>
+              <p className="mt-3 text-slate-700 text-lg font-semibold">
+                {section === 'new'
+                  ? 'New order'
+                  : section === 'progress'
+                    ? (order.status === 'preparing' ? 'Preparing' : 'Accepted')
+                    : delivery
+                      ? (hasActiveRider ? `Rider: ${assignment.rider_name}` : 'Waiting Rider')
+                      : 'Ready for pickup'}
               </p>
             </div>
-          )}
-
-          <div className="mt-3 flex items-center justify-between text-xs">
-            <span className="text-gray-500">Tap order to view details</span>
-            <ChevronRight className="w-4 h-4 text-gray-600" />
+            <div className="flex items-center gap-2 shrink-0">
+              <OrderTimer order={order} />
+              <ChevronRight className="w-6 h-6 text-slate-300" />
+            </div>
           </div>
-        </button>
-
-        <div className="border-t border-gray-800 p-3">
-          {section === 'new' && acceptingOrder !== order.id && (
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                onClick={() => setAcceptingOrder(order.id)}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                <Check className="w-4 h-4 mr-1" /> Accept
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (window.confirm(`Cancel order #${order.id}?`)) {
-                    void updateOrderStatus(order, 'cancelled');
-                  }
-                }}
-                className="border-red-700 text-red-400 hover:bg-red-950"
-              >
-                <X className="w-4 h-4 mr-1" /> Cancel
-              </Button>
-            </div>
-          )}
-
-          {section === 'new' && acceptingOrder === order.id && (
-            <div className="bg-gray-800 rounded-xl p-2.5">
-              <p className="text-green-400 text-xs font-semibold mb-2">Select ready time</p>
-              <div className="grid grid-cols-5 gap-1 mb-2">
-                {TIME_OPTIONS.map((minutes) => (
-                  <button
-                    key={minutes}
-                    type="button"
-                    onClick={() => {
-                      setSelectedTime(minutes);
-                      setCustomTime('');
-                    }}
-                    className={`rounded-lg py-2 text-xs font-bold ${
-                      selectedTime === minutes && !customTime
-                        ? 'bg-green-600 text-white'
-                        : 'bg-gray-700 text-gray-300'
-                    }`}
-                  >
-                    {minutes}
-                  </button>
-                ))}
-              </div>
-              <input
-                value={customTime}
-                onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-                inputMode="numeric"
-                placeholder="Custom minutes"
-                className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm mb-2"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  onClick={() => {
-                    const minutes = Number(customTime || selectedTime);
-                    void updateOrderStatus(
-                      order,
-                      'accepted',
-                      Number.isFinite(minutes) && minutes > 0 ? minutes : 20,
-                    );
-                  }}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  Accept
-                </Button>
-                <Button variant="outline" onClick={() => setAcceptingOrder(null)}>
-                  Back
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {section === 'progress' && order.status === 'accepted' && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'preparing')}
-              className="w-full bg-yellow-600 hover:bg-yellow-700"
-            >
-              Preparing
-            </Button>
-          )}
-
-          {section === 'progress' && order.status === 'preparing' && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'ready')}
-              className="w-full bg-purple-600 hover:bg-purple-700"
-            >
-              Ready
-            </Button>
-          )}
-
-          {section === 'ready' && !delivery && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'completed')}
-              className="w-full bg-gray-700 hover:bg-gray-600"
-            >
-              Completed
-            </Button>
-          )}
-
-          {section === 'ready' && delivery && (
-            <div className="rounded-lg border border-blue-700/30 bg-blue-950/30 px-3 py-2 text-center">
-              <p className="text-blue-300 text-sm font-semibold">
-                {hasActiveRider ? 'Waiting for Rider Pickup' : 'Waiting Rider Assignment'}
-              </p>
-            </div>
-          )}
-        </div>
-      </Card>
+        </Card>
+      </button>
     );
   }
 
@@ -1004,28 +998,28 @@ export default function KitchenOrders() {
     return (
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <p className="text-gray-500 text-xs uppercase">Orders</p>
-            <p className="text-white text-2xl font-black mt-1">{historyOrders.length}</p>
+          <Card className="rounded-3xl bg-white border-slate-200 p-5 shadow-sm">
+            <p className="text-slate-400 text-xs uppercase font-bold">Orders</p>
+            <p className="text-slate-900 text-3xl font-black mt-1">{historyOrders.length}</p>
           </Card>
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <p className="text-gray-500 text-xs uppercase">Completed Sale</p>
-            <p className="text-green-400 text-xl font-black mt-1">AED {money(total)}</p>
+          <Card className="rounded-3xl bg-white border-slate-200 p-5 shadow-sm">
+            <p className="text-slate-400 text-xs uppercase font-bold">Completed Sale</p>
+            <p className="text-emerald-600 text-2xl font-black mt-1">AED {money(total)}</p>
           </Card>
         </div>
 
         {historyOrders.length === 0 ? (
-          <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
+          <div className="min-h-56 rounded-3xl border border-slate-200 bg-white flex items-center justify-center text-slate-400 text-sm">
             There are no completed, pending delivery, or cancelled orders for this day.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {historyOrders.map((order) => (
-              <Card key={order.id} className="bg-gray-900 border-gray-800 p-3">
+              <Card key={order.id} className="rounded-3xl bg-white border-slate-200 p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-white text-lg font-black">#{order.id}</span>
+                      <span className="text-slate-900 text-lg font-black">#{order.id}</span>
                       <Badge
                         className={
                           order.status === 'completed'
@@ -1046,9 +1040,9 @@ export default function KitchenOrders() {
                       {formatUaeTime(order.updated_at || order.created_at)}
                     </p>
                   </div>
-                  <span className="text-green-400 font-black">AED {money(order.total_amount)}</span>
+                  <span className="text-emerald-600 font-black">AED {money(order.total_amount)}</span>
                 </div>
-                <p className="text-gray-300 text-sm font-medium mb-2">{order.customer_name}</p>
+                <p className="text-slate-700 text-sm font-medium mb-2">{order.customer_name}</p>
                 {DELIVERY_PENDING_STATUSES.has(order.status) && assignments[order.id] && (
                   <div className="mb-2 rounded-lg border border-blue-700/30 bg-blue-950/30 px-2 py-1.5">
                     <p className="text-blue-300 text-xs font-semibold">Rider: {assignments[order.id].rider_name}</p>
@@ -1093,7 +1087,7 @@ export default function KitchenOrders() {
       <section className="space-y-2">
         <div className="flex items-center gap-2 px-1">
           <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
-          <h2 className="text-gray-300 font-bold text-xs tracking-wide">{title} ({count})</h2>
+          <h2 className="text-slate-900 font-black text-2xl tracking-tight">{title} ({count})</h2>
         </div>
         <div className="space-y-2">{children}</div>
       </section>
@@ -1101,16 +1095,16 @@ export default function KitchenOrders() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-3 py-3 text-white">
+    <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900">
       <div className="max-w-4xl mx-auto">
         <header className="flex items-center justify-between gap-3 mb-4">
           <button
             type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="p-2 rounded-lg text-gray-300 hover:bg-gray-900"
-            aria-label="Open Kitchen menu"
+            onClick={() => selectedOrder ? setSelectedOrder(null) : setDrawerOpen(true)}
+            className="p-2.5 rounded-xl bg-white text-slate-600 shadow-sm hover:bg-slate-50"
+            aria-label={selectedOrder ? 'Back to orders' : 'Open Kitchen menu'}
           >
-            <Menu className="w-6 h-6" />
+            {selectedOrder ? <X className="w-8 h-8" /> : <Menu className="w-8 h-8" />}
           </button>
 
           <div className="flex items-center gap-2">
@@ -1129,7 +1123,7 @@ export default function KitchenOrders() {
             <button
               type="button"
               onClick={() => setStatusDialogOpen(true)}
-              className={`h-10 rounded-full px-3 flex items-center gap-2 text-xs font-black ${
+              className={`h-11 rounded-full px-4 flex items-center gap-2 text-sm font-black ${
                 restaurantStatus === 'open'
                   ? 'bg-green-600/15 text-green-400'
                   : restaurantStatus === 'busy'
@@ -1153,37 +1147,37 @@ export default function KitchenOrders() {
         {viewMode === 'menu' ? (
           <KitchenMenuPanel embedded />
         ) : viewMode === 'live' ? (
-          activeOrders.length === 0 ? (
-            <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-6">
-              <div className="w-24 h-24 rounded-3xl bg-gray-900 flex items-center justify-center mb-6">
-                <ChefHat className="w-12 h-12 text-gray-700" />
+          selectedOrder ? (
+            <OrderDetail order={selectedOrder} />
+          ) : activeOrders.length === 0 ? (
+            <div className="min-h-[72vh] flex flex-col items-center justify-center text-center px-6">
+              <div className="w-28 h-28 rounded-[2rem] bg-white border border-slate-200 shadow-sm flex items-center justify-center mb-7">
+                <ChefHat className="w-14 h-14 text-violet-600" />
               </div>
-              <h1 className="text-white text-3xl font-black">No active orders</h1>
-              <p className="text-gray-500 text-base mt-3 max-w-sm">
-                New orders will appear here automatically.
-              </p>
+              <h1 className="text-slate-900 text-4xl md:text-5xl font-black">No active orders</h1>
+              <p className="text-slate-500 text-lg md:text-xl mt-4 max-w-lg">New orders will appear here automatically.</p>
             </div>
           ) : (
             <div className="space-y-5">
-              <Column title="NEW" count={newOrders.length} dotClass="bg-blue-500" emptyText="">
+              <Column title="New" count={newOrders.length} dotClass="bg-blue-500" emptyText="">
                 {newOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="new" />
                 ))}
               </Column>
 
-              <Column title="IN PROGRESS" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="">
+              <Column title="Accepted" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="">
                 {progressOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="progress" />
                 ))}
               </Column>
 
-              <Column title="READY - PICKUP" count={readyPickupOrders.length} dotClass="bg-purple-500" emptyText="">
+              <Column title="Upcoming" count={readyPickupOrders.length} dotClass="bg-purple-500" emptyText="">
                 {readyPickupOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="ready" />
                 ))}
               </Column>
 
-              <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-500" emptyText="">
+              <Column title="Upcoming Delivery" count={readyDeliveryOrders.length} dotClass="bg-blue-500" emptyText="">
                 {readyDeliveryOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="ready" />
                 ))}
@@ -1203,12 +1197,12 @@ export default function KitchenOrders() {
             onClick={() => setDrawerOpen(false)}
             aria-label="Close Kitchen menu"
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-gray-950 border-r border-gray-800 p-4 shadow-2xl">
+          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-white border-r border-slate-200 p-4 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <ChefHat className="w-6 h-6 text-orange-500" />
                 <div>
-                  <p className="text-white font-bold">Fai Fai Kitchen</p>
+                  <p className="text-slate-900 font-bold">Fai Fai Kitchen</p>
                   <p className="text-gray-500 text-xs">Orders & history</p>
                 </div>
               </div>
@@ -1235,15 +1229,15 @@ export default function KitchenOrders() {
                     }}
                     className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left ${
                       viewMode === item.key
-                        ? 'bg-orange-600/15 border-orange-600/40'
-                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
+                        ? 'bg-orange-50 border-orange-200'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
                       <Icon className="w-5 h-5 text-orange-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-white font-semibold text-sm">{item.label}</p>
+                      <p className="text-slate-900 font-semibold text-sm">{item.label}</p>
                       <p className="text-gray-500 text-xs">
                         {item.key === 'menu'
                           ? 'Available / Sold Out'
