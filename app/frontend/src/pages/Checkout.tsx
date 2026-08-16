@@ -1079,7 +1079,7 @@ export default function Checkout() {
                     {deliveryZones.length > 0 ? (
                       deliveryZones.map((z, i) => (
                         <span key={i} className={`${i === 0 ? 'text-green-400' : i === 1 ? 'text-yellow-400' : 'text-orange-400'}`}>
-                          ● {z.zone_name} ({z.min_distance_km}-{z.max_distance_km} km = AED {z.charge})
+                          ● {z.min_distance_km}-{z.max_distance_km} km = AED {z.charge}
                         </span>
                       ))
                     ) : (
@@ -1139,7 +1139,7 @@ export default function Checkout() {
                   {locationShared && !deliveryZoneError && (
                     <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
                       <CheckCircle className="w-4 h-4" />
-                      <span>Location selected{zoneName ? ` (${zoneName})` : ''}{roadDistanceKm !== null ? ` — Road: ${roadDistanceKm.toFixed(1)} km` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
+                      <span>Location selected{roadDistanceKm !== null ? ` — Road: ${roadDistanceKm.toFixed(1)} km` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
                     </div>
                   )}
                   {deliveryZoneError && (
