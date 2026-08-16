@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -179,90 +180,436 @@ _NOMINATIM_LOCK = asyncio.Lock()
 _NOMINATIM_LAST_REQUEST = 0.0
 _AREA_SEARCH_CACHE: Dict[str, list] = {}
 _REVERSE_AREA_CACHE: Dict[str, dict] = {}
-_NOMINATIM_USER_AGENT = "FaiFaiJuiceDeliveryAdmin/1.0 (Fujairah, UAE)"
+
+_NOMINATIM_USER_AGENT = (
+    "FaiFaiJuiceDeliveryAdmin/2.0 "
+    "(+https://fai-fai-juice.pages.dev)"
+)
+_NOMINATIM_REFERER = "https://fai-fai-juice.pages.dev/"
+
+_OVERPASS_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+)
 
 
 async def _nominatim_get(url: str, params: dict) -> Any:
-    """Public Nominatim: throttle to <=1 request/sec and identify the app."""
+    """
+    Nominatim request:
+    - identify the app
+    - throttle requests
+    - retry once
+    """
     global _NOMINATIM_LAST_REQUEST
-    async with _NOMINATIM_LOCK:
-        wait_for = 1.05 - (time.monotonic() - _NOMINATIM_LAST_REQUEST)
-        if wait_for > 0:
-            await asyncio.sleep(wait_for)
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get(
-                url,
-                params=params,
-                headers={"User-Agent": _NOMINATIM_USER_AGENT},
-            )
-            _NOMINATIM_LAST_REQUEST = time.monotonic()
-            response.raise_for_status()
-            return response.json()
+
+    request_params = dict(params)
+    contact_email = os.getenv("NOMINATIM_CONTACT_EMAIL", "").strip()
+    if contact_email:
+        request_params["email"] = contact_email
+
+    headers = {
+        "User-Agent": _NOMINATIM_USER_AGENT,
+        "Referer": _NOMINATIM_REFERER,
+        "Accept": "application/json",
+        "Accept-Language": "en,ar;q=0.8",
+    }
+
+    last_error: Optional[Exception] = None
+
+    for attempt in range(2):
+        async with _NOMINATIM_LOCK:
+            wait_for = 1.10 - (time.monotonic() - _NOMINATIM_LAST_REQUEST)
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(25.0, connect=10.0),
+                    follow_redirects=True,
+                ) as client:
+                    response = await client.get(
+                        url,
+                        params=request_params,
+                        headers=headers,
+                    )
+                    _NOMINATIM_LAST_REQUEST = time.monotonic()
+                    response.raise_for_status()
+                    return response.json()
+            except Exception as exc:
+                _NOMINATIM_LAST_REQUEST = time.monotonic()
+                last_error = exc
+                logger.warning(
+                    "Nominatim request attempt %s failed: %s",
+                    attempt + 1,
+                    exc,
+                )
+
+        if attempt == 0:
+            await asyncio.sleep(1.25)
+
+    if last_error:
+        raise last_error
+
+    raise RuntimeError("Nominatim request failed")
 
 
 def _geometry_has_polygon(geometry: Any) -> bool:
-    return isinstance(geometry, dict) and geometry.get("type") in {"Polygon", "MultiPolygon"}
+    return (
+        isinstance(geometry, dict)
+        and geometry.get("type") in {"Polygon", "MultiPolygon"}
+    )
 
 
-@router.get("/area-search")
-async def search_delivery_block_area(q: str = Query(..., min_length=2, max_length=120)):
-    """Admin-only style helper: search a named place and return its full OSM boundary."""
-    query = q.strip()
-    cache_key = query.lower()
-    if cache_key in _AREA_SEARCH_CACHE:
-        return {"items": _AREA_SEARCH_CACHE[cache_key], "source": "cache"}
+def _short_area_name(result: dict) -> str:
+    address = result.get("address") or {}
+    display_name = str(result.get("display_name") or "")
+    return str(
+        address.get("municipality")
+        or address.get("city")
+        or address.get("town")
+        or address.get("village")
+        or address.get("suburb")
+        or result.get("name")
+        or display_name.split(",")[0]
+        or "Area"
+    )
 
-    try:
-        body = await _nominatim_get(
-            "https://nominatim.openstreetmap.org/search",
+
+def _nominatim_results_to_items(body: Any) -> list:
+    items = []
+
+    for result in body if isinstance(body, list) else []:
+        geometry = result.get("geojson")
+        if not _geometry_has_polygon(geometry):
+            continue
+
+        address = result.get("address") or {}
+
+        items.append(
             {
-                "q": query,
-                "format": "jsonv2",
-                "addressdetails": 1,
-                "polygon_geojson": 1,
-                "polygon_threshold": 0.00015,
-                "limit": 6,
-            },
-        )
-        items = []
-        for result in body if isinstance(body, list) else []:
-            geometry = result.get("geojson")
-            if not _geometry_has_polygon(geometry):
-                continue
-            address = result.get("address") or {}
-            display_name = str(result.get("display_name") or "")
-            short_name = (
-                address.get("municipality")
-                or address.get("city")
-                or address.get("town")
-                or address.get("village")
-                or address.get("suburb")
-                or str(result.get("name") or "")
-                or display_name.split(",")[0]
-            )
-            bbox = result.get("boundingbox") or []
-            items.append({
-                "name": short_name,
-                "display_name": display_name,
+                "name": _short_area_name(result),
+                "display_name": str(result.get("display_name") or ""),
                 "country": address.get("country") or "",
                 "country_code": address.get("country_code") or "",
                 "lat": float(result.get("lat") or 0),
                 "lng": float(result.get("lon") or 0),
-                "boundingbox": bbox,
+                "boundingbox": result.get("boundingbox") or [],
                 "geometry": geometry,
-            })
+            }
+        )
+
+    return items
+
+
+def _same_point(a: list, b: list, tolerance: float = 1e-7) -> bool:
+    return (
+        isinstance(a, list)
+        and isinstance(b, list)
+        and len(a) >= 2
+        and len(b) >= 2
+        and abs(float(a[0]) - float(b[0])) <= tolerance
+        and abs(float(a[1]) - float(b[1])) <= tolerance
+    )
+
+
+def _stitch_overpass_segments(segments: list) -> list:
+    """
+    Join Overpass relation member ways into closed GeoJSON rings.
+    Each point is [lng, lat].
+    """
+    remaining = [
+        segment[:]
+        for segment in segments
+        if isinstance(segment, list) and len(segment) >= 2
+    ]
+    rings = []
+
+    while remaining:
+        ring = remaining.pop(0)
+        changed = True
+
+        while (
+            changed
+            and remaining
+            and not _same_point(ring[0], ring[-1])
+        ):
+            changed = False
+
+            for idx, segment in enumerate(remaining):
+                if _same_point(ring[-1], segment[0]):
+                    ring.extend(segment[1:])
+                elif _same_point(ring[-1], segment[-1]):
+                    ring.extend(list(reversed(segment[:-1])))
+                elif _same_point(ring[0], segment[-1]):
+                    ring = segment[:-1] + ring
+                elif _same_point(ring[0], segment[0]):
+                    ring = list(reversed(segment[1:])) + ring
+                else:
+                    continue
+
+                remaining.pop(idx)
+                changed = True
+                break
+
+        if len(ring) >= 4:
+            if not _same_point(ring[0], ring[-1]):
+                ring.append(ring[0])
+
+            if _same_point(ring[0], ring[-1]):
+                rings.append(ring)
+
+    return rings
+
+
+def _overpass_relation_to_item(element: dict, query: str) -> Optional[dict]:
+    tags = element.get("tags") or {}
+    members = element.get("members") or []
+
+    outer_segments = []
+    inner_segments = []
+
+    for member in members:
+        if member.get("type") != "way":
+            continue
+
+        geometry = member.get("geometry") or []
+
+        segment = [
+            [float(point["lon"]), float(point["lat"])]
+            for point in geometry
+            if isinstance(point, dict)
+            and "lat" in point
+            and "lon" in point
+        ]
+
+        if len(segment) < 2:
+            continue
+
+        if member.get("role") == "inner":
+            inner_segments.append(segment)
+        else:
+            outer_segments.append(segment)
+
+    outer_rings = _stitch_overpass_segments(outer_segments)
+    if not outer_rings:
+        return None
+
+    inner_rings = _stitch_overpass_segments(inner_segments)
+
+    if len(outer_rings) == 1:
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [outer_rings[0], *inner_rings],
+        }
+    else:
+        geometry = {
+            "type": "MultiPolygon",
+            "coordinates": [[ring] for ring in outer_rings],
+        }
+
+    bounds = element.get("bounds") or {}
+    minlat = bounds.get("minlat")
+    maxlat = bounds.get("maxlat")
+    minlon = bounds.get("minlon")
+    maxlon = bounds.get("maxlon")
+
+    bbox = []
+    if None not in (minlat, maxlat, minlon, maxlon):
+        bbox = [
+            str(minlat),
+            str(maxlat),
+            str(minlon),
+            str(maxlon),
+        ]
+
+    center = element.get("center") or {}
+    name = str(tags.get("name:en") or tags.get("name") or query)
+    country = str(tags.get("addr:country") or "")
+
+    center_lat = 0.0
+    center_lng = 0.0
+
+    if center.get("lat") is not None:
+        center_lat = float(center["lat"])
+    elif minlat is not None and maxlat is not None:
+        center_lat = (float(minlat) + float(maxlat)) / 2
+
+    if center.get("lon") is not None:
+        center_lng = float(center["lon"])
+    elif minlon is not None and maxlon is not None:
+        center_lng = (float(minlon) + float(maxlon)) / 2
+
+    return {
+        "name": name,
+        "display_name": f"{name}{', ' + country if country else ''}",
+        "country": country,
+        "country_code": country.lower(),
+        "lat": center_lat,
+        "lng": center_lng,
+        "boundingbox": bbox,
+        "geometry": geometry,
+    }
+
+
+async def _overpass_area_search(query: str) -> list:
+    """
+    Fallback when Nominatim cannot return a full polygon.
+    Uses OSM Overpass administrative boundaries.
+    """
+    safe = re.escape(query.strip())
+
+    overpass_query = (
+        "[out:json][timeout:25];\n"
+        "(\n"
+        f'  relation["boundary"="administrative"]["name"~"^{safe}$",i];\n'
+        f'  relation["boundary"="administrative"]["name:en"~"^{safe}$",i];\n'
+        ");\n"
+        "out center bb geom 6;"
+    )
+
+    headers = {
+        "User-Agent": _NOMINATIM_USER_AGENT,
+        "Referer": _NOMINATIM_REFERER,
+        "Accept": "application/json",
+    }
+
+    last_error: Optional[Exception] = None
+
+    for endpoint in _OVERPASS_ENDPOINTS:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(35.0, connect=10.0),
+                follow_redirects=True,
+            ) as client:
+                response = await client.post(
+                    endpoint,
+                    data={"data": overpass_query},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                body = response.json()
+
+            items = []
+            seen_ids = set()
+
+            for element in body.get("elements") or []:
+                relation_id = element.get("id")
+                if relation_id in seen_ids:
+                    continue
+
+                seen_ids.add(relation_id)
+                item = _overpass_relation_to_item(element, query)
+                if item:
+                    items.append(item)
+
+            if items:
+                return items[:6]
+
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Overpass area-search endpoint failed (%s): %s",
+                endpoint,
+                exc,
+            )
+
+    if last_error:
+        logger.warning(
+            "All Overpass area-search endpoints failed: %s",
+            last_error,
+        )
+
+    return []
+
+
+async def _search_nominatim_variants(query: str) -> list:
+    variants = [query]
+    lowered = query.lower()
+
+    # Madha is an Omani enclave near Fujairah.
+    # Adding Oman helps Nominatim pick the correct administrative area.
+    if "madha" in lowered and "oman" not in lowered:
+        variants.append(f"{query}, Oman")
+
+    for candidate in variants:
+        try:
+            body = await _nominatim_get(
+                "https://nominatim.openstreetmap.org/search",
+                {
+                    "q": candidate,
+                    "format": "jsonv2",
+                    "addressdetails": 1,
+                    "polygon_geojson": 1,
+                    "polygon_threshold": 0.00015,
+                    "limit": 8,
+                },
+            )
+
+            items = _nominatim_results_to_items(body)
+            if items:
+                return items
+
+        except Exception as exc:
+            logger.warning(
+                "Nominatim area search failed for '%s': %s",
+                candidate,
+                exc,
+            )
+
+    return []
+
+
+@router.get("/area-search")
+async def search_delivery_block_area(
+    q: str = Query(..., min_length=2, max_length=120),
+):
+    """
+    Search an area by name and return its full boundary for Admin blocking.
+    Nominatim is primary; Overpass is fallback.
+    """
+    query = q.strip()
+    cache_key = query.lower()
+
+    if cache_key in _AREA_SEARCH_CACHE:
+        return {
+            "items": _AREA_SEARCH_CACHE[cache_key],
+            "source": "cache",
+        }
+
+    items = await _search_nominatim_variants(query)
+    if items:
         _AREA_SEARCH_CACHE[cache_key] = items
-        return {"items": items, "source": "nominatim"}
-    except Exception as exc:
-        logger.warning("Area boundary search failed: %s", exc)
-        raise HTTPException(status_code=503, detail="Area search is temporarily unavailable. Please try again.")
+        return {
+            "items": items,
+            "source": "nominatim",
+        }
+
+    items = await _overpass_area_search(query)
+    if items:
+        _AREA_SEARCH_CACHE[cache_key] = items
+        return {
+            "items": items,
+            "source": "overpass",
+        }
+
+    _AREA_SEARCH_CACHE[cache_key] = []
+    return {
+        "items": [],
+        "source": "none",
+        "message": (
+            "No full boundary was found. "
+            "Try 'Madha, Oman' or use manual map drawing."
+        ),
+    }
 
 
 async def reverse_delivery_area_name(lat: float, lng: float) -> dict:
-    """Resolve one order coordinate to a locality name for Sales by Location."""
+    """Resolve order coordinates to a locality name for Sales by Location."""
     cache_key = f"{round(lat, 4)}:{round(lng, 4)}"
+
     if cache_key in _REVERSE_AREA_CACHE:
         return _REVERSE_AREA_CACHE[cache_key]
+
     try:
         body = await _nominatim_get(
             "https://nominatim.openstreetmap.org/reverse",
@@ -275,7 +622,13 @@ async def reverse_delivery_area_name(lat: float, lng: float) -> dict:
                 "layer": "address",
             },
         )
-        address = body.get("address") or {} if isinstance(body, dict) else {}
+
+        address = (
+            body.get("address") or {}
+            if isinstance(body, dict)
+            else {}
+        )
+
         area = (
             address.get("suburb")
             or address.get("neighbourhood")
@@ -287,16 +640,23 @@ async def reverse_delivery_area_name(lat: float, lng: float) -> dict:
             or address.get("county")
             or "Unknown Area"
         )
+
         result = {
             "area_name": str(area),
             "country": str(address.get("country") or ""),
             "country_code": str(address.get("country_code") or ""),
         }
+
         _REVERSE_AREA_CACHE[cache_key] = result
         return result
+
     except Exception as exc:
         logger.warning("Reverse area lookup failed: %s", exc)
-        return {"area_name": "Unknown Area", "country": "", "country_code": ""}
+        return {
+            "area_name": "Unknown Area",
+            "country": "",
+            "country_code": "",
+        }
 
 
 @router.get("/{id}", response_model=Delivery_zonesResponse)
