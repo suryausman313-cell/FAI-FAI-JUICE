@@ -160,6 +160,16 @@ function numeric(value: unknown): number {
   return Number.isFinite(number) ? number : 0;
 }
 
+function parseBackendDate(value: string | undefined): Date {
+  const raw = String(value || '').trim();
+  if (!raw) return new Date(NaN);
+
+  // Python datetime.isoformat() can return UTC timestamps without Z/offset.
+  // Treat timezone-less backend timestamps as UTC, then JS converts them to UAE/local time.
+  const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+  return new Date(hasTimezone ? raw : `${raw}Z`);
+}
+
 function buildFallbackTotals(orders: ReportOrder[]): FinanceTotals {
   return orders.filter(isCountedOrder).reduce<FinanceTotals>(
     (totals, order) => {
@@ -213,7 +223,7 @@ function isCashPayment(method: string | undefined): boolean {
 function formatDate(value: string | undefined): string {
   if (!value) return '-';
   try {
-    return new Date(value).toLocaleString('en-AE', {
+    return parseBackendDate(value).toLocaleString('en-AE', {
       dateStyle: 'medium',
       timeStyle: 'short',
     });
@@ -224,7 +234,7 @@ function formatDate(value: string | undefined): string {
 
 function dateKey(value: string | undefined): string {
   if (!value) return '';
-  const date = new Date(value);
+  const date = parseBackendDate(value);
   if (Number.isNaN(date.getTime())) return '';
   return [
     date.getFullYear(),
@@ -236,8 +246,8 @@ function dateKey(value: string | undefined): string {
 
 function minutesBetween(start?: string | null, end?: string | null): number | null {
   if (!start || !end) return null;
-  const startMs = new Date(start).getTime();
-  const endMs = new Date(end).getTime();
+  const startMs = parseBackendDate(start || undefined).getTime();
+  const endMs = parseBackendDate(end || undefined).getTime();
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
   return Math.round((endMs - startMs) / 60_000);
 }
@@ -368,7 +378,7 @@ export default function AdminSales() {
     nextDay.setDate(nextDay.getDate() + 1);
 
     return orders.filter(order => {
-      const created = new Date(order.created_at || '');
+      const created = parseBackendDate(order.created_at);
       if (Number.isNaN(created.getTime())) return false;
 
       if (period === 'today') {
@@ -502,7 +512,13 @@ export default function AdminSales() {
         orders: 0,
       };
 
-      current.revenue += numeric(order.total_amount);
+      current.revenue +=
+        Math.max(numeric(order.subtotal_amount) - numeric(order.discount_amount), 0) +
+        numeric(order.service_fee) +
+        numeric(order.small_order_fee) +
+        (String(order.tip_type || '').toLowerCase() === 'shop'
+          ? numeric(order.tip_amount)
+          : 0);
       current.orders += 1;
       grouped.set(key, current);
     });
@@ -522,7 +538,10 @@ export default function AdminSales() {
       if (String(order.order_type || '').toLowerCase() !== 'delivery') return;
       const area = orderAreaName(order);
       const current = grouped.get(area) || { sales: 0, orders: 0, distanceTotal: 0, distanceCount: 0 };
-      current.sales += numeric(order.total_amount);
+      current.sales += Math.max(
+        numeric(order.subtotal_amount) - numeric(order.discount_amount),
+        0,
+      );
       current.orders += 1;
       const distance = Number(order.delivery_distance_km);
       if (Number.isFinite(distance) && distance > 0) { current.distanceTotal += distance; current.distanceCount += 1; }
@@ -535,9 +554,26 @@ export default function AdminSales() {
   }, [countedOrders]);
 
 
-  const totals = useMemo(() => summary?.totals || buildFallbackTotals(periodOrders), [summary, periodOrders]);
+  const totals = useMemo(
+    () => buildFallbackTotals(periodOrders),
+    [periodOrders],
+  );
   const averageOrder =
     totals.orders > 0 ? totals.customer_total / totals.orders : 0;
+
+  // Shop sales report:
+  // Delivery charges and rider tips are NOT shop sale.
+  // App commission = Service Fee + Small Order Fee + Staff/Shop Tip.
+  const appCommission =
+    numeric(totals.service_fee) +
+    numeric(totals.small_order_fee) +
+    numeric(totals.shop_tips);
+
+  const grossShopSale =
+    numeric(totals.shop_food_sale) + appCommission;
+
+  const netShopSale =
+    Math.max(grossShopSale - appCommission, 0);
 
   function exportCsv(): void {
     const headers = [
@@ -691,119 +727,55 @@ export default function AdminSales() {
           <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-4">
             <div className="flex items-center justify-between">
               <p className="text-emerald-300 text-[11px] uppercase font-semibold">
-                Customer Paid
+                Gross Sale
               </p>
               <CircleDollarSign className="w-4 h-4 text-emerald-400" />
             </div>
             <p className="text-white text-2xl font-black mt-2">
-              AED {money(totals.customer_total)}
+              AED {money(grossShopSale)}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              {totals.orders} counted orders
+              Delivery charges excluded
             </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Food Subtotal</p>
-              <ShoppingBag className="w-4 h-4 text-blue-400" />
+              <p className="text-gray-400 text-[11px] uppercase">Commission</p>
+              <Percent className="w-4 h-4 text-amber-400" />
             </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(totals.food_subtotal)}
+            <p className="text-amber-400 text-xl font-black mt-2">
+              - AED {money(appCommission)}
             </p>
-            <p className="text-red-400 text-[11px] mt-1">
-              - AED {money(totals.discount_amount)} discount
+            <p className="text-gray-500 text-[11px] mt-1">
+              Service + Small Order + Staff Tip
             </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Shop Food Sale</p>
+              <p className="text-gray-400 text-[11px] uppercase">Net Shop Sale</p>
               <PackageCheck className="w-4 h-4 text-green-400" />
             </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(totals.shop_food_sale)}
+            <p className="text-green-400 text-xl font-black mt-2">
+              AED {money(netShopSale)}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              Food after discount
+              Gross Sale - Commission
             </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Average Order</p>
-              <BarChart3 className="w-4 h-4 text-purple-400" />
+              <p className="text-gray-400 text-[11px] uppercase">Completed Orders</p>
+              <ShoppingBag className="w-4 h-4 text-blue-400" />
             </div>
-            <p className="text-white text-xl font-bold mt-2">
-              AED {money(averageOrder)}
+            <p className="text-white text-xl font-black mt-2">
+              {totals.orders}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              {totals.delivered_orders} delivered
+              Pickup + delivered orders
             </p>
-          </Card>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-4 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Percent className="w-4 h-4 text-amber-400" />
-              <h2 className="text-white font-semibold">Fee Breakdown</h2>
-            </div>
-
-            <div className="space-y-2">
-              {[
-                ['Service Fee', totals.service_fee, 'text-cyan-400'],
-                ['Small Order Fee', totals.small_order_fee, 'text-orange-400'],
-                ['Delivery Charges', totals.delivery_charges, 'text-blue-400'],
-                ['Shop Tips', totals.shop_tips, 'text-pink-400'],
-                ['Platform / Developer Fees', totals.developer_fees, 'text-purple-400'],
-              ].map(([label, value, color]) => (
-                <div
-                  key={String(label)}
-                  className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5"
-                >
-                  <span className="text-gray-300 text-sm">{label}</span>
-                  <span className={`font-bold text-sm ${color}`}>
-                    AED {money(value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Bike className="w-4 h-4 text-pink-400" />
-              <h2 className="text-white font-semibold">Rider Money</h2>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
-                <span className="text-gray-300 text-sm">Delivery Charges</span>
-                <span className="text-blue-400 font-bold text-sm">
-                  AED {money(totals.delivery_charges)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
-                <span className="text-gray-300 text-sm">Rider Tips</span>
-                <span className="text-pink-400 font-bold text-sm">
-                  AED {money(totals.rider_tips)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5 border border-emerald-800/40">
-                <span className="text-white text-sm font-semibold">Rider Earnings</span>
-                <span className="text-emerald-400 font-black">
-                  AED {money(totals.rider_earnings)}
-                </span>
-              </div>
-              <button
-                onClick={() => navigate('/admin/finance')}
-                className="w-full flex items-center justify-between text-xs text-gray-400 hover:text-white bg-gray-800 rounded-xl px-3 py-3"
-              >
-                Open Rider Cash Settlement
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
           </Card>
         </div>
 
@@ -837,22 +809,6 @@ export default function AdminSales() {
                 </p>
               </div>
             </div>
-
-            <div className="mt-3 bg-gray-950/70 rounded-xl px-3 py-3 flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Cash Payable to Shop</span>
-              <span className="text-white font-bold">
-                AED {money(totals.cash_payable_to_shop)}
-              </span>
-            </div>
-
-            {summary?.current_balance && (
-              <div className="mt-2 bg-amber-950/20 border border-amber-900/30 rounded-xl px-3 py-3 flex items-center justify-between">
-                <span className="text-amber-200 text-sm">Rider Cash Still Due</span>
-                <span className="text-amber-400 font-bold">
-                  AED {money(summary.current_balance.remaining_to_submit)}
-                </span>
-              </div>
-            )}
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
