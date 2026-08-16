@@ -1092,7 +1092,7 @@ export default function KitchenOrders() {
     return (
       <section className="space-y-2">
         <div className="flex items-center gap-2 px-1">
-          <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
+          <span className={`w-3 h-3 rounded-full ${dotClass}`} />
           <h2 className="text-gray-300 font-bold text-xs tracking-wide">{title} ({count})</h2>
         </div>
         <div className="space-y-2">{children}</div>
@@ -1101,16 +1101,16 @@ export default function KitchenOrders() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-3 py-3 text-white">
+    <div className={`min-h-screen px-3 py-3 ${viewMode === 'live' && activeOrders.length === 0 ? 'bg-white text-gray-900' : 'bg-gray-950 text-white'}`}>
       <div className="max-w-4xl mx-auto">
         <header className="flex items-center justify-between gap-3 mb-4">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className="p-2 rounded-lg text-gray-300 hover:bg-gray-900"
+            className={`p-2.5 rounded-lg ${viewMode === 'live' && activeOrders.length === 0 ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300 hover:bg-gray-900'}`}
             aria-label="Open Kitchen menu"
           >
-            <Menu className="w-6 h-6" />
+            <Menu className="w-8 h-8" />
           </button>
 
           <div className="flex items-center gap-2">
@@ -1129,7 +1129,7 @@ export default function KitchenOrders() {
             <button
               type="button"
               onClick={() => setStatusDialogOpen(true)}
-              className={`h-10 rounded-full px-3 flex items-center gap-2 text-xs font-black ${
+              className={`h-11 rounded-full px-4 flex items-center gap-2 text-sm font-black ${
                 restaurantStatus === 'open'
                   ? 'bg-green-600/15 text-green-400'
                   : restaurantStatus === 'busy'
@@ -1154,14 +1154,31 @@ export default function KitchenOrders() {
           <KitchenMenuPanel embedded />
         ) : viewMode === 'live' ? (
           activeOrders.length === 0 ? (
-            <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-6">
-              <div className="w-24 h-24 rounded-3xl bg-gray-900 flex items-center justify-center mb-6">
-                <ChefHat className="w-12 h-12 text-gray-700" />
+            <div className="relative min-h-[78vh] overflow-hidden flex flex-col items-center justify-center text-center px-6">
+              <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+                <div className="absolute inset-[-22%] flex flex-col items-center justify-center gap-10 rotate-[-28deg] select-none">
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="whitespace-nowrap text-[clamp(5rem,14vw,11rem)] leading-none font-black tracking-[0.05em] text-slate-900/[0.045]"
+                    >
+                      MAHI SHAH
+                    </div>
+                  ))}
+                </div>
               </div>
-              <h1 className="text-white text-3xl font-black">No active orders</h1>
-              <p className="text-gray-500 text-base mt-3 max-w-sm">
-                New orders will appear here automatically.
-              </p>
+
+              <div className="relative z-10 flex flex-col items-center">
+                <div className="w-28 h-28 rounded-[2rem] bg-violet-50 border border-violet-100 shadow-sm flex items-center justify-center mb-7">
+                  <ChefHat className="w-14 h-14 text-violet-600" />
+                </div>
+                <h1 className="text-gray-900 text-4xl md:text-5xl font-black tracking-tight">
+                  No active orders
+                </h1>
+                <p className="text-slate-500 text-lg md:text-xl mt-4 max-w-lg">
+                  New orders will appear here automatically.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-5">
