@@ -6,7 +6,9 @@ import {
   Pencil,
   Plus,
   Save,
+  ShieldOff,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 import L from 'leaflet';
@@ -34,6 +36,8 @@ interface Zone {
   max_distance_km: number;
   charge: number;
   is_active: boolean;
+  zone_type?: 'distance' | 'blocked';
+  polygon_json?: string;
 }
 
 export default function AdminDeliverySettings() {
@@ -132,7 +136,7 @@ export default function AdminDeliverySettings() {
   return (
     <AdminSettingsPageLayout
       title="Delivery & Location"
-      subtitle="Delivery switch, distance zones, rider charge and map pin"
+      subtitle="Road-distance pricing, blocked areas, rider charge and shop pin"
       maxWidth="max-w-5xl"
     >
       <div className="space-y-5">
@@ -233,12 +237,28 @@ export default function AdminDeliverySettings() {
         {form.delivery_enabled && (
           <Card className="bg-gray-900 border-gray-800 p-6">
             <h2 className="text-white font-semibold mb-2">
-              Delivery Zones
+              Road Distance Charges
             </h2>
             <p className="text-gray-500 text-sm mb-4">
-              Customer distance selects the first matching active zone
+              Actual driving distance selects the first matching active charge slab
             </p>
             <DeliveryZonesManager />
+          </Card>
+        )}
+
+        {form.delivery_enabled && (
+          <Card className="bg-gray-900 border-gray-800 p-6">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldOff className="w-5 h-5 text-red-400" />
+              <h2 className="text-white font-semibold">No Delivery Areas</h2>
+            </div>
+            <p className="text-gray-500 text-sm mb-4">
+              Draw only the area where delivery must be blocked. A blocked area wins even when it is close to the shop.
+            </p>
+            <BlockedAreasManager
+              shopLat={Number.parseFloat(form.restaurant_lat)}
+              shopLng={Number.parseFloat(form.restaurant_lng)}
+            />
           </Card>
         )}
 
@@ -316,7 +336,7 @@ function DeliveryZonesManager() {
       const response = await client.apiCall.invoke({
         url:
           '/api/v1/entities/delivery_zones' +
-          '?sort=min_distance_km&limit=50',
+          '?query={"zone_type":"distance"}&sort=min_distance_km&limit=50',
         method: 'GET',
       });
       setZones(response?.data?.items || []);
@@ -354,6 +374,8 @@ function DeliveryZonesManager() {
           max_distance_km: Number(newZone.max_distance_km),
           charge: Number(newZone.charge),
           is_active: true,
+          zone_type: 'distance',
+          polygon_json: '',
         },
       });
       setNewZone({
@@ -594,6 +616,309 @@ function ZoneInputs({
         className="bg-gray-900 border-gray-700 text-white"
       />
     </div>
+  );
+}
+
+function BlockedAreasManager({
+  shopLat,
+  shopLng,
+}: {
+  shopLat: number;
+  shopLng: number;
+}) {
+  const [areas, setAreas] = useState<Zone[]>([]);
+  const [name, setName] = useState('');
+  const [draft, setDraft] = useState<[number, number][]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void loadAreas();
+  }, []);
+
+  async function loadAreas() {
+    try {
+      const response = await client.apiCall.invoke({
+        url:
+          '/api/v1/entities/delivery_zones' +
+          '?query={"zone_type":"blocked"}&sort=zone_name&limit=100',
+        method: 'GET',
+      });
+      setAreas(response?.data?.items || []);
+    } catch (error) {
+      console.error(error);
+      toast.error('Could not load blocked areas');
+    }
+  }
+
+  async function saveArea() {
+    const cleanName = name.trim();
+    if (!cleanName) {
+      toast.error('Enter blocked area name, for example Madha');
+      return;
+    }
+    if (draft.length < 3) {
+      toast.error('Tap at least 3 points on the map to draw the blocked area');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await client.apiCall.invoke({
+        url: '/api/v1/entities/delivery_zones',
+        method: 'POST',
+        data: {
+          zone_name: cleanName,
+          min_distance_km: 0,
+          max_distance_km: 0,
+          charge: 0,
+          is_active: true,
+          zone_type: 'blocked',
+          polygon_json: JSON.stringify(draft),
+        },
+      });
+      setName('');
+      setDraft([]);
+      toast.success(`${cleanName} blocked for delivery`);
+      await loadAreas();
+    } catch (error: any) {
+      toast.error(error?.data?.detail || 'Could not save blocked area');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleArea(area: Zone) {
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/entities/delivery_zones/${area.id}`,
+        method: 'PUT',
+        data: { is_active: !area.is_active },
+      });
+      await loadAreas();
+    } catch {
+      toast.error('Could not change blocked area status');
+    }
+  }
+
+  async function deleteArea(area: Zone) {
+    if (!window.confirm(`Delete blocked area "${area.zone_name}"?`)) return;
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/entities/delivery_zones/${area.id}`,
+        method: 'DELETE',
+      });
+      toast.success('Blocked area deleted');
+      await loadAreas();
+    } catch (error: any) {
+      toast.error(error?.data?.detail || 'Could not delete blocked area');
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid md:grid-cols-[1fr_auto] gap-2">
+        <Input
+          value={name}
+          onChange={event => setName(event.target.value)}
+          placeholder="Area name, e.g. Madha"
+          className="bg-gray-800 border-gray-700 text-white"
+        />
+        <Button
+          onClick={() => void saveArea()}
+          disabled={saving || draft.length < 3}
+          className="bg-red-600 hover:bg-red-700 text-white"
+        >
+          <ShieldOff className="w-4 h-4 mr-2" />
+          {saving ? 'Saving...' : 'Block This Area'}
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <p className="text-gray-500">
+          Tap around the border of the area. Current points: {draft.length}
+        </p>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setDraft(points => points.slice(0, -1))}
+            disabled={draft.length === 0}
+            className="text-gray-300"
+          >
+            <Undo2 className="w-3 h-3 mr-1" /> Undo
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setDraft([])}
+            disabled={draft.length === 0}
+            className="text-red-300"
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+
+      <BlockedAreaMap
+        centerLat={Number.isFinite(shopLat) ? shopLat : 25.2747}
+        centerLng={Number.isFinite(shopLng) ? shopLng : 56.345}
+        areas={areas}
+        draft={draft}
+        onDraftChange={setDraft}
+      />
+
+      <div className="space-y-2">
+        {areas.map(area => (
+          <div
+            key={area.id}
+            className="flex items-center gap-3 p-3 rounded-lg border border-gray-700 bg-gray-800"
+          >
+            <Switch
+              checked={area.is_active !== false}
+              onCheckedChange={() => void toggleArea(area)}
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-sm font-medium">{area.zone_name}</p>
+              <p className="text-red-300 text-xs">
+                {area.is_active !== false ? 'Delivery blocked' : 'Block disabled'}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void deleteArea(area)}
+              className="text-red-400 p-1 h-auto"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
+        ))}
+        {areas.length === 0 && (
+          <p className="text-gray-500 text-sm">No blocked delivery areas yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function parsePolygon(area: Zone): [number, number][] {
+  try {
+    const value = JSON.parse(area.polygon_json || '[]');
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(point => Array.isArray(point) && point.length >= 2)
+      .map(point => [Number(point[0]), Number(point[1])] as [number, number])
+      .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  } catch {
+    return [];
+  }
+}
+
+function BlockedAreaMap({
+  centerLat,
+  centerLng,
+  areas,
+  draft,
+  onDraftChange,
+}: {
+  centerLat: number;
+  centerLng: number;
+  areas: Zone[];
+  draft: [number, number][];
+  onDraftChange: (points: [number, number][]) => void;
+}) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const savedLayerRef = useRef<L.LayerGroup | null>(null);
+  const draftLayerRef = useRef<L.LayerGroup | null>(null);
+  const draftRef = useRef<[number, number][]>(draft);
+  const onDraftChangeRef = useRef(onDraftChange);
+
+  useEffect(() => {
+    draftRef.current = draft;
+    onDraftChangeRef.current = onDraftChange;
+  }, [draft, onDraftChange]);
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstanceRef.current) return;
+    const map = L.map(mapRef.current).setView([centerLat, centerLng], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map);
+
+    savedLayerRef.current = L.layerGroup().addTo(map);
+    draftLayerRef.current = L.layerGroup().addTo(map);
+
+    map.on('click', event => {
+      const next: [number, number][] = [
+        ...draftRef.current,
+        [event.latlng.lat, event.latlng.lng],
+      ];
+      draftRef.current = next;
+      onDraftChangeRef.current(next);
+    });
+
+    mapInstanceRef.current = map;
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+      savedLayerRef.current = null;
+      draftLayerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const group = savedLayerRef.current;
+    if (!group) return;
+    group.clearLayers();
+    areas.forEach(area => {
+      const polygon = parsePolygon(area);
+      if (polygon.length < 3) return;
+      L.polygon(polygon, {
+        color: area.is_active !== false ? '#ef4444' : '#6b7280',
+        fillColor: area.is_active !== false ? '#ef4444' : '#6b7280',
+        fillOpacity: area.is_active !== false ? 0.18 : 0.06,
+        weight: 2,
+      })
+        .bindTooltip(`${area.zone_name} — ${area.is_active !== false ? 'BLOCKED' : 'disabled'}`)
+        .addTo(group);
+    });
+  }, [areas]);
+
+  useEffect(() => {
+    const group = draftLayerRef.current;
+    if (!group) return;
+    group.clearLayers();
+    draft.forEach((point, index) => {
+      L.circleMarker(point, {
+        radius: 5,
+        color: '#f59e0b',
+        fillColor: '#f59e0b',
+        fillOpacity: 1,
+      })
+        .bindTooltip(String(index + 1))
+        .addTo(group);
+    });
+    if (draft.length >= 2) {
+      L.polyline(draft, { color: '#f59e0b', weight: 3 }).addTo(group);
+    }
+    if (draft.length >= 3) {
+      L.polygon(draft, {
+        color: '#ef4444',
+        fillColor: '#ef4444',
+        fillOpacity: 0.16,
+        weight: 2,
+      }).addTo(group);
+    }
+  }, [draft]);
+
+  return (
+    <div
+      ref={mapRef}
+      className="h-96 rounded-xl overflow-hidden border border-gray-700"
+    />
   );
 }
 
