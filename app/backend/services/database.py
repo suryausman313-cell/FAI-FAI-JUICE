@@ -309,6 +309,41 @@ async def ensure_delivery_zone_area_columns() -> None:
     logger.info("Delivery zone blocked-area columns checked successfully")
 
 
+async def ensure_customer_saved_locations_table() -> None:
+    """Ensure optional customer saved delivery locations exist.
+
+    Locations store only the exact delivery pin and customer label/notes.
+    Delivery availability, blocked-area rules, road distance and delivery fee
+    are always recalculated when the customer selects a saved location.
+    """
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+
+    statements = [
+        '''
+        CREATE TABLE IF NOT EXISTS customer_saved_locations (
+            id SERIAL PRIMARY KEY,
+            customer_account_id INTEGER NOT NULL,
+            label VARCHAR(60) NOT NULL DEFAULT 'Saved Location',
+            address_text TEXT NOT NULL DEFAULT '',
+            area_name VARCHAR(160) NOT NULL DEFAULT '',
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        ''',
+        "CREATE INDEX IF NOT EXISTS ix_customer_saved_locations_account_id ON customer_saved_locations (customer_account_id)",
+    ]
+
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.commit()
+
+    logger.info("Customer saved locations table checked successfully")
+
+
 async def initialize_database():
     """Initialize database, create tables and prepare required columns."""
 
@@ -348,6 +383,7 @@ async def initialize_database():
         logger.info("V7 rider auto-assign schema migration completed")
 
         await ensure_admin_alarm_columns()
+        await ensure_customer_saved_locations_table()
         logger.info("V8 Admin alarm schema migration completed")
 
         await ensure_delivery_zone_area_columns()
