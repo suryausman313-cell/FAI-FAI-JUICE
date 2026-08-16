@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike, CalendarDays } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -83,6 +83,9 @@ export default function AdminRiders() {
   const [editShiftStart, setEditShiftStart] = useState('');
   const [editShiftEnd, setEditShiftEnd] = useState('');
   const [timeLimit, setTimeLimit] = useState('30'); // minutes
+  const [reportPeriod, setReportPeriod] = useState<'today' | 'yesterday' | 'week' | 'thirty_days' | 'all' | 'custom'>('today');
+  const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     const auth = localStorage.getItem('admin_auth');
@@ -99,13 +102,26 @@ export default function AdminRiders() {
 
   // Auto-refresh every 15s
   useEffect(() => {
-    const interval = setInterval(loadReports, 15000);
+    const interval = setInterval(() => void loadReports(), 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [reportPeriod, customFrom, customTo]);
 
-  async function loadReports() {
+  async function loadReports(selectedPeriod = reportPeriod) {
     try {
-      const res = await riderAdminApi({ url: '/api/v1/rider/admin/reports', method: 'GET' });
+      const params = new URLSearchParams({ period: selectedPeriod });
+      if (selectedPeriod === 'custom') {
+        if (!customFrom || !customTo) {
+          toast.error('Select both custom dates');
+          return;
+        }
+        params.set('date_from', customFrom);
+        params.set('date_to', customTo);
+      }
+
+      const res = await riderAdminApi({
+        url: `/api/v1/rider/admin/reports?${params.toString()}`,
+        method: 'GET',
+      });
       setReports(res?.data?.items || []);
     } catch (e) {
       console.error('Failed to load rider reports:', e);
@@ -227,13 +243,72 @@ export default function AdminRiders() {
           </Card>
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <p className="text-2xl font-bold text-blue-400">{totalOrders}</p>
-            <p className="text-gray-500 text-xs">Total Deliveries</p>
+            <p className="text-gray-500 text-xs">Period Deliveries</p>
           </Card>
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <p className="text-2xl font-bold text-yellow-400">AED {totalEarnings.toFixed(0)}</p>
-            <p className="text-gray-500 text-xs">Total Earnings</p>
+            <p className="text-gray-500 text-xs">Period Earnings</p>
           </Card>
         </div>
+
+        {/* Rider Report Period */}
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarDays className="w-4 h-4 text-green-400" />
+            <h3 className="text-white font-semibold">Rider Report Period</h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              ['today', 'Today'],
+              ['yesterday', 'Yesterday'],
+              ['week', '7 Days'],
+              ['thirty_days', '30 Days'],
+              ['all', 'All Time'],
+              ['custom', 'Custom'],
+            ].map(([key, label]) => (
+              <Button
+                key={key}
+                size="sm"
+                variant={reportPeriod === key ? 'default' : 'outline'}
+                onClick={() => {
+                  const next = key as typeof reportPeriod;
+                  setReportPeriod(next);
+                  if (next !== 'custom') void loadReports(next);
+                }}
+                className={
+                  reportPeriod === key
+                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                    : 'border-gray-700 text-gray-400'
+                }
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+
+          {reportPeriod === 'custom' && (
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 mt-3">
+              <Input
+                type="date"
+                value={customFrom}
+                onChange={e => setCustomFrom(e.target.value)}
+                className="bg-gray-800 border-gray-700 text-white"
+              />
+              <Input
+                type="date"
+                value={customTo}
+                onChange={e => setCustomTo(e.target.value)}
+                className="bg-gray-800 border-gray-700 text-white"
+              />
+              <Button
+                onClick={() => void loadReports('custom')}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                Apply
+              </Button>
+            </div>
+          )}
+        </Card>
 
         {/* Add Rider Form */}
         {showAddForm && (
@@ -387,11 +462,11 @@ export default function AdminRiders() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-white">{rider.today_orders}</p>
-                      <p className="text-gray-500 text-[10px]">Today Orders</p>
+                      <p className="text-gray-500 text-[10px]">Period Orders</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-green-400">AED {(rider.today_order_value || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Today Sale</p>
+                      <p className="text-gray-500 text-[10px]">Period Sale</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-orange-400">{rider.pending_orders}</p>
@@ -411,11 +486,11 @@ export default function AdminRiders() {
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-purple-400">AED {(rider.delivery_charges_earned || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Total Del. Earnings</p>
+                      <p className="text-gray-500 text-[10px]">Period Del. Earnings</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-blue-300">{rider.total_orders}</p>
-                      <p className="text-gray-500 text-[10px]">All Deliveries</p>
+                      <p className="text-gray-500 text-[10px]">Period Deliveries</p>
                     </div>
                   </div>
 
@@ -426,7 +501,7 @@ export default function AdminRiders() {
                       {rider.is_online ? 'Online' : 'Offline'}
                     </span>
                     <span className="text-gray-600">•</span>
-                    <span className="text-gray-500">Today: {rider.today_orders} orders</span>
+                    <span className="text-gray-500">Selected period: {rider.today_orders} orders</span>
                     <span className="text-gray-600">•</span>
                     <span className="text-purple-400">AED {rider.delivery_charge_per_order || 0}/delivery</span>
                     {rider.shift_start && rider.shift_end && (

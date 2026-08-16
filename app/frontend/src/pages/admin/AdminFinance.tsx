@@ -120,6 +120,9 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
 export default function AdminFinance() {
   const today = new Date().toISOString().slice(0, 10);
   const initialPreferences = useMemo(getStoredAdminPushPreferences, []);
+  const [pushEverEnabled, setPushEverEnabled] = useState(
+    () => localStorage.getItem('admin_push_ever_enabled') === '1',
+  );
 
   const [period, setPeriod] = useState<Period>('today');
   const [dateFrom, setDateFrom] = useState(today);
@@ -267,6 +270,8 @@ export default function AdminFinance() {
         readyEnabled: pushState.readyEnabled,
       });
       setPushState(state);
+      localStorage.setItem('admin_push_ever_enabled', '1');
+      setPushEverEnabled(true);
       toast.success('Admin background notifications enabled');
       await scanAdminPushEventsNow();
     } catch (error: any) {
@@ -323,17 +328,6 @@ export default function AdminFinance() {
   const balance = summary?.current_balance || {};
 
   const cards = [
-    ['Shop Food Sale', totals.shop_food_sale, 'text-green-300'],
-    ['Customer Total', totals.customer_total, 'text-blue-300'],
-    ['Menu Discount', totals.discount_amount, 'text-red-300'],
-    ['Developer Fees', totals.developer_fees, 'text-yellow-300'],
-    ['Service Fee', totals.service_fee, 'text-yellow-300'],
-    ['Small-Order Fee', totals.small_order_fee, 'text-yellow-300'],
-    ['Delivery Charges', totals.delivery_charges, 'text-cyan-300'],
-    ['Rider Tips', totals.rider_tips, 'text-pink-300'],
-    ['Rider Earnings', totals.rider_earnings, 'text-blue-300'],
-    ['Shop Tips', totals.shop_tips, 'text-purple-300'],
-    ['Cash Collected', totals.cash_collected, 'text-green-300'],
     ['Rider Cash Pending', balance.total_pending_cash, 'text-orange-300'],
     ['Awaiting Approval', balance.awaiting_approval, 'text-yellow-300'],
     ['Admin Approved', balance.approved_cash, 'text-green-300'],
@@ -343,7 +337,7 @@ export default function AdminFinance() {
   return (
     <AdminSettingsPageLayout
       title="Finance & Rider Cash"
-      subtitle="All shop finance, Rider cash approval and Admin notifications"
+      subtitle="Rider cash approval, settlement and Admin notifications"
       backTo="/admin/dashboard"
       maxWidth="max-w-6xl"
     >
@@ -364,7 +358,7 @@ export default function AdminFinance() {
               </p>
               <p className="text-xs mt-2">
                 <span className={pushState.subscribed ? 'text-green-400' : 'text-orange-400'}>
-                  {pushState.subscribed ? 'Enabled on this device' : 'Not enabled on this device'}
+                  {pushEverEnabled || pushState.subscribed ? 'Enabled on this device' : 'Not enabled on this device'}
                 </span>
                 {' · '}
                 <span className="text-gray-500">Permission: {pushState.permission}</span>
@@ -372,7 +366,7 @@ export default function AdminFinance() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {!pushState.subscribed ? (
+              {!pushEverEnabled && !pushState.subscribed ? (
                 <Button
                   onClick={handleEnablePush}
                   disabled={pushWorking || !pushState.supported}
@@ -382,14 +376,10 @@ export default function AdminFinance() {
                   Enable Notifications
                 </Button>
               ) : (
-                <Button
-                  onClick={handleDisablePush}
-                  disabled={pushWorking}
-                  variant="outline"
-                  className="border-gray-700 text-gray-300"
-                >
-                  Disable
-                </Button>
+                <span className="inline-flex items-center rounded-lg border border-green-800 bg-green-950/30 px-3 py-2 text-sm text-green-400">
+                  <CheckCircle2 className="w-4 h-4 mr-2" />
+                  Notifications Enabled
+                </span>
               )}
 
               <Button
