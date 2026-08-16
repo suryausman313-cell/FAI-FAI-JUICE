@@ -13,6 +13,7 @@ import {
   History,
   LayoutGrid,
   ChevronRight,
+  ChevronLeft,
   Printer,
   RefreshCw,
   Store,
@@ -261,63 +262,27 @@ class KitchenAlarm {
 
 const kitchenAlarm = new KitchenAlarm();
 
-function OrderTimer({ order }: { order: KitchenOrder }) {
-  const [now, setNow] = useState(Date.now());
-  const lateSpokenRef = useRef(false);
+function OrderTimer({ createdAt }: { createdAt: string }) {
+  const [elapsed, setElapsed] = useState('0:00');
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const estimated = order.estimated_time ? new Date(order.estimated_time).getTime() : NaN;
-  const hasDeadline = Number.isFinite(estimated) && order.status !== 'new';
-
-  if (hasDeadline) {
-    const diffMs = estimated - now;
-    const signedMinutes = diffMs >= 0
-      ? Math.max(0, Math.ceil(diffMs / 60000))
-      : -Math.max(1, Math.floor(Math.abs(diffMs) / 60000));
-    const late = signedMinutes < 0;
-
-    if (late && !lateSpokenRef.current) {
-      lateSpokenRef.current = true;
-      try {
-        if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-          const voice = new SpeechSynthesisUtterance(`Order number ${order.id} is late`);
-          voice.lang = 'en-US';
-          voice.rate = 0.95;
-          window.speechSynthesis.speak(voice);
-        }
-      } catch {
-        // Voice alert must never break the Kitchen screen.
+    const update = () => {
+      const created = new Date(createdAt).getTime();
+      if (!Number.isFinite(created)) {
+        setElapsed('0:00');
+        return;
       }
-    }
+      const seconds = Math.max(0, Math.floor((Date.now() - created) / 1000));
+      const minutes = Math.floor(seconds / 60);
+      setElapsed(`${minutes}:${String(seconds % 60).padStart(2, '0')}`);
+    };
 
-    return (
-      <div className="flex flex-col items-end">
-        <div className={`h-16 w-16 rounded-full border-[3px] flex flex-col items-center justify-center ${
-          late
-            ? 'border-red-500 bg-red-50 text-red-600'
-            : 'border-emerald-500 bg-emerald-50 text-emerald-700'
-        }`}>
-          <span className="text-2xl font-black leading-none">{signedMinutes}</span>
-          <span className="text-[10px] font-bold uppercase">min</span>
-        </div>
-        {late && <span className="mt-1 text-xs font-black text-red-600">{Math.abs(signedMinutes)} min late</span>}
-      </div>
-    );
-  }
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [createdAt]);
 
-  const created = new Date(order.created_at).getTime();
-  const elapsedMinutes = Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 60000)) : 0;
-  return (
-    <div className="h-16 w-16 rounded-full border-[3px] border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-700">
-      <span className="text-2xl font-black leading-none">{elapsedMinutes}</span>
-      <span className="text-[10px] font-bold uppercase">min</span>
-    </div>
-  );
+  return <span className="text-orange-400 text-xs font-mono font-bold">{elapsed}</span>;
 }
 
 export default function KitchenOrders() {
@@ -610,16 +575,6 @@ export default function KitchenOrders() {
         )
       );
 
-      setSelectedOrder((current) => {
-        if (!current || current.id !== order.id) return current;
-        return serverOrder || {
-          ...current,
-          status,
-          updated_at: new Date().toISOString(),
-          estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : current.estimated_time,
-        };
-      });
-
       if (selectedOrder?.id === order.id) {
         setSelectedOrder((current) =>
           current?.id === order.id
@@ -786,325 +741,268 @@ export default function KitchenOrders() {
     const items = parseItems(order.items_json);
     const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <span className="text-slate-900 text-4xl font-black">#{order.id}</span>
-              <Badge className={delivery
-                ? 'bg-blue-100 text-blue-700 border-blue-200'
-                : 'bg-emerald-100 text-emerald-700 border-emerald-200'}>
-                {delivery ? 'Delivery' : 'Pickup'}
-              </Badge>
-            </div>
-            <p className="mt-1 text-slate-500 text-sm">{formatUaeTime(order.created_at)} · {itemCount} item{itemCount === 1 ? '' : 's'}</p>
-          </div>
-          <OrderTimer order={order} />
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-slate-400 text-xs font-bold uppercase mb-2">Customer</p>
-          <p className="text-slate-900 text-2xl font-black">{order.customer_name}</p>
-          {order.customer_phone && (
-            <a href={`tel:${order.customer_phone}`} className="mt-1 block text-blue-600 text-lg">
-              {order.customer_phone}
-            </a>
-          )}
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-slate-900 text-2xl font-black mb-4">Items</p>
-          <div className="space-y-3">
-            {items.length === 0 ? (
-              <p className="text-slate-400">Items details unavailable</p>
-            ) : items.map((item, index) => (
-              <div key={`${order.id}-${index}`} className="rounded-2xl bg-slate-50 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-slate-900 text-xl font-bold">{item.quantity} × {item.name}</p>
-                    {item.size && <p className="text-slate-500 mt-1">{item.size}</p>}
-                    {item.extras.length > 0 && <p className="text-slate-500 text-sm mt-1">+ {item.extras.join(', ')}</p>}
-                  </div>
-                  <p className="text-slate-900 font-bold">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {order.order_notes && (
-          <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
-            <p className="text-amber-700 text-xs font-bold uppercase mb-1">Order Notes</p>
-            <p className="text-amber-900 text-base whitespace-pre-wrap">{order.order_notes}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-slate-400 text-xs uppercase font-bold">Payment</p>
-            <p className="text-slate-900 text-lg font-bold mt-1">{order.payment_method || 'Cash'}</p>
-          </div>
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 text-right shadow-sm">
-            <p className="text-slate-400 text-xs uppercase font-bold">Total</p>
-            <p className="text-emerald-600 text-2xl font-black mt-1">AED {money(order.total_amount)}</p>
-          </div>
-        </div>
-
-        {delivery && (
-          <div className={`rounded-3xl border p-5 ${
-            activeAssignment ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'
-          }`}>
-            {activeAssignment ? (
-              <>
-                <p className="text-blue-800 text-lg font-bold">Rider: {assignment.rider_name}</p>
-                {assignment.rider_phone && <p className="text-blue-700">{assignment.rider_phone}</p>}
-                <p className="text-blue-600 text-sm mt-1">Status: {assignmentStatus.replaceAll('_', ' ')}</p>
-              </>
-            ) : (
-              <>
-                <p className="text-amber-800 text-lg font-bold">Waiting Rider</p>
-                <p className="text-amber-700 text-sm mt-1">Waiting for a rider to be assigned.</p>
-              </>
-            )}
-          </div>
-        )}
-
-        {order.status === 'new' && acceptingOrder !== order.id && (
-          <div className="grid grid-cols-2 gap-3">
-            <Button onClick={() => setAcceptingOrder(order.id)} className="h-14 rounded-2xl bg-emerald-600 text-lg hover:bg-emerald-700">
-              <Check className="w-5 h-5 mr-2" /> Accept
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (window.confirm(`Cancel order #${order.id}?`)) void updateOrderStatus(order, 'cancelled');
-              }}
-              className="h-14 rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
-            >
-              <X className="w-5 h-5 mr-2" /> Cancel
-            </Button>
-          </div>
-        )}
-
-        {order.status === 'new' && acceptingOrder === order.id && (
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-slate-900 text-xl font-black mb-3">Select ready time</p>
-            <div className="grid grid-cols-5 gap-2 mb-3">
-              {TIME_OPTIONS.map((minutes) => (
-                <button
-                  key={minutes}
-                  type="button"
-                  onClick={() => { setSelectedTime(minutes); setCustomTime(''); }}
-                  className={`rounded-2xl py-3 font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
-                >{minutes}</button>
-              ))}
-            </div>
-            <input
-              value={customTime}
-              onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-              inputMode="numeric"
-              placeholder="Custom minutes"
-              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-lg mb-3 outline-none focus:border-emerald-500"
-            />
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                onClick={() => {
-                  const minutes = Number(customTime || selectedTime);
-                  void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
-                }}
-                className="h-14 rounded-2xl bg-emerald-600 text-lg hover:bg-emerald-700"
-              >Accept & Print</Button>
-              <Button variant="outline" onClick={() => setAcceptingOrder(null)} className="h-14 rounded-2xl">Back</Button>
-            </div>
-          </div>
-        )}
-
-        {order.status === 'accepted' && (
-          <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
-            Preparing
-          </Button>
-        )}
-
-        {order.status === 'preparing' && (
-          <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 w-full rounded-3xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
-            {delivery ? 'Ready for delivery' : 'Ready for pickup'}
-          </Button>
-        )}
-
-        {order.status === 'ready' && !delivery && (
-          <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-16 w-full rounded-3xl bg-slate-900 text-xl font-black hover:bg-slate-800">
-            Completed
-          </Button>
-        )}
-
-        {order.status === 'ready' && delivery && (
-          <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5 text-center text-blue-800 font-bold">Waiting for Rider Pickup</div>
-        )}
-
-        <Button type="button" variant="outline" onClick={() => printReceipt(order, true)} className="h-14 w-full rounded-2xl border-slate-200 text-slate-700">
-          <Printer className="w-5 h-5 mr-2" /> Reprint Order
-        </Button>
-      </div>
+    const itemSubtotal = items.reduce(
+      (sum, item) => sum + Number(item.totalPrice || (Number(item.price || 0) * item.quantity)),
+      0,
     );
-  }
-
-  function OrderCard({ order, section }: { order: KitchenOrder; section: 'new' | 'progress' | 'ready' }) {
-    const delivery = isDeliveryOrder(order);
-    const assignment = assignments[order.id];
-    const assignmentStatus = String(assignment?.status || '').toLowerCase();
-    const hasActiveRider = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
-    const itemCount = parseItems(order.items_json).reduce((sum, item) => sum + item.quantity, 0);
+    const subtotal = Number(order.subtotal_amount ?? itemSubtotal ?? 0);
+    const deliveryFee = Number(order.delivery_charge || 0);
+    const serviceFee = Number(order.service_fee || 0);
+    const smallOrderFee = Number(order.small_order_fee || 0);
+    const vatIncluded = Number(order.tax_amount || 0);
+    const itemDiscounts = Number(order.discount_amount || 0);
+    const tip = Number(order.tip_amount || 0);
 
     return (
-      <button type="button" onClick={() => openOrder(order)} className="block w-full text-left">
-        <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-3">
-                <span className="text-slate-900 font-black text-4xl">#{order.id}</span>
+      <div className="pb-28">
+        <section className="border-b border-slate-200 bg-white px-1 pb-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold text-slate-400">
+                {receiptSettings.restaurant_name || 'Fai Fai Juice'}
+              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <span className="text-4xl font-black tracking-tight text-slate-900">#{order.id}</span>
                 <Badge className={delivery
-                  ? 'bg-blue-100 text-blue-700 border-blue-200'
-                  : 'bg-emerald-100 text-emerald-700 border-emerald-200'}>
+                  ? 'border-blue-200 bg-blue-50 text-blue-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
                   {delivery ? 'Delivery' : 'Pickup'}
                 </Badge>
               </div>
-              <p className="mt-1 text-slate-500 text-base">{itemCount} item{itemCount === 1 ? '' : 's'} · {formatUaeTime(order.created_at)}</p>
-              <p className="mt-3 text-slate-700 text-lg font-semibold">
-                {section === 'new'
-                  ? 'New order'
-                  : section === 'progress'
-                    ? (order.status === 'preparing' ? 'Preparing' : 'Accepted')
-                    : delivery
-                      ? (hasActiveRider ? `Rider: ${assignment.rider_name}` : 'Waiting Rider')
-                      : 'Ready for pickup'}
+              <p className="mt-1 text-sm text-slate-500">
+                {formatUaeTime(order.created_at)} · {itemCount} item{itemCount === 1 ? '' : 's'}
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <OrderTimer order={order} />
-              <ChevronRight className="w-6 h-6 text-slate-300" />
+            <OrderTimer order={order} />
+          </div>
+
+          <div className="mt-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
+                <span className="text-lg">👤</span>
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-400">Customer</p>
+                <p className="text-lg font-bold text-slate-900">{order.customer_name}</p>
+                {order.customer_phone && (
+                  <a href={`tel:${order.customer_phone}`} className="text-sm font-medium text-blue-600">
+                    {order.customer_phone}
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {delivery && (
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
+                  <Bike className="h-5 w-5 text-slate-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-400">Rider</p>
+                  {activeAssignment ? (
+                    <>
+                      <p className="text-lg font-bold text-slate-900">{assignment.rider_name}</p>
+                      <p className="text-sm text-slate-500">{assignmentStatus.replaceAll('_', ' ')}</p>
+                    </>
+                  ) : (
+                    <p className="text-lg font-bold text-slate-700">Waiting rider</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="bg-white py-5">
+          <div className="space-y-5">
+            {items.length === 0 ? (
+              <p className="px-1 text-slate-400">Items details unavailable</p>
+            ) : items.map((item, index) => {
+              const lineTotal = Number(item.totalPrice || (Number(item.price || 0) * item.quantity));
+              return (
+                <div key={`${order.id}-${index}`} className="px-1">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xl font-black text-slate-900">{item.quantity} x&nbsp; {item.name}</p>
+                      {item.size && (
+                        <p className="ml-10 mt-1 text-base text-slate-500">
+                          {item.quantity} x&nbsp;&nbsp; {item.size}
+                        </p>
+                      )}
+                      {item.extras.length > 0 && (
+                        <p className="ml-10 mt-1 text-sm text-slate-500">{item.extras.join(', ')}</p>
+                      )}
+                    </div>
+                    <p className="shrink-0 text-lg font-semibold text-slate-700">AED{money(lineTotal)}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {order.order_notes && (
+          <section className="border-y border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-xs font-black uppercase text-amber-700">Order notes</p>
+            <p className="mt-1 whitespace-pre-wrap text-base text-amber-900">{order.order_notes}</p>
+          </section>
+        )}
+
+        <section className="border-t border-slate-200 bg-white px-1 py-5">
+          <div className="space-y-3 text-lg">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-2xl font-black text-slate-900">Subtotal</span>
+              <span className="text-2xl font-black text-slate-900">AED{money(subtotal)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-slate-600">VAT (Incl.)</span>
+              <span className="font-medium text-slate-700">{vatIncluded > 0 ? `AED${money(vatIncluded)}` : '--'}</span>
+            </div>
+            {delivery && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-600">Delivery Fee</span>
+                <span className="font-medium text-slate-700">AED{money(deliveryFee)}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-slate-600">Service Fee</span>
+              <span className="font-medium text-slate-700">AED{money(serviceFee)}</span>
+            </div>
+            {smallOrderFee > 0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-600">Small Order Fee</span>
+                <span className="font-medium text-slate-700">AED{money(smallOrderFee)}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-slate-600">Item Discounts</span>
+              <span className={itemDiscounts > 0 ? 'font-medium text-red-600' : 'font-medium text-slate-700'}>
+                {itemDiscounts > 0 ? `-AED${money(itemDiscounts)}` : '--'}
+              </span>
+            </div>
+            {tip > 0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-600">Tip</span>
+                <span className="font-medium text-slate-700">AED{money(tip)}</span>
+              </div>
+            )}
+            <div className="mt-2 flex items-center justify-between gap-4 border-t border-slate-200 pt-4">
+              <span className="text-3xl font-black text-slate-900">Total</span>
+              <span className="text-3xl font-black text-slate-900">AED{money(order.total_amount)}</span>
             </div>
           </div>
-        </Card>
-      </button>
-    );
-  }
+        </section>
 
-  function HistoryOrdersList({ orders: historyOrders }: { orders: KitchenOrder[] }) {
-    const total = historyOrders
-      .filter((order) => order.status === 'completed')
-      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
-
-    return (
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="rounded-3xl bg-white border-slate-200 p-5 shadow-sm">
-            <p className="text-slate-400 text-xs uppercase font-bold">Orders</p>
-            <p className="text-slate-900 text-3xl font-black mt-1">{historyOrders.length}</p>
-          </Card>
-          <Card className="rounded-3xl bg-white border-slate-200 p-5 shadow-sm">
-            <p className="text-slate-400 text-xs uppercase font-bold">Completed Sale</p>
-            <p className="text-emerald-600 text-2xl font-black mt-1">AED {money(total)}</p>
-          </Card>
-        </div>
-
-        {historyOrders.length === 0 ? (
-          <div className="min-h-56 rounded-3xl border border-slate-200 bg-white flex items-center justify-center text-slate-400 text-sm">
-            There are no completed, pending delivery, or cancelled orders for this day.
+        <section className="mt-4 border-t border-slate-200 bg-white px-1 pt-4">
+          <div className="flex items-center justify-between text-base">
+            <span className="text-slate-500">Payment</span>
+            <span className="font-bold text-slate-900">{order.payment_method || 'Cash'}</span>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {historyOrders.map((order) => (
-              <Card key={order.id} className="rounded-3xl bg-white border-slate-200 p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-900 text-lg font-black">#{order.id}</span>
-                      <Badge
-                        className={
-                          order.status === 'completed'
-                            ? 'bg-green-600/20 text-green-300 border-green-600/30'
-                            : DELIVERY_PENDING_STATUSES.has(order.status)
-                              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-                              : 'bg-red-600/20 text-red-300 border-red-600/30'
-                        }
-                      >
-                        {order.status === 'completed'
-                          ? 'Completed'
-                          : DELIVERY_PENDING_STATUSES.has(order.status)
-                            ? 'Delivery Pending'
-                            : 'Cancelled'}
-                      </Badge>
-                    </div>
-                    <p className="text-gray-500 text-xs mt-1">
-                      {formatUaeTime(order.updated_at || order.created_at)}
-                    </p>
-                  </div>
-                  <span className="text-emerald-600 font-black">AED {money(order.total_amount)}</span>
-                </div>
-                <p className="text-slate-700 text-sm font-medium mb-2">{order.customer_name}</p>
-                {DELIVERY_PENDING_STATUSES.has(order.status) && assignments[order.id] && (
-                  <div className="mb-2 rounded-lg border border-blue-700/30 bg-blue-950/30 px-2 py-1.5">
-                    <p className="text-blue-300 text-xs font-semibold">Rider: {assignments[order.id].rider_name}</p>
-                    {assignments[order.id].rider_phone && (
-                      <p className="text-blue-200/80 text-xs">{assignments[order.id].rider_phone}</p>
-                    )}
-                    <p className="text-blue-400/70 text-[11px]">Status: {String(assignments[order.id].status).replaceAll('_', ' ')}</p>
-                  </div>
-                )}
-                <div className="space-y-1">{renderItems(order)}</div>
+        </section>
+
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
+          <div className="mx-auto max-w-4xl">
+            {order.status === 'new' && acceptingOrder !== order.id && (
+              <div className="grid grid-cols-2 gap-3">
+                <Button onClick={() => setAcceptingOrder(order.id)} className="h-14 rounded-xl bg-emerald-600 text-lg font-black hover:bg-emerald-700">
+                  Accept
+                </Button>
                 <Button
                   variant="outline"
-                  size="sm"
-                  onClick={() => printReceipt(order, true)}
-                  className="w-full mt-3 border-gray-700"
+                  onClick={() => {
+                    if (window.confirm(`Cancel order #${order.id}?`)) void updateOrderStatus(order, 'cancelled');
+                  }}
+                  className="h-14 rounded-xl border-red-200 text-lg font-black text-red-600 hover:bg-red-50"
                 >
-                  <Printer className="w-4 h-4 mr-2" /> Reprint Copy
+                  Cancel
                 </Button>
-              </Card>
-            ))}
+              </div>
+            )}
+
+            {order.status === 'new' && acceptingOrder === order.id && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-lg">
+                <p className="mb-2 text-sm font-black text-slate-900">Select ready time</p>
+                <div className="grid grid-cols-5 gap-2">
+                  {TIME_OPTIONS.map((minutes) => (
+                    <button
+                      key={minutes}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTime(minutes);
+                        setCustomTime('');
+                      }}
+                      className={`rounded-xl py-2 text-sm font-black ${
+                        selectedTime === minutes && !customTime
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {minutes}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    value={customTime}
+                    onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
+                    inputMode="numeric"
+                    placeholder="Custom min"
+                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <Button
+                    onClick={() => {
+                      const minutes = Number(customTime || selectedTime);
+                      void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
+                    }}
+                    className="rounded-xl bg-emerald-600 font-black hover:bg-emerald-700"
+                  >
+                    Accept
+                  </Button>
+                  <Button variant="outline" onClick={() => setAcceptingOrder(null)} className="rounded-xl">Back</Button>
+                </div>
+              </div>
+            )}
+
+            {order.status === 'accepted' && (
+              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-14 w-full rounded-xl bg-amber-500 text-lg font-black hover:bg-amber-600">
+                Preparing
+              </Button>
+            )}
+
+            {order.status === 'preparing' && (
+              <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-14 w-full rounded-xl bg-emerald-600 text-lg font-black hover:bg-emerald-700">
+                {delivery ? 'Ready for delivery' : 'Ready for pickup'}
+              </Button>
+            )}
+
+            {order.status === 'ready' && delivery && (
+              <div className="rounded-xl bg-blue-50 px-4 py-3 text-center font-bold text-blue-700">
+                Waiting for rider pickup
+              </div>
+            )}
+
+            {order.status === 'ready' && !delivery && (
+              <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-14 w-full rounded-xl bg-slate-900 text-lg font-black hover:bg-slate-800">
+                Completed
+              </Button>
+            )}
           </div>
-        )}
-      </div>
-    );
-  }
-
-  function Column({
-    title,
-    count,
-    dotClass,
-    children,
-  }: {
-    title: string;
-    count: number;
-    dotClass: string;
-    emptyText?: string;
-    children: ReactNode;
-  }) {
-    if (count === 0) return null;
-
-    return (
-      <section className="space-y-2">
-        <div className="flex items-center gap-2 px-1">
-          <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
-          <h2 className="text-slate-900 font-black text-2xl tracking-tight">{title} ({count})</h2>
         </div>
-        <div className="space-y-2">{children}</div>
-      </section>
+      </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900">
+    <div className="min-h-screen bg-gray-950 px-3 py-3 text-white">
       <div className="max-w-4xl mx-auto">
         <header className="flex items-center justify-between gap-3 mb-4">
           <button
             type="button"
-            onClick={() => selectedOrder ? setSelectedOrder(null) : setDrawerOpen(true)}
-            className="p-2.5 rounded-xl bg-white text-slate-600 shadow-sm hover:bg-slate-50"
-            aria-label={selectedOrder ? 'Back to orders' : 'Open Kitchen menu'}
+            onClick={() => setDrawerOpen(true)}
+            className="p-2 rounded-lg text-gray-300 hover:bg-gray-900"
+            aria-label="Open Kitchen menu"
           >
-            {selectedOrder ? <X className="w-8 h-8" /> : <Menu className="w-8 h-8" />}
+            <Menu className="w-6 h-6" />
           </button>
 
           <div className="flex items-center gap-2">
@@ -1123,7 +1021,7 @@ export default function KitchenOrders() {
             <button
               type="button"
               onClick={() => setStatusDialogOpen(true)}
-              className={`h-11 rounded-full px-4 flex items-center gap-2 text-sm font-black ${
+              className={`h-10 rounded-full px-3 flex items-center gap-2 text-xs font-black ${
                 restaurantStatus === 'open'
                   ? 'bg-green-600/15 text-green-400'
                   : restaurantStatus === 'busy'
@@ -1147,37 +1045,37 @@ export default function KitchenOrders() {
         {viewMode === 'menu' ? (
           <KitchenMenuPanel embedded />
         ) : viewMode === 'live' ? (
-          selectedOrder ? (
-            <OrderDetail order={selectedOrder} />
-          ) : activeOrders.length === 0 ? (
-            <div className="min-h-[72vh] flex flex-col items-center justify-center text-center px-6">
-              <div className="w-28 h-28 rounded-[2rem] bg-white border border-slate-200 shadow-sm flex items-center justify-center mb-7">
-                <ChefHat className="w-14 h-14 text-violet-600" />
+          activeOrders.length === 0 ? (
+            <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-6">
+              <div className="w-24 h-24 rounded-3xl bg-gray-900 flex items-center justify-center mb-6">
+                <ChefHat className="w-12 h-12 text-gray-700" />
               </div>
-              <h1 className="text-slate-900 text-4xl md:text-5xl font-black">No active orders</h1>
-              <p className="text-slate-500 text-lg md:text-xl mt-4 max-w-lg">New orders will appear here automatically.</p>
+              <h1 className="text-white text-3xl font-black">No active orders</h1>
+              <p className="text-gray-500 text-base mt-3 max-w-sm">
+                New orders will appear here automatically.
+              </p>
             </div>
           ) : (
             <div className="space-y-5">
-              <Column title="New" count={newOrders.length} dotClass="bg-blue-500" emptyText="">
+              <Column title="NEW" count={newOrders.length} dotClass="bg-blue-500" emptyText="">
                 {newOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="new" />
                 ))}
               </Column>
 
-              <Column title="Accepted" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="">
+              <Column title="IN PROGRESS" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="">
                 {progressOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="progress" />
                 ))}
               </Column>
 
-              <Column title="Upcoming" count={readyPickupOrders.length} dotClass="bg-purple-500" emptyText="">
+              <Column title="READY - PICKUP" count={readyPickupOrders.length} dotClass="bg-purple-500" emptyText="">
                 {readyPickupOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="ready" />
                 ))}
               </Column>
 
-              <Column title="Upcoming Delivery" count={readyDeliveryOrders.length} dotClass="bg-blue-500" emptyText="">
+              <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-500" emptyText="">
                 {readyDeliveryOrders.map((order) => (
                   <OrderCard key={order.id} order={order} section="ready" />
                 ))}
@@ -1197,12 +1095,12 @@ export default function KitchenOrders() {
             onClick={() => setDrawerOpen(false)}
             aria-label="Close Kitchen menu"
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-white border-r border-slate-200 p-4 shadow-2xl">
+          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-gray-950 border-r border-gray-800 p-4 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <ChefHat className="w-6 h-6 text-orange-500" />
                 <div>
-                  <p className="text-slate-900 font-bold">Fai Fai Kitchen</p>
+                  <p className="text-white font-bold">Fai Fai Kitchen</p>
                   <p className="text-gray-500 text-xs">Orders & history</p>
                 </div>
               </div>
@@ -1229,15 +1127,15 @@ export default function KitchenOrders() {
                     }}
                     className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left ${
                       viewMode === item.key
-                        ? 'bg-orange-50 border-orange-200'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
+                        ? 'bg-orange-600/15 border-orange-600/40'
+                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
                     }`}
                   >
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
                       <Icon className="w-5 h-5 text-orange-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-slate-900 font-semibold text-sm">{item.label}</p>
+                      <p className="text-white font-semibold text-sm">{item.label}</p>
                       <p className="text-gray-500 text-xs">
                         {item.key === 'menu'
                           ? 'Available / Sold Out'
