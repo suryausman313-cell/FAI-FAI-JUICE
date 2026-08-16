@@ -1,7 +1,7 @@
 # @File: backend/routers/rider.py
 # @Desc: Rider panel API routes for delivery management
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Query, APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_
@@ -751,25 +751,40 @@ async def get_rider_stats(
         week_start = today_start - timedelta(days=now.weekday())
         month_start = today_start.replace(day=1)
 
-        # Get all delivered assignments for this rider
-        all_deliveries = await db.execute(
+        # Read all assignments once. We reconcile assignment status with the
+        # linked order status below so historical completed deliveries are not
+        # lost from Rider sales.
+        assignments_result = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.rider_id == rider_id,
-                Delivery_assignments.status == "delivered",
             )
         )
-        all_delivered = all_deliveries.scalars().all()
+        rider_assignments = assignments_result.scalars().all()
 
-        # Get pending (non-delivered) assignments
-        pending_result = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.rider_id == rider_id,
-                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
+        assignment_order_ids = list({a.order_id for a in rider_assignments})
+        orders_map = {}
+        if assignment_order_ids:
+            orders_result = await db.execute(
+                select(Orders).where(Orders.id.in_(assignment_order_ids))
             )
-        )
-        pending_assignments = pending_result.scalars().all()
+            orders_map = {o.id: o for o in orders_result.scalars().all()}
 
-        # Collect order IDs for delivered
+        all_delivered = [
+            a for a in rider_assignments
+            if str(a.status or "").lower().strip() == "delivered"
+            or (
+                orders_map.get(a.order_id) is not None
+                and str(orders_map[a.order_id].status or "").lower().strip() == "completed"
+                and is_delivery_order(orders_map[a.order_id])
+            )
+        ]
+        delivered_ids = {a.id for a in all_delivered}
+        pending_assignments = [
+            a for a in rider_assignments
+            if a.id not in delivered_ids
+            and str(a.status or "").lower().strip() in ("assigned", "accepted", "picked_up", "on_the_way")
+        ]
+
         delivered_order_ids = [a.order_id for a in all_delivered]
 
         # Get order details for earnings calculation
@@ -789,11 +804,6 @@ async def get_rider_stats(
         month_count = 0
 
         if delivered_order_ids:
-            orders_result = await db.execute(
-                select(Orders).where(Orders.id.in_(delivered_order_ids))
-            )
-            orders_map = {o.id: o for o in orders_result.scalars().all()}
-
             for assignment in all_delivered:
                 order = orders_map.get(assignment.order_id)
                 if not order:
@@ -802,7 +812,7 @@ async def get_rider_stats(
                 order_amount = order.total_amount or 0
                 total_earnings += order_amount
                 # Delivery charge earned = zone-based charge stored on assignment
-                assignment_delivery_charge = assignment.delivery_charge or 0
+                assignment_delivery_charge = float(assignment.delivery_charge or getattr(order, 'delivery_charge', 0) or 0)
                 delivery_charges_earned += assignment_delivery_charge
 
                 # Tips earned by rider
@@ -862,6 +872,9 @@ async def get_rider_stats(
 
 @router.get("/admin/reports")
 async def get_admin_rider_reports(
+    period: str = Query("today"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin gets complete report of all riders with stats"""
@@ -898,11 +911,90 @@ async def get_admin_rider_reports(
             microsecond=0,
         ).astimezone(timezone.utc)
 
+        def _uae_day_start(dt):
+            return dt.astimezone(timezone(timedelta(hours=4))).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).astimezone(timezone.utc)
+
+        period_key = str(period or "today").lower().strip()
+        period_start = None
+        period_end = None
+
+        if period_key == "today":
+            period_start = today_start
+            period_end = today_start + timedelta(days=1)
+        elif period_key == "yesterday":
+            period_start = today_start - timedelta(days=1)
+            period_end = today_start
+        elif period_key == "week":
+            period_start = today_start - timedelta(days=6)
+            period_end = today_start + timedelta(days=1)
+        elif period_key == "thirty_days":
+            period_start = today_start - timedelta(days=29)
+            period_end = today_start + timedelta(days=1)
+        elif period_key == "custom":
+            if not date_from or not date_to:
+                raise HTTPException(status_code=400, detail="date_from and date_to are required")
+            try:
+                start_local = datetime.fromisoformat(date_from).replace(
+                    tzinfo=timezone(timedelta(hours=4))
+                )
+                end_local = datetime.fromisoformat(date_to).replace(
+                    tzinfo=timezone(timedelta(hours=4))
+                )
+                period_start = start_local.astimezone(timezone.utc)
+                period_end = (end_local + timedelta(days=1)).astimezone(timezone.utc)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid custom date")
+        elif period_key == "all":
+            period_start = None
+            period_end = None
+        else:
+            raise HTTPException(status_code=400, detail="Invalid rider report period")
+
+        def in_selected_period(value):
+            if value is None:
+                return False
+            if hasattr(value, "tzinfo") and value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            if period_start is not None and value < period_start:
+                return False
+            if period_end is not None and value >= period_end:
+                return False
+            return True
+
         reports = []
         for rider in riders:
             rider_assignments = [a for a in all_assignments if a.rider_id == rider.id]
-            delivered = [a for a in rider_assignments if a.status == "delivered"]
-            pending = [a for a in rider_assignments if a.status in ("assigned", "accepted", "picked_up", "on_the_way")]
+
+            # A sale is final when the rider assignment is delivered OR the linked
+            # delivery order is already completed. The second condition repairs
+            # older/mismatched rows where order completion was saved but assignment
+            # status did not reach "delivered".
+            all_delivered = [
+                a for a in rider_assignments
+                if str(a.status or "").lower().strip() == "delivered"
+                or (
+                    orders_map.get(a.order_id) is not None
+                    and str(orders_map[a.order_id].status or "").lower().strip() == "completed"
+                    and is_delivery_order(orders_map[a.order_id])
+                )
+            ]
+
+            delivered = [
+                a for a in all_delivered
+                if in_selected_period(
+                    getattr(orders_map.get(a.order_id), "delivered_at", None)
+                    or a.updated_at
+                    or a.created_at
+                )
+            ]
+            delivered_ids = {a.id for a in all_delivered}
+            pending = [
+                a for a in rider_assignments
+                if a.id not in delivered_ids
+                and str(a.status or "").lower().strip() in ("assigned", "accepted", "picked_up", "on_the_way")
+            ]
 
             total_earnings = 0.0
             delivery_charges_earned = 0.0
@@ -917,19 +1009,14 @@ async def get_admin_rider_reports(
                     continue
                 amount = order.total_amount or 0
                 total_earnings += amount
-                delivery_charges_earned += (a.delivery_charge or 0)
+                delivery_charges_earned += float(a.delivery_charge or getattr(order, 'delivery_charge', 0) or 0)
                 if order.payment_method and "cash" in order.payment_method.lower():
                     cash_collected += amount
                 else:
                     card_orders += 1
-                # Today count
-                a_time = a.updated_at or a.created_at
-                if a_time:
-                    if hasattr(a_time, 'tzinfo') and a_time.tzinfo is None:
-                        a_time = a_time.replace(tzinfo=timezone.utc)
-                    if a_time >= today_start:
-                        today_count += 1
-                        today_order_value += amount
+                # Selected report period count/value
+                today_count += 1
+                today_order_value += amount
 
             rider_settlements = [
                 item for item in all_settlements if item.rider_id == rider.id
@@ -983,7 +1070,12 @@ async def get_admin_rider_reports(
                 "shift_end": rider.shift_end,
             })
 
-        return {"items": reports}
+        return {
+            "period": period_key,
+            "date_from": date_from,
+            "date_to": date_to,
+            "items": reports,
+        }
     except Exception as e:
         logging.error(f"Failed to get admin rider reports: {e}")
         raise HTTPException(status_code=500, detail=str(e))
