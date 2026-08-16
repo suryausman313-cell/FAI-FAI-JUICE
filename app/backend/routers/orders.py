@@ -137,73 +137,56 @@ async def place_order(
                             detail="Sorry, the restaurant is currently closed. Please try again during opening hours."
                         )
 
-        # ===== DELIVERY ZONE VALIDATION =====
-        if data.order_type == "delivery":
-            # GPS coordinates are MANDATORY for delivery orders
+        # ===== DELIVERY VALIDATION: BLOCKED AREA + ROAD DISTANCE + SERVER CHARGE =====
+        validated_delivery_charge = 0.0
+        validated_delivery_distance_km = None
+        validated_delivery_zone_name = ""
+        validated_delivery_area_name = ""
+        validated_delivery_country = ""
+
+        if str(data.order_type or "pickup").lower().strip() == "delivery":
             if data.customer_lat is None or data.customer_lng is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="Delivery location is required. Please select your location on the map."
+                    detail="Delivery location is required. Please select your location on the map.",
                 )
-            if True:  # Always validate when delivery
-                # Validate customer is within a delivery zone
-                from models.delivery_zones import Delivery_zones
-                zones_result = await db.execute(
-                    select(Delivery_zones).where(Delivery_zones.is_active == True)
+
+            from routers.delivery_zones import (
+                CalculateChargeRequest,
+                evaluate_delivery_location,
+                reverse_delivery_area_name,
+            )
+
+            rest_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
+            rest_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
+            delivery_result = await evaluate_delivery_location(
+                CalculateChargeRequest(
+                    customer_lat=float(data.customer_lat),
+                    customer_lng=float(data.customer_lng),
+                    restaurant_lat=rest_lat,
+                    restaurant_lng=rest_lng,
+                ),
+                db,
+            )
+            if not delivery_result.get("available"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=delivery_result.get("message") or "Delivery is not available at this location.",
                 )
-                zones = zones_result.scalars().all()
 
-                if zones:
-                    # Calculate distance from restaurant to customer
-                    import math
-                    rest_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
-                    rest_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
+            validated_delivery_charge = round(float(delivery_result.get("charge") or 0), 2)
+            validated_delivery_distance_km = delivery_result.get("distance_km")
+            validated_delivery_zone_name = str(delivery_result.get("zone_name") or "")
 
-                    def haversine_km(lat1, lon1, lat2, lon2):
-                        R = 6371
-                        dLat = math.radians(lat2 - lat1)
-                        dLon = math.radians(lon2 - lon1)
-                        a = math.sin(dLat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon / 2) ** 2
-                        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            # One reverse lookup per final order, cached/throttled on the backend.
+            location_info = await reverse_delivery_area_name(
+                float(data.customer_lat),
+                float(data.customer_lng),
+            )
+            validated_delivery_area_name = str(location_info.get("area_name") or "Unknown Area")
+            validated_delivery_country = str(location_info.get("country") or "")
 
-                    distance_km = haversine_km(rest_lat, rest_lng, data.customer_lat, data.customer_lng)
-
-                    # Check if customer is within any active zone
-                    # Sort zones by max_distance ascending for gap-tolerant matching
-                    sorted_zones = sorted(zones, key=lambda z: z.max_distance_km)
-                    matched_zone = None
-
-                    # First pass: exact range match
-                    for zone in sorted_zones:
-                        if zone.min_distance_km <= distance_km <= zone.max_distance_km:
-                            matched_zone = zone
-                            break
-
-                    # Second pass: gap-tolerant - find first zone whose max covers the distance
-                    if not matched_zone:
-                        for zone in sorted_zones:
-                            if distance_km <= zone.max_distance_km:
-                                matched_zone = zone
-                                break
-
-                    if not matched_zone:
-                        max_zone_km = max(z.max_distance_km for z in zones)
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Delivery not available in your area ({distance_km:.1f} km away). We deliver within {max_zone_km:.0f} km."
-                        )
-
-                    # Verify that the matched zone has a valid charge > 0
-                    matched_zone_charge = matched_zone.charge or 0
-                    if matched_zone_charge <= 0:
-                        logging.warning(
-                            f"Delivery order rejected - zone charge is 0 for user {guest_user_id}, "
-                            f"distance={distance_km:.2f}km"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Unable to calculate delivery charge for your location. Please contact us or try again."
-                        )
+        # ===== END DELIVERY VALIDATION =====
 
         # ===== MENU ITEM VALIDATION - Reject fake orders =====
         calculated_subtotal = 0.0
@@ -430,10 +413,12 @@ async def place_order(
 
         service_fee = round(max(0.0, float(data.service_fee or 0)), 2)
         small_order_fee = round(max(0.0, float(data.small_order_fee or 0)), 2)
-        delivery_charge = round(max(0.0, float(data.delivery_charge or 0)), 2)
+        delivery_charge = (
+            round(validated_delivery_charge, 2)
+            if normalized_order_type == "delivery"
+            else 0.0
+        )
         tip_amount = round(max(0.0, float(data.tip_amount or 0)), 2)
-        if normalized_order_type == "pickup":
-            delivery_charge = 0.0
 
         tax_percent = max(0.0, min(100.0, float(getattr(settings, "tax_percent", 0) or 0)))
         taxable_amount = max(0.0, subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge)
@@ -501,6 +486,10 @@ async def place_order(
             customer_lat=data.customer_lat if normalized_order_type == "delivery" else None,
             customer_lng=data.customer_lng if normalized_order_type == "delivery" else None,
             customer_address=(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
+            delivery_area_name=validated_delivery_area_name if normalized_order_type == "delivery" else "",
+            delivery_country=validated_delivery_country if normalized_order_type == "delivery" else "",
+            delivery_distance_km=validated_delivery_distance_km if normalized_order_type == "delivery" else None,
+            delivery_zone_name=validated_delivery_zone_name if normalized_order_type == "delivery" else "",
             status="new",
             total_amount=server_total,
             subtotal_amount=subtotal_amount,

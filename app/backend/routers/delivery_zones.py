@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import os
-from typing import List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -168,6 +170,133 @@ async def query_delivery_zoness_all(
     except Exception as e:
         logger.error(f"Error querying delivery_zoness: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+
+
+# ---------- Admin Area Search (full boundary) ----------
+_NOMINATIM_LOCK = asyncio.Lock()
+_NOMINATIM_LAST_REQUEST = 0.0
+_AREA_SEARCH_CACHE: Dict[str, list] = {}
+_REVERSE_AREA_CACHE: Dict[str, dict] = {}
+_NOMINATIM_USER_AGENT = "FaiFaiJuiceDeliveryAdmin/1.0 (Fujairah, UAE)"
+
+
+async def _nominatim_get(url: str, params: dict) -> Any:
+    """Public Nominatim: throttle to <=1 request/sec and identify the app."""
+    global _NOMINATIM_LAST_REQUEST
+    async with _NOMINATIM_LOCK:
+        wait_for = 1.05 - (time.monotonic() - _NOMINATIM_LAST_REQUEST)
+        if wait_for > 0:
+            await asyncio.sleep(wait_for)
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(
+                url,
+                params=params,
+                headers={"User-Agent": _NOMINATIM_USER_AGENT},
+            )
+            _NOMINATIM_LAST_REQUEST = time.monotonic()
+            response.raise_for_status()
+            return response.json()
+
+
+def _geometry_has_polygon(geometry: Any) -> bool:
+    return isinstance(geometry, dict) and geometry.get("type") in {"Polygon", "MultiPolygon"}
+
+
+@router.get("/area-search")
+async def search_delivery_block_area(q: str = Query(..., min_length=2, max_length=120)):
+    """Admin-only style helper: search a named place and return its full OSM boundary."""
+    query = q.strip()
+    cache_key = query.lower()
+    if cache_key in _AREA_SEARCH_CACHE:
+        return {"items": _AREA_SEARCH_CACHE[cache_key], "source": "cache"}
+
+    try:
+        body = await _nominatim_get(
+            "https://nominatim.openstreetmap.org/search",
+            {
+                "q": query,
+                "format": "jsonv2",
+                "addressdetails": 1,
+                "polygon_geojson": 1,
+                "polygon_threshold": 0.00015,
+                "limit": 6,
+            },
+        )
+        items = []
+        for result in body if isinstance(body, list) else []:
+            geometry = result.get("geojson")
+            if not _geometry_has_polygon(geometry):
+                continue
+            address = result.get("address") or {}
+            display_name = str(result.get("display_name") or "")
+            short_name = (
+                address.get("municipality")
+                or address.get("city")
+                or address.get("town")
+                or address.get("village")
+                or address.get("suburb")
+                or str(result.get("name") or "")
+                or display_name.split(",")[0]
+            )
+            bbox = result.get("boundingbox") or []
+            items.append({
+                "name": short_name,
+                "display_name": display_name,
+                "country": address.get("country") or "",
+                "country_code": address.get("country_code") or "",
+                "lat": float(result.get("lat") or 0),
+                "lng": float(result.get("lon") or 0),
+                "boundingbox": bbox,
+                "geometry": geometry,
+            })
+        _AREA_SEARCH_CACHE[cache_key] = items
+        return {"items": items, "source": "nominatim"}
+    except Exception as exc:
+        logger.warning("Area boundary search failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Area search is temporarily unavailable. Please try again.")
+
+
+async def reverse_delivery_area_name(lat: float, lng: float) -> dict:
+    """Resolve one order coordinate to a locality name for Sales by Location."""
+    cache_key = f"{round(lat, 4)}:{round(lng, 4)}"
+    if cache_key in _REVERSE_AREA_CACHE:
+        return _REVERSE_AREA_CACHE[cache_key]
+    try:
+        body = await _nominatim_get(
+            "https://nominatim.openstreetmap.org/reverse",
+            {
+                "lat": lat,
+                "lon": lng,
+                "format": "jsonv2",
+                "addressdetails": 1,
+                "zoom": 13,
+                "layer": "address",
+            },
+        )
+        address = body.get("address") or {} if isinstance(body, dict) else {}
+        area = (
+            address.get("suburb")
+            or address.get("neighbourhood")
+            or address.get("village")
+            or address.get("town")
+            or address.get("municipality")
+            or address.get("city_district")
+            or address.get("city")
+            or address.get("county")
+            or "Unknown Area"
+        )
+        result = {
+            "area_name": str(area),
+            "country": str(address.get("country") or ""),
+            "country_code": str(address.get("country_code") or ""),
+        }
+        _REVERSE_AREA_CACHE[cache_key] = result
+        return result
+    except Exception as exc:
+        logger.warning("Reverse area lookup failed: %s", exc)
+        return {"area_name": "Unknown Area", "country": "", "country_code": ""}
 
 
 @router.get("/{id}", response_model=Delivery_zonesResponse)
@@ -377,7 +506,7 @@ def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> fl
 
 
 def point_in_polygon(lat: float, lng: float, polygon: List[List[float]]) -> bool:
-    """Ray-casting point-in-polygon. Polygon points are [lat, lng]."""
+    """Ray-casting point-in-polygon. Points are [lat, lng]."""
     if len(polygon) < 3:
         return False
     inside = False
@@ -392,6 +521,34 @@ def point_in_polygon(lat: float, lng: float, polygon: List[List[float]]) -> bool
             inside = not inside
         j = i
     return inside
+
+
+def _geojson_ring_to_latlng(ring: list) -> List[List[float]]:
+    # GeoJSON is [lng, lat]; internal point checker is [lat, lng].
+    return [[float(point[1]), float(point[0])] for point in ring if isinstance(point, list) and len(point) >= 2]
+
+
+def point_in_saved_geometry(lat: float, lng: float, raw_value: str) -> bool:
+    """Support both old manual [[lat,lng], ...] and GeoJSON Polygon/MultiPolygon."""
+    try:
+        value = json.loads(raw_value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return False
+
+    if isinstance(value, list):
+        return point_in_polygon(lat, lng, value)
+    if not isinstance(value, dict):
+        return False
+
+    geometry_type = value.get("type")
+    coordinates = value.get("coordinates") or []
+    if geometry_type == "Polygon":
+        return any(point_in_polygon(lat, lng, _geojson_ring_to_latlng(ring)) for ring in coordinates[:1])
+    if geometry_type == "MultiPolygon":
+        for polygon in coordinates:
+            if polygon and point_in_polygon(lat, lng, _geojson_ring_to_latlng(polygon[0])):
+                return True
+    return False
 
 
 async def google_routes_distance_km(
@@ -500,103 +657,79 @@ async def get_road_distance_km(data: CalculateChargeRequest) -> Tuple[float, str
     )
 
 
+async def evaluate_delivery_location(data: CalculateChargeRequest, db: AsyncSession) -> dict:
+    """Server source of truth: blocked area -> road distance -> matching charge slab."""
+    service = Delivery_zonesService(db)
+
+    blocked_result = await service.get_list(
+        skip=0, limit=200, query_dict={"is_active": True, "zone_type": "blocked"}, sort="zone_name"
+    )
+    for area in blocked_result.get("items", []):
+        raw_polygon = getattr(area, "polygon_json", "") or ""
+        if point_in_saved_geometry(data.customer_lat, data.customer_lng, raw_polygon):
+            return {
+                "distance_km": None, "charge": 0, "zone_name": None, "available": False,
+                "blocked": True, "blocked_area": getattr(area, "zone_name", "Blocked Area"),
+                "distance_source": None,
+                "message": f"Delivery is not available in {getattr(area, 'zone_name', 'this area')}. Please choose another location or Pickup.",
+            }
+
+    distance, distance_source = await get_road_distance_km(data)
+    result = await service.get_list(
+        skip=0, limit=100, query_dict={"is_active": True, "zone_type": "distance"}, sort="min_distance_km"
+    )
+    zones = result.get("items", [])
+    if not zones:
+        return {
+            "distance_km": round(distance, 2), "charge": 0, "zone_name": None, "available": False,
+            "blocked": False, "blocked_area": None, "distance_source": distance_source,
+            "message": "No delivery distance charges are configured.",
+        }
+
+    sorted_zones = sorted(zones, key=lambda zone: float(getattr(zone, "max_distance_km", 0) or 0))
+    matched_zone = None
+    for zone in sorted_zones:
+        min_km = float(getattr(zone, "min_distance_km", 0) or 0)
+        max_km = float(getattr(zone, "max_distance_km", 0) or 0)
+        if min_km <= distance <= max_km:
+            matched_zone = zone
+            break
+    if matched_zone is None:
+        # tolerate a tiny admin gap by selecting the next slab that covers the road distance
+        for zone in sorted_zones:
+            if distance <= float(getattr(zone, "max_distance_km", 0) or 0):
+                matched_zone = zone
+                break
+
+    if matched_zone is not None:
+        charge = float(getattr(matched_zone, "charge", 0) or 0)
+        if charge <= 0:
+            return {
+                "distance_km": round(distance, 2), "charge": 0, "zone_name": getattr(matched_zone, "zone_name", ""),
+                "available": False, "blocked": False, "blocked_area": None, "distance_source": distance_source,
+                "message": "Delivery charge for this road-distance slab is not configured.",
+            }
+        return {
+            "distance_km": round(distance, 2), "charge": charge,
+            "zone_name": getattr(matched_zone, "zone_name", ""), "available": True,
+            "blocked": False, "blocked_area": None, "distance_source": distance_source, "message": None,
+        }
+
+    max_distance = max(float(getattr(zone, "max_distance_km", 0) or 0) for zone in sorted_zones)
+    return {
+        "distance_km": round(distance, 2), "charge": 0, "zone_name": None, "available": False,
+        "blocked": False, "blocked_area": None, "distance_source": distance_source,
+        "message": f"Delivery is not available this far. Maximum road distance is {max_distance:g} km.",
+    }
+
+
 @router.post("/calculate")
 async def calculate_delivery_charge(
     data: CalculateChargeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Blocked-area first, then actual road-distance zone pricing."""
     try:
-        service = Delivery_zonesService(db)
-
-        # 1) BLOCKED AREA CHECK FIRST. Distance never overrides a blocked polygon.
-        blocked_result = await service.get_list(
-            skip=0,
-            limit=200,
-            query_dict={"is_active": True, "zone_type": "blocked"},
-            sort="zone_name",
-        )
-        for area in blocked_result.get("items", []):
-            raw_polygon = getattr(area, "polygon_json", "") or ""
-            try:
-                polygon = json.loads(raw_polygon)
-            except (TypeError, json.JSONDecodeError):
-                polygon = []
-            if point_in_polygon(data.customer_lat, data.customer_lng, polygon):
-                return {
-                    "distance_km": None,
-                    "charge": 0,
-                    "zone_name": None,
-                    "available": False,
-                    "blocked": True,
-                    "blocked_area": getattr(area, "zone_name", "Blocked Area"),
-                    "distance_source": None,
-                    "message": f"Delivery is not available in {getattr(area, 'zone_name', 'this area')}. Please choose another location or Pickup.",
-                }
-
-        # 2) ACTUAL DRIVING/ROAD DISTANCE.
-        distance, distance_source = await get_road_distance_km(data)
-
-        # 3) ACTIVE DISTANCE ZONES. Last max km becomes maximum delivery range.
-        result = await service.get_list(
-            skip=0,
-            limit=100,
-            query_dict={"is_active": True, "zone_type": "distance"},
-            sort="min_distance_km",
-        )
-        zones = result.get("items", [])
-
-        if not zones:
-            return {
-                "distance_km": round(distance, 2),
-                "charge": 0,
-                "zone_name": None,
-                "available": False,
-                "blocked": False,
-                "distance_source": distance_source,
-                "message": "No delivery distance zones are configured.",
-            }
-
-        sorted_zones = sorted(zones, key=lambda zone: float(getattr(zone, "max_distance_km", 0) or 0))
-        matched_zone = None
-        for zone in sorted_zones:
-            min_km = float(getattr(zone, "min_distance_km", 0) or 0)
-            max_km = float(getattr(zone, "max_distance_km", 0) or 0)
-            if min_km <= distance <= max_km:
-                matched_zone = zone
-                break
-
-        # If Admin leaves a tiny gap between slabs, use the next zone that covers it.
-        if matched_zone is None:
-            for zone in sorted_zones:
-                if distance <= float(getattr(zone, "max_distance_km", 0) or 0):
-                    matched_zone = zone
-                    break
-
-        if matched_zone is not None:
-            return {
-                "distance_km": round(distance, 2),
-                "charge": float(getattr(matched_zone, "charge", 0) or 0),
-                "zone_name": getattr(matched_zone, "zone_name", ""),
-                "available": True,
-                "blocked": False,
-                "blocked_area": None,
-                "distance_source": distance_source,
-                "message": None,
-            }
-
-        max_distance = max(float(getattr(zone, "max_distance_km", 0) or 0) for zone in sorted_zones)
-        return {
-            "distance_km": round(distance, 2),
-            "charge": 0,
-            "zone_name": None,
-            "available": False,
-            "blocked": False,
-            "blocked_area": None,
-            "distance_source": distance_source,
-            "message": f"Delivery is not available this far. Maximum road distance is {max_distance:g} km.",
-        }
-
+        return await evaluate_delivery_location(data, db)
     except HTTPException:
         raise
     except Exception as exc:
