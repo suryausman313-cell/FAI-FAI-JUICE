@@ -35,127 +35,6 @@ async def check_database_health() -> bool:
         return False
 
 
-async def ensure_customer_push_columns() -> None:
-    """Upgrade an existing customer push table to the current schema."""
-
-    if not db_manager.async_session_maker:
-        raise RuntimeError("Database session is not initialized")
-
-    statements = [
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS customer_account_id INTEGER DEFAULT 0
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS customer_phone_key VARCHAR(30) DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(50) DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ALTER COLUMN customer_phone SET DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ALTER COLUMN customer_phone DROP NOT NULL
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS endpoint TEXT DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS p256dh TEXT DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS auth TEXT DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS user_agent TEXT DEFAULT ''
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
-        """,
-        """
-        ALTER TABLE customer_push_subscriptions
-        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS
-        ix_customer_push_subscriptions_customer_account_id
-        ON customer_push_subscriptions (customer_account_id)
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS
-        ix_customer_push_subscriptions_customer_phone_key
-        ON customer_push_subscriptions (customer_phone_key)
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS
-        ix_customer_push_subscriptions_endpoint
-        ON customer_push_subscriptions (endpoint)
-        """,
-    ]
-
-    try:
-        async with db_manager.async_session_maker() as session:
-            for statement in statements:
-                await session.execute(text(statement))
-
-            await session.execute(
-                text(
-                    """
-                    UPDATE customer_push_subscriptions
-                    SET
-                        customer_account_id =
-                            COALESCE(customer_account_id, 0),
-                        customer_phone_key =
-                            COALESCE(
-                                NULLIF(customer_phone_key, ''),
-                                REGEXP_REPLACE(
-                                    COALESCE(customer_phone, ''),
-                                    '[^0-9]',
-                                    '',
-                                    'g'
-                                ),
-                                ''
-                            ),
-                        customer_phone =
-                            COALESCE(customer_phone, ''),
-                        endpoint = COALESCE(endpoint, ''),
-                        p256dh = COALESCE(p256dh, ''),
-                        auth = COALESCE(auth, ''),
-                        is_active = COALESCE(is_active, TRUE),
-                        user_agent = COALESCE(user_agent, ''),
-                        created_at = COALESCE(created_at, NOW()),
-                        updated_at = COALESCE(updated_at, NOW())
-                    """
-                )
-            )
-
-            await session.commit()
-
-        logger.info(
-            "Customer push subscription database columns checked successfully"
-        )
-
-    except Exception:
-        logger.exception(
-            "Failed to prepare customer push subscription database columns"
-        )
-        raise
-
-
 async def ensure_offer_discount_columns() -> None:
     """Add discount fields to the existing offers table safely."""
 
@@ -409,6 +288,23 @@ async def ensure_admin_alarm_columns() -> None:
     logger.info("Admin-controlled alarm columns checked successfully")
 
 
+async def ensure_delivery_zone_area_columns() -> None:
+    """Add blocked-area polygon fields to delivery_zones safely."""
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+    statements = [
+        "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS zone_type VARCHAR(20) NOT NULL DEFAULT 'distance'",
+        "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS polygon_json TEXT DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_delivery_zones_zone_type ON delivery_zones (zone_type)",
+    ]
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.execute(text("UPDATE delivery_zones SET zone_type='distance' WHERE zone_type IS NULL OR zone_type=''"))
+        await session.commit()
+    logger.info("Delivery zone blocked-area columns checked successfully")
+
+
 async def initialize_database():
     """Initialize database, create tables and prepare required columns."""
 
@@ -433,9 +329,6 @@ async def initialize_database():
 
         logger.info("🔧 Table creation completed")
 
-        await ensure_customer_push_columns()
-        logger.info("V9 customer push schema migration completed")
-
         await ensure_offer_discount_columns()
         await ensure_order_discount_columns()
         logger.info("V6 schema migration 1/3: checking menu columns...")
@@ -452,6 +345,9 @@ async def initialize_database():
 
         await ensure_admin_alarm_columns()
         logger.info("V8 Admin alarm schema migration completed")
+
+        await ensure_delivery_zone_area_columns()
+        logger.info("V9 delivery blocked-area schema migration completed")
 
         logger.info("V7 database schema migration completed successfully")
         logger.info("Database initialized successfully")
