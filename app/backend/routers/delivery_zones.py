@@ -1,6 +1,9 @@
 import json
 import logging
-from typing import List, Optional
+import os
+from typing import List, Optional, Tuple
+
+import httpx
 
 from datetime import datetime, date
 
@@ -25,6 +28,8 @@ class Delivery_zonesData(BaseModel):
     max_distance_km: float
     charge: float
     is_active: bool = None
+    zone_type: str = 'distance'
+    polygon_json: Optional[str] = ''
 
 
 class Delivery_zonesUpdateData(BaseModel):
@@ -34,6 +39,8 @@ class Delivery_zonesUpdateData(BaseModel):
     max_distance_km: Optional[float] = None
     charge: Optional[float] = None
     is_active: Optional[bool] = None
+    zone_type: Optional[str] = None
+    polygon_json: Optional[str] = None
 
 
 class Delivery_zonesResponse(BaseModel):
@@ -44,6 +51,8 @@ class Delivery_zonesResponse(BaseModel):
     max_distance_km: float
     charge: float
     is_active: Optional[bool] = None
+    zone_type: str = 'distance'
+    polygon_json: Optional[str] = ''
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -340,7 +349,7 @@ async def delete_delivery_zones(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-# ---------- Custom Zone Calculation Endpoint ----------
+# ---------- Road Distance + Blocked Area Calculation ----------
 import math
 from sqlalchemy import select
 from models.delivery_zones import Delivery_zones
@@ -354,13 +363,141 @@ class CalculateChargeRequest(BaseModel):
 
 
 def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    """Calculate distance in km between two points using Haversine formula"""
-    R = 6371
+    """Straight-line fallback for diagnostics only."""
+    radius_km = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlng = math.radians(lng2 - lng1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlng / 2) ** 2
+    )
+    return radius_km * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
+
+def point_in_polygon(lat: float, lng: float, polygon: List[List[float]]) -> bool:
+    """Ray-casting point-in-polygon. Polygon points are [lat, lng]."""
+    if len(polygon) < 3:
+        return False
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        yi, xi = float(polygon[i][0]), float(polygon[i][1])
+        yj, xj = float(polygon[j][0]), float(polygon[j][1])
+        crosses = ((yi > lat) != (yj > lat)) and (
+            lng < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi
+        )
+        if crosses:
+            inside = not inside
+        j = i
+    return inside
+
+
+async def google_routes_distance_km(
+    restaurant_lat: float,
+    restaurant_lng: float,
+    customer_lat: float,
+    customer_lng: float,
+) -> Optional[float]:
+    api_key = os.getenv("GOOGLE_MAPS_ROUTES_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    payload = {
+        "origin": {
+            "location": {
+                "latLng": {
+                    "latitude": restaurant_lat,
+                    "longitude": restaurant_lng,
+                }
+            }
+        },
+        "destination": {
+            "location": {
+                "latLng": {
+                    "latitude": customer_lat,
+                    "longitude": customer_lng,
+                }
+            }
+        },
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_UNAWARE",
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": "routes.distanceMeters,routes.duration",
+    }
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        response = await client.post(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        body = response.json()
+    routes = body.get("routes") or []
+    if not routes:
+        return None
+    meters = routes[0].get("distanceMeters")
+    return (float(meters) / 1000.0) if meters is not None else None
+
+
+async def osrm_distance_km(
+    restaurant_lat: float,
+    restaurant_lng: float,
+    customer_lat: float,
+    customer_lng: float,
+) -> Optional[float]:
+    """Free fallback for testing. Production should set GOOGLE_MAPS_ROUTES_API_KEY."""
+    url = (
+        "https://router.project-osrm.org/route/v1/driving/"
+        f"{restaurant_lng},{restaurant_lat};{customer_lng},{customer_lat}"
+        "?overview=false&alternatives=false&steps=false"
+    )
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        body = response.json()
+    routes = body.get("routes") or []
+    if not routes:
+        return None
+    meters = routes[0].get("distance")
+    return (float(meters) / 1000.0) if meters is not None else None
+
+
+async def get_road_distance_km(data: CalculateChargeRequest) -> Tuple[float, str]:
+    # Preferred: Google Routes (production).
+    try:
+        distance = await google_routes_distance_km(
+            data.restaurant_lat,
+            data.restaurant_lng,
+            data.customer_lat,
+            data.customer_lng,
+        )
+        if distance is not None:
+            return distance, "google_routes"
+    except Exception as exc:
+        logger.warning("Google Routes distance failed: %s", exc)
+
+    # Free fallback keeps development/testing usable without a key.
+    try:
+        distance = await osrm_distance_km(
+            data.restaurant_lat,
+            data.restaurant_lng,
+            data.customer_lat,
+            data.customer_lng,
+        )
+        if distance is not None:
+            return distance, "osrm"
+    except Exception as exc:
+        logger.warning("OSRM road distance failed: %s", exc)
+
+    raise HTTPException(
+        status_code=503,
+        detail="Road distance service is temporarily unavailable. Please try again.",
+    )
 
 
 @router.post("/calculate")
@@ -368,81 +505,100 @@ async def calculate_delivery_charge(
     data: CalculateChargeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Calculate delivery charge based on customer location and configured zones.
-    Returns the zone-based charge which equals rider earnings."""
+    """Blocked-area first, then actual road-distance zone pricing."""
     try:
-        distance = haversine_distance(
-            data.restaurant_lat, data.restaurant_lng,
-            data.customer_lat, data.customer_lng
-        )
-
-        # Get active zones ordered by min_distance
         service = Delivery_zonesService(db)
+
+        # 1) BLOCKED AREA CHECK FIRST. Distance never overrides a blocked polygon.
+        blocked_result = await service.get_list(
+            skip=0,
+            limit=200,
+            query_dict={"is_active": True, "zone_type": "blocked"},
+            sort="zone_name",
+        )
+        for area in blocked_result.get("items", []):
+            raw_polygon = getattr(area, "polygon_json", "") or ""
+            try:
+                polygon = json.loads(raw_polygon)
+            except (TypeError, json.JSONDecodeError):
+                polygon = []
+            if point_in_polygon(data.customer_lat, data.customer_lng, polygon):
+                return {
+                    "distance_km": None,
+                    "charge": 0,
+                    "zone_name": None,
+                    "available": False,
+                    "blocked": True,
+                    "blocked_area": getattr(area, "zone_name", "Blocked Area"),
+                    "distance_source": None,
+                    "message": f"Delivery is not available in {getattr(area, 'zone_name', 'this area')}. Please choose another location or Pickup.",
+                }
+
+        # 2) ACTUAL DRIVING/ROAD DISTANCE.
+        distance, distance_source = await get_road_distance_km(data)
+
+        # 3) ACTIVE DISTANCE ZONES. Last max km becomes maximum delivery range.
         result = await service.get_list(
-            skip=0, limit=100,
-            query_dict={"is_active": True},
-            sort="min_distance_km"
+            skip=0,
+            limit=100,
+            query_dict={"is_active": True, "zone_type": "distance"},
+            sort="min_distance_km",
         )
         zones = result.get("items", [])
 
         if not zones:
-            # No zones configured - use legacy near/far from restaurant_settings
             return {
                 "distance_km": round(distance, 2),
                 "charge": 0,
-                "zone_name": "No zones configured",
-                "available": True,
+                "zone_name": None,
+                "available": False,
+                "blocked": False,
+                "distance_source": distance_source,
+                "message": "No delivery distance zones are configured.",
             }
 
-        # Helper to extract zone attributes (works with ORM objects and dicts)
-        def get_zone_attr(zone, attr, default=0):
-            return getattr(zone, attr, None) if hasattr(zone, attr) else zone.get(attr, default)
-
-        # Sort zones by max_distance_km ascending to find the first zone that covers the customer
-        sorted_zones = sorted(zones, key=lambda z: get_zone_attr(z, 'max_distance_km', 0))
-
-        # Find matching zone: customer is within a zone if distance <= zone's max_distance_km
-        # AND distance >= zone's min_distance_km. But to handle gaps between zones,
-        # we use a more forgiving approach: find the zone where distance falls within [min, max]
-        # OR if there's a gap, assign to the nearest zone that covers the distance.
+        sorted_zones = sorted(zones, key=lambda zone: float(getattr(zone, "max_distance_km", 0) or 0))
         matched_zone = None
         for zone in sorted_zones:
-            min_d = get_zone_attr(zone, 'min_distance_km', 0)
-            max_d = get_zone_attr(zone, 'max_distance_km', 0)
-            if min_d <= distance <= max_d:
+            min_km = float(getattr(zone, "min_distance_km", 0) or 0)
+            max_km = float(getattr(zone, "max_distance_km", 0) or 0)
+            if min_km <= distance <= max_km:
                 matched_zone = zone
                 break
 
-        # If no exact match, check if customer falls in a gap between zones
-        # In that case, assign to the zone whose max_distance covers the customer
-        if not matched_zone:
+        # If Admin leaves a tiny gap between slabs, use the next zone that covers it.
+        if matched_zone is None:
             for zone in sorted_zones:
-                max_d = get_zone_attr(zone, 'max_distance_km', 0)
-                if distance <= max_d:
+                if distance <= float(getattr(zone, "max_distance_km", 0) or 0):
                     matched_zone = zone
                     break
 
-        if matched_zone:
-            charge = get_zone_attr(matched_zone, 'charge', 0)
-            name = get_zone_attr(matched_zone, 'zone_name', '')
+        if matched_zone is not None:
             return {
                 "distance_km": round(distance, 2),
-                "charge": charge,
-                "zone_name": name,
+                "charge": float(getattr(matched_zone, "charge", 0) or 0),
+                "zone_name": getattr(matched_zone, "zone_name", ""),
                 "available": True,
+                "blocked": False,
+                "blocked_area": None,
+                "distance_source": distance_source,
+                "message": None,
             }
 
-        # Beyond all zones - delivery not available
-        max_zone = sorted_zones[-1] if sorted_zones else None
-        max_d = get_zone_attr(max_zone, 'max_distance_km', 0) if max_zone else 0
-
+        max_distance = max(float(getattr(zone, "max_distance_km", 0) or 0) for zone in sorted_zones)
         return {
             "distance_km": round(distance, 2),
             "charge": 0,
             "zone_name": None,
             "available": False,
-            "message": f"Delivery not available beyond {max_d} km (you are {round(distance, 1)} km away)",
+            "blocked": False,
+            "blocked_area": None,
+            "distance_source": distance_source,
+            "message": f"Delivery is not available this far. Maximum road distance is {max_distance:g} km.",
         }
-    except Exception as e:
-        logger.error(f"Failed to calculate delivery charge: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to calculate delivery charge: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not calculate delivery charge")
