@@ -167,6 +167,16 @@ class Orders(Base):
         nullable=False,
     )
 
+
+    # Operational timing for Kitchen / Rider performance reports.
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    promised_ready_at = Column(DateTime(timezone=True), nullable=True)
+    preparing_at = Column(DateTime(timezone=True), nullable=True)
+    ready_at = Column(DateTime(timezone=True), nullable=True)
+    rider_picked_up_at = Column(DateTime(timezone=True), nullable=True)
+    promised_delivery_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
