@@ -216,6 +216,10 @@ async def ensure_order_delivery_columns() -> None:
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lat DOUBLE PRECISION",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lng DOUBLE PRECISION",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_area_name VARCHAR(160) DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_country VARCHAR(120) DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_distance_km DOUBLE PRECISION",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_zone_name VARCHAR(100) DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount DOUBLE PRECISION DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS ix_orders_order_type ON orders (order_type)",
     ]
