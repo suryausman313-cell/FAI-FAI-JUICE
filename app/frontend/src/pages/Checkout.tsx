@@ -51,6 +51,16 @@ function formatScheduleTime(value: string): string {
   return `${displayHours}:${String(minutes).padStart(2, '0')} ${suffix}`;
 }
 
+
+type SavedLocation = {
+  id: number;
+  label: string;
+  address_text: string;
+  area_name: string;
+  latitude: number;
+  longitude: number;
+};
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -66,6 +76,11 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
+  const [savedLocationsLoading, setSavedLocationsLoading] = useState(false);
+  const [saveLocationForNextTime, setSaveLocationForNextTime] = useState(false);
+  const [saveLocationLabel, setSaveLocationLabel] = useState('Home');
+  const [savingLocation, setSavingLocation] = useState(false);
 
   // Field-level validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -142,7 +157,10 @@ export default function Checkout() {
     setCart(getCart());
     loadDeliverySettings();
     loadActivePromoOffers();
-  }, []);
+    if (isLoggedIn) {
+      void loadSavedLocations();
+    }
+  }, [isLoggedIn]);
 
   const deliveryAvailableNow = deliveryEnabled && (
     !deliveryScheduleEnabled ||
@@ -281,6 +299,124 @@ export default function Checkout() {
 
     mapInstanceRef.current = map;
     markerRef.current = marker;
+  }
+
+  function customerAuthHeaders() {
+    const token = localStorage.getItem('vita_customer_token') || '';
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  async function loadSavedLocations() {
+    if (!localStorage.getItem('vita_customer_token')) {
+      setSavedLocations([]);
+      return;
+    }
+
+    setSavedLocationsLoading(true);
+    try {
+      const response = await axios.get(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations`,
+        { headers: customerAuthHeaders(), timeout: 15000 },
+      );
+      setSavedLocations(Array.isArray(response?.data?.items) ? response.data.items : []);
+    } catch {
+      // Saved locations are optional and must never block checkout.
+      setSavedLocations([]);
+    } finally {
+      setSavedLocationsLoading(false);
+    }
+  }
+
+  async function useSavedLocation(location: SavedLocation) {
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+
+    setCustomerLat(lat);
+    setCustomerLng(lng);
+    setDeliveryAddress(location.address_text || '');
+    setLocationShared(true);
+
+    if (markerRef.current) {
+      markerRef.current.setLatLng([lat, lng]);
+    }
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView([lat, lng], 15);
+    }
+
+    // Important: never reuse an old delivery fee. Recalculate current blocked
+    // area, road distance and delivery fee from the backend every time.
+    await handleLocationSelected(lat, lng);
+    toast.success(`${location.label} selected`);
+  }
+
+  async function deleteSavedLocation(locationId: number) {
+    try {
+      await axios.delete(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations/${locationId}`,
+        { headers: customerAuthHeaders(), timeout: 15000 },
+      );
+      setSavedLocations(prev => prev.filter(item => item.id !== locationId));
+      toast.success('Saved location deleted');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || 'Could not delete saved location');
+    }
+  }
+
+  async function renameSavedLocation(location: SavedLocation) {
+    const current = location.label || 'Saved Location';
+    const nextLabel = window.prompt('Location name', current)?.trim();
+    if (!nextLabel || nextLabel === current) return;
+
+    try {
+      const response = await axios.patch(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations/${location.id}`,
+        { label: nextLabel },
+        { headers: customerAuthHeaders(), timeout: 15000 },
+      );
+      setSavedLocations(prev =>
+        prev.map(item => item.id === location.id ? response.data : item),
+      );
+      toast.success('Location name updated');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || 'Could not update saved location');
+    }
+  }
+
+  async function saveSelectedLocationIfRequested() {
+    if (
+      !saveLocationForNextTime ||
+      orderType !== 'delivery' ||
+      customerLat === null ||
+      customerLng === null ||
+      !localStorage.getItem('vita_customer_token')
+    ) {
+      return;
+    }
+
+    setSavingLocation(true);
+    try {
+      const response = await axios.post(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations`,
+        {
+          label: saveLocationLabel.trim() || 'Saved Location',
+          address_text: deliveryAddress.trim(),
+          area_name: zoneName || '',
+          latitude: customerLat,
+          longitude: customerLng,
+        },
+        { headers: customerAuthHeaders(), timeout: 15000 },
+      );
+
+      setSavedLocations(prev => [response.data, ...prev].slice(0, 10));
+      setSaveLocationForNextTime(false);
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.detail ||
+        'Order was placed, but this location could not be saved.';
+      toast.warning(message);
+    } finally {
+      setSavingLocation(false);
+    }
   }
 
   async function handleLocationSelected(lat: number, lng: number) {
@@ -1018,6 +1154,76 @@ export default function Checkout() {
             {/* Delivery Map Location */}
             {orderType === 'delivery' && (
               <>
+                {isLoggedIn && (
+                  <div className="rounded-xl border border-gray-700 bg-gray-900/70 p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <div>
+                        <p className="text-white text-sm font-semibold">Saved Locations</p>
+                        <p className="text-gray-500 text-xs">Choose one or use a new pin below · max 10</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadSavedLocations()}
+                        className="text-xs text-blue-400 hover:text-blue-300"
+                      >
+                        Refresh
+                      </button>
+                    </div>
+
+                    {savedLocationsLoading ? (
+                      <p className="text-gray-500 text-xs">Loading saved locations...</p>
+                    ) : savedLocations.length === 0 ? (
+                      <p className="text-gray-500 text-xs">No saved locations yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {savedLocations.map(location => (
+                          <div
+                            key={location.id}
+                            className="rounded-lg border border-gray-700 bg-black/40 p-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void useSavedLocation(location)}
+                                className="text-left flex-1"
+                              >
+                                <p className="text-white text-sm font-medium">📍 {location.label}</p>
+                                <p className="text-gray-500 text-xs mt-1">
+                                  {location.address_text || location.area_name || 'Saved delivery pin'}
+                                </p>
+                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void renameSavedLocation(location)}
+                                  className="text-xs text-blue-400 hover:text-blue-300"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteSavedLocation(location.id)}
+                                  className="text-xs text-red-400 hover:text-red-300"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => void useSavedLocation(location)}
+                              className="mt-2 w-full bg-gray-800 hover:bg-gray-700 text-white"
+                            >
+                              Use this location
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div id="delivery-map">
                   <Label className="text-gray-300 mb-2 block">Select Delivery Location *</Label>
                   <div className="flex items-center gap-2 mb-2">
@@ -1139,6 +1345,55 @@ export default function Checkout() {
                   )}
                   {showErrors && errors.location && !deliveryZoneError && (
                     <p className="text-red-400 text-xs mt-2">⚠️ {errors.location}</p>
+                  )}
+                  {locationShared && !deliveryZoneError && isLoggedIn && (
+                    <div className="mt-3 rounded-lg border border-gray-700 bg-gray-900 p-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={saveLocationForNextTime}
+                          onChange={e => setSaveLocationForNextTime(e.target.checked)}
+                          disabled={savedLocations.length >= 10}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-white text-sm">Save this location for next time</span>
+                      </label>
+
+                      {savedLocations.length >= 10 && (
+                        <p className="text-yellow-400 text-xs mt-2">
+                          You already have 10 saved locations. Delete one to save another.
+                        </p>
+                      )}
+
+                      {saveLocationForNextTime && savedLocations.length < 10 && (
+                        <div className="mt-3">
+                          <Label className="text-gray-400 text-xs">Location name</Label>
+                          <div className="grid grid-cols-3 gap-2 mt-2">
+                            {['Home', 'Work', 'Other'].map(label => (
+                              <button
+                                key={label}
+                                type="button"
+                                onClick={() => setSaveLocationLabel(label)}
+                                className={`rounded-lg border px-3 py-2 text-xs ${
+                                  saveLocationLabel === label
+                                    ? 'border-blue-500 bg-blue-500/10 text-blue-300'
+                                    : 'border-gray-700 text-gray-400'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <Input
+                            value={saveLocationLabel}
+                            onChange={e => setSaveLocationLabel(e.target.value)}
+                            maxLength={60}
+                            placeholder="e.g. Home, Work, Sister Home"
+                            className="bg-black border-gray-700 text-white mt-2"
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
                 <div>
