@@ -1,7 +1,7 @@
 # @File: backend/routers/rider.py
 # @Desc: Rider panel API routes for delivery management
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_
@@ -13,21 +13,12 @@ from models.riders import Riders
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
-from routers.finance import (
-    CashSubmissionCreate as FinanceCashSubmissionCreate,
-    PeriodName as FinancePeriodName,
-    get_rider_finance_summary as _finance_rider_summary,
-    get_rider_cash_submissions as _finance_rider_cash_submissions,
-    submit_rider_cash as _finance_submit_rider_cash,
-)
+from services.customer_push_service import notify_customer_order_update_safely
 from services.rider_assignment import (
     auto_assign_order,
     auto_assign_unassigned_orders,
     get_auto_assign_enabled,
     set_auto_assign_enabled,
-    get_restaurant_location,
-    haversine_km,
-    rider_live_status,
 )
 
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
@@ -45,24 +36,6 @@ def is_delivery_order(order: Orders) -> bool:
         or "cash on delivery" in payment
         or "card on delivery" in payment
     )
-
-
-def require_live_rider(rider: Riders) -> dict:
-    """Reject manual assignment to offline riders or riders with stale/missing GPS."""
-    live = rider_live_status(rider)
-    if live["eligible_for_assignment"]:
-        return live
-
-    reason = live.get("reason")
-    if reason == "offline":
-        detail = "Rider is offline. Rider app must stay signed in."
-    elif reason == "gps_missing":
-        detail = "Rider GPS is unavailable. Enable location permission in Rider app."
-    elif reason == "gps_outdated":
-        detail = "Rider GPS location is outdated. Wait for a fresh location update."
-    else:
-        detail = "Rider is inactive or unavailable."
-    raise HTTPException(status_code=400, detail=detail)
 
 
 class RiderLoginRequest(BaseModel):
@@ -208,7 +181,6 @@ async def get_rider_deliveries(
                 "zone_name": a.zone_name,
                 "tip_amount": (order.tip_amount or 0) if order and hasattr(order, 'tip_amount') and order.tip_type == 'rider' else 0,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
-                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
             })
 
         return {"items": items}
@@ -340,6 +312,23 @@ async def update_delivery_status(
         await db.refresh(assignment)
         await db.refresh(order)
 
+        rider_result = await db.execute(select(Riders).where(Riders.id == assignment.rider_id))
+        rider_for_push = rider_result.scalar_one_or_none()
+        if new_status != "rejected":
+            event_name = {
+                "accepted": "rider_accepted",
+                "picked_up": "picked_up",
+                "on_the_way": "on_the_way",
+                "delivered": "delivered",
+            }.get(new_status)
+            if event_name:
+                await notify_customer_order_update_safely(
+                    db,
+                    order,
+                    event_name,
+                    rider_name=rider_for_push.name if rider_for_push else "",
+                )
+
         auto_reassigned = None
         if new_status == "rejected":
             try:
@@ -423,8 +412,10 @@ async def assign_delivery(
     data: AssignDeliveryRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin assigns only an online rider with fresh GPS."""
+    """Admin assigns a delivery order to a rider"""
     try:
+        # Idempotent assignment: if an active assignment already exists,
+        # return it instead of creating a duplicate or showing a confusing error.
         existing_result = await db.execute(
             select(Delivery_assignments, Riders)
             .join(Riders, Riders.id == Delivery_assignments.rider_id)
@@ -454,7 +445,9 @@ async def assign_delivery(
                 },
             }
 
-        order_result = await db.execute(select(Orders).where(Orders.id == data.order_id))
+        order_result = await db.execute(
+            select(Orders).where(Orders.id == data.order_id)
+        )
         order = order_result.scalar_one_or_none()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
@@ -473,20 +466,6 @@ async def assign_delivery(
         if not rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        live = require_live_rider(rider)
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        if shop_lat is None or shop_lng is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Shop GPS is missing. Save restaurant latitude and longitude first.",
-            )
-        pickup_distance = haversine_km(
-            float(live["lat"]),
-            float(live["lng"]),
-            shop_lat,
-            shop_lng,
-        )
-
         assignment = Delivery_assignments(
             order_id=data.order_id,
             rider_id=data.rider_id,
@@ -497,12 +476,18 @@ async def assign_delivery(
             customer_name=data.customer_name or "",
             customer_phone=data.customer_phone or "",
             delivery_charge=data.delivery_charge or 0,
-            distance_km=round(pickup_distance, 2),
-            zone_name=data.zone_name or "Manual Assign",
+            distance_km=data.distance_km,
+            zone_name=data.zone_name,
         )
         db.add(assignment)
         await db.commit()
         await db.refresh(assignment)
+        await notify_customer_order_update_safely(
+            db,
+            order,
+            "rider_assigned",
+            rider_name=rider.name,
+        )
         return {
             "success": True,
             "already_assigned": False,
@@ -514,7 +499,6 @@ async def assign_delivery(
                 "rider_name": rider.name,
                 "rider_phone": rider.phone,
                 "status": assignment.status or "assigned",
-                "distance_to_shop_km": round(pickup_distance, 2),
                 "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
                 "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
             },
@@ -602,93 +586,40 @@ async def update_rider_location(
 async def get_rider_locations(
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin gets every active rider with strict live status and shop distance."""
+    """Admin gets all active riders with their current locations"""
     try:
-        result = await db.execute(select(Riders).where(Riders.is_active == True))
+        result = await db.execute(
+            select(Riders).where(Riders.is_active == True)
+        )
         riders = result.scalars().all()
 
+        # Also get active delivery counts per rider
+        from sqlalchemy import func
         delivery_counts = {}
         count_result = await db.execute(
             select(
                 Delivery_assignments.rider_id,
-                func.count(Delivery_assignments.id).label("count"),
-            )
-            .where(
-                Delivery_assignments.status.in_(
-                    ["assigned", "accepted", "picked_up", "on_the_way"]
-                )
-            )
-            .group_by(Delivery_assignments.rider_id)
+                func.count(Delivery_assignments.id).label("count")
+            ).where(
+                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"])
+            ).group_by(Delivery_assignments.rider_id)
         )
         for row in count_result:
-            delivery_counts[int(row[0])] = int(row[1])
+            delivery_counts[row[0]] = row[1]
 
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        now = datetime.now(timezone.utc)
         items = []
-
-        for rider in riders:
-            live = rider_live_status(rider, now)
-            distance_to_shop = None
-            if (
-                live["has_gps"]
-                and shop_lat is not None
-                and shop_lng is not None
-            ):
-                distance_to_shop = haversine_km(
-                    float(live["lat"]),
-                    float(live["lng"]),
-                    shop_lat,
-                    shop_lng,
-                )
-
+        for r in riders:
             items.append({
-                "id": rider.id,
-                "name": rider.name,
-                "phone": rider.phone,
-                "is_active": rider.is_active,
-                "is_online": live["is_online"],
-                "has_gps": live["has_gps"],
-                "gps_fresh": live["gps_fresh"],
-                "eligible_for_assignment": live["eligible_for_assignment"],
-                "availability_reason": live["reason"],
-                "current_lat": live["lat"],
-                "current_lng": live["lng"],
-                "last_heartbeat": (
-                    rider.last_heartbeat.isoformat()
-                    if getattr(rider, "last_heartbeat", None)
-                    else None
-                ),
-                "location_updated_at": (
-                    rider.location_updated_at.isoformat()
-                    if rider.location_updated_at
-                    else None
-                ),
-                "heartbeat_age_seconds": live["heartbeat_age_seconds"],
-                "location_age_seconds": live["location_age_seconds"],
-                "active_deliveries": delivery_counts.get(rider.id, 0),
-                "distance_to_shop_km": (
-                    round(distance_to_shop, 2)
-                    if distance_to_shop is not None
-                    else None
-                ),
-                "shop_lat": shop_lat,
-                "shop_lng": shop_lng,
+                "id": r.id,
+                "name": r.name,
+                "phone": r.phone,
+                "is_active": r.is_active,
+                "current_lat": r.current_lat,
+                "current_lng": r.current_lng,
+                "location_updated_at": r.location_updated_at.isoformat() if r.location_updated_at else None,
+                "active_deliveries": delivery_counts.get(r.id, 0),
             })
-
-        # Available nearest riders first; offline/stale riders remain visible below.
-        items.sort(key=lambda item: (
-            not item["eligible_for_assignment"],
-            item["distance_to_shop_km"] if item["distance_to_shop_km"] is not None else float("inf"),
-            item["active_deliveries"],
-            item["id"],
-        ))
-        return {
-            "items": items,
-            "shop_lat": shop_lat,
-            "shop_lng": shop_lng,
-            "eligible_count": sum(1 for item in items if item["eligible_for_assignment"]),
-        }
+        return {"items": items}
     except Exception as e:
         logging.error(f"Failed to get rider locations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -923,55 +854,6 @@ async def get_rider_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
-# ===================== RIDER FINANCE (RIDER-SAFE PATH) =====================
-# The Admin finance URLs live under /api/v1/finance and may require Admin auth.
-# Rider app uses these /api/v1/rider/finance/... wrappers instead, while keeping
-# the exact same finance calculations and cash-approval records.
-
-@router.get("/finance/{rider_id}/summary")
-async def get_rider_finance_summary_safe(
-    rider_id: int,
-    period: FinancePeriodName = Query(default="today"),
-    date_from: Optional[str] = Query(default=None),
-    date_to: Optional[str] = Query(default=None),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _finance_rider_summary(
-        rider_id=rider_id,
-        period=period,
-        date_from=date_from,
-        date_to=date_to,
-        db=db,
-    )
-
-
-@router.get("/finance/{rider_id}/cash-submissions")
-async def get_rider_cash_submissions_safe(
-    rider_id: int,
-    limit: int = Query(default=100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _finance_rider_cash_submissions(
-        rider_id=rider_id,
-        limit=limit,
-        db=db,
-    )
-
-
-@router.post("/finance/{rider_id}/cash-submissions", status_code=201)
-async def submit_rider_cash_safe(
-    rider_id: int,
-    data: FinanceCashSubmissionCreate,
-    db: AsyncSession = Depends(get_db),
-):
-    return await _finance_submit_rider_cash(
-        rider_id=rider_id,
-        data=data,
-        db=db,
-    )
-
-
 # ===================== ADMIN RIDER REPORTS =====================
 
 @router.get("/admin/reports")
@@ -1058,9 +940,7 @@ async def get_admin_rider_reports(
                 for item in rider_settlements
                 if item.status == "pending"
             )
-            # Delivery charge belongs to the rider and is not cash owed to the shop.
-            cash_due_to_shop = max(cash_collected - delivery_charges_earned, 0.0)
-            cash_pending = max(cash_due_to_shop - approved_cash, 0.0)
+            cash_pending = max(cash_collected - approved_cash, 0.0)
 
             # Determine online status based on heartbeat (60s threshold) or location update (2 min threshold)
             is_online = False
@@ -1088,7 +968,6 @@ async def get_admin_rider_reports(
                 "total_earnings": round(total_earnings, 2),
                 "delivery_charges_earned": round(delivery_charges_earned, 2),
                 "cash_collected": round(cash_collected, 2),
-                "cash_due_to_shop": round(cash_due_to_shop, 2),
                 "approved_cash": round(approved_cash, 2),
                 "awaiting_approval": round(awaiting_approval, 2),
                 "cash_pending": round(cash_pending, 2),
@@ -1118,12 +997,10 @@ async def reassign_delivery(
     data: ReassignDeliveryRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin reassigns only to an online rider with fresh GPS."""
+    """Admin reassigns a delivery to a different rider"""
     try:
         result = await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.id == data.assignment_id
-            )
+            select(Delivery_assignments).where(Delivery_assignments.id == data.assignment_id)
         )
         assignment = result.scalar_one_or_none()
         if not assignment:
@@ -1131,42 +1008,18 @@ async def reassign_delivery(
         if assignment.status == "delivered":
             raise HTTPException(status_code=400, detail="Cannot reassign delivered order")
 
+        # Verify new rider exists and is active
         rider_result = await db.execute(
-            select(Riders).where(
-                Riders.id == data.new_rider_id,
-                Riders.is_active == True,
-            )
+            select(Riders).where(Riders.id == data.new_rider_id, Riders.is_active == True)
         )
         new_rider = rider_result.scalar_one_or_none()
         if not new_rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        live = require_live_rider(new_rider)
-        shop_lat, shop_lng = await get_restaurant_location(db)
-        if shop_lat is None or shop_lng is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Shop GPS is missing. Save restaurant latitude and longitude first.",
-            )
-
         assignment.rider_id = data.new_rider_id
         assignment.status = "assigned"
-        assignment.distance_km = round(
-            haversine_km(
-                float(live["lat"]),
-                float(live["lng"]),
-                shop_lat,
-                shop_lng,
-            ),
-            2,
-        )
         await db.commit()
-        return {
-            "success": True,
-            "new_rider_name": new_rider.name,
-            "new_rider_phone": new_rider.phone,
-            "distance_to_shop_km": assignment.distance_km,
-        }
+        return {"success": True, "new_rider_name": new_rider.name}
     except HTTPException:
         raise
     except Exception as e:
@@ -1182,8 +1035,9 @@ async def get_delivery_eta(
     order_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Customer gets ETA, assigned rider WhatsApp and only fresh live GPS."""
+    """Customer gets ETA for their delivery order"""
     try:
+        # Find assignment for this order
         result = await db.execute(
             select(Delivery_assignments)
             .where(
@@ -1196,6 +1050,7 @@ async def get_delivery_eta(
         assignment = result.scalar_one_or_none()
 
         if not assignment:
+            # Check if delivered
             delivered_result = await db.execute(
                 select(Delivery_assignments).where(
                     Delivery_assignments.order_id == order_id,
@@ -1203,58 +1058,47 @@ async def get_delivery_eta(
                 )
             )
             if delivered_result.scalar_one_or_none():
-                return {
-                    "status": "delivered",
-                    "eta_minutes": 0,
-                    "eta_seconds": 0,
-                    "rider_name": None,
-                }
-            return {
-                "status": "no_rider",
-                "eta_minutes": None,
-                "eta_seconds": None,
-                "rider_name": None,
-            }
+                return {"status": "delivered", "eta_minutes": 0, "rider_name": None}
+            return {"status": "no_rider", "eta_minutes": None, "rider_name": None}
 
         order_result = await db.execute(select(Orders).where(Orders.id == order_id))
         order = order_result.scalar_one_or_none()
 
+        # Get rider info
         rider_result = await db.execute(
             select(Riders).where(Riders.id == assignment.rider_id)
         )
         rider = rider_result.scalar_one_or_none()
-        live = rider_live_status(rider) if rider else {
-            "is_online": False,
-            "gps_fresh": False,
-            "location_age_seconds": None,
-            "lat": None,
-            "lng": None,
-        }
 
+        # Live GPS ETA. Kitchen preparation time is included until the order is Ready;
+        # after pickup the estimate is rider-to-customer only.
         import math
 
         eta_seconds = None
         distance_km = None
         if (
             rider
-            and live["gps_fresh"]
+            and rider.current_lat is not None
+            and rider.current_lng is not None
             and assignment.customer_lat is not None
             and assignment.customer_lng is not None
         ):
-            distance_km = haversine_km(
-                float(live["lat"]),
-                float(live["lng"]),
-                float(assignment.customer_lat),
-                float(assignment.customer_lng),
-            )
-            eta_seconds = max(
-                3 * 60,
-                min(90 * 60, int((distance_km / 30) * 3600) + 2 * 60),
-            )
+            lat1, lng1 = math.radians(float(rider.current_lat)), math.radians(float(rider.current_lng))
+            lat2, lng2 = math.radians(float(assignment.customer_lat)), math.radians(float(assignment.customer_lng))
+            dlat = lat2 - lat1
+            dlng = lng2 - lng1
+            a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng/2)**2
+            c = 2 * math.asin(math.sqrt(a))
+            distance_km = 6371 * c
+
+            # Fujairah city delivery estimate: live road-speed approximation plus
+            # a small stop/parking buffer. It is recalculated on every poll.
+            eta_seconds = max(3 * 60, min(90 * 60, int((distance_km / 30) * 3600) + 2 * 60))
 
         normalized_status = str(assignment.status or "assigned").lower()
         order_status = str(getattr(order, "status", "") or "").lower()
 
+        # Before Ready, add the remaining Kitchen countdown to the delivery ETA.
         if order and order_status not in ("ready", "out_for_delivery", "completed"):
             raw_ready_time = str(getattr(order, "pickup_time", "") or "")
             label, separator, deadline_text = raw_ready_time.partition("|")
@@ -1293,23 +1137,19 @@ async def get_delivery_eta(
             if eta_seconds is None
             else (0 if eta_seconds == 0 else max(1, math.ceil(eta_seconds / 60)))
         )
+        calculated_at = datetime.now(timezone.utc).isoformat()
 
-        location_is_fresh = bool(rider and live["gps_fresh"])
         return {
             "status": assignment.status,
             "eta_minutes": eta_minutes,
             "eta_seconds": eta_seconds,
-            "calculated_at": datetime.now(timezone.utc).isoformat(),
+            "calculated_at": calculated_at,
             "distance_km": round(distance_km, 2) if distance_km is not None else None,
-            "gps_available": location_is_fresh,
+            "gps_available": distance_km is not None,
             "rider_name": rider.name if rider else None,
             "rider_phone": rider.phone if rider else None,
-            # Never label an old coordinate as live.
-            "rider_lat": live["lat"] if location_is_fresh else None,
-            "rider_lng": live["lng"] if location_is_fresh else None,
-            "rider_is_online": bool(rider and live["is_online"]),
-            "rider_location_is_fresh": location_is_fresh,
-            "rider_location_age_seconds": live.get("location_age_seconds"),
+            "rider_lat": rider.current_lat if rider else None,
+            "rider_lng": rider.current_lng if rider else None,
             "rider_location_updated_at": (
                 rider.location_updated_at.isoformat()
                 if rider and rider.location_updated_at

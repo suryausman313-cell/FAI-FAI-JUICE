@@ -14,7 +14,7 @@ from routers.customer_auth import decode_customer_token, get_bearer_token
 from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
 from models.orders import Orders
 from models.customer_sessions import Customer_sessions
-from services.customer_push_service import notify_customer_order_ready_safely
+from services.customer_push_service import notify_customer_order_update_safely
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -243,8 +243,7 @@ async def update_kitchen_order_status(
         await db.commit()
         await db.refresh(order)
 
-        if new_status == "ready":
-            await notify_customer_order_ready_safely(db, order)
+        await notify_customer_order_update_safely(db, order, new_status)
 
         return {
             "success": True,

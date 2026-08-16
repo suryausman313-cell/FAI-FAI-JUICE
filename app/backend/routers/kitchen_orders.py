@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
-from services.customer_push_service import notify_customer_order_ready_safely
+from services.customer_push_service import notify_customer_order_update_safely
 
 logger = logging.getLogger(__name__)
 
@@ -208,8 +208,7 @@ async def update_kitchen_order_status(
         logger.exception("Kitchen could not update order %s status", order_id)
         raise HTTPException(status_code=500, detail="Could not update order status") from exc
 
-    if new_status == "ready":
-        await notify_customer_order_ready_safely(db, order)
+    await notify_customer_order_update_safely(db, order, new_status)
 
     return {
         "success": True,
