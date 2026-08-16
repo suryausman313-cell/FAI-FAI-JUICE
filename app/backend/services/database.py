@@ -344,6 +344,29 @@ async def ensure_customer_saved_locations_table() -> None:
     logger.info("Customer saved locations table checked successfully")
 
 
+
+async def ensure_order_timing_columns() -> None:
+    """Persist Kitchen/Rider timing so Admin can report early/late performance."""
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+
+    statements = [
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS promised_ready_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparing_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_picked_up_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS promised_delivery_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ",
+    ]
+
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.commit()
+
+    logger.info("Order timing columns checked successfully")
+
 async def initialize_database():
     """Initialize database, create tables and prepare required columns."""
 
@@ -390,6 +413,7 @@ async def initialize_database():
         logger.info("V9 delivery blocked-area schema migration completed")
 
         logger.info("V7 database schema migration completed successfully")
+        await ensure_order_timing_columns()
         logger.info("Database initialized successfully")
         logger.debug(
             "[DB_OP] Database initialization completed in "
