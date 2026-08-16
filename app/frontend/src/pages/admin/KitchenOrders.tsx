@@ -1,4 +1,3 @@
-// FINAL ADMIN-ASSIGNED RIDER FLOW
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
@@ -6,13 +5,14 @@ import {
   Bike,
   Check,
   ChefHat,
-  Clock,
-  LogOut,
-  Menu,
-  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
   History,
   LayoutGrid,
-  ChevronRight,
+  LogOut,
+  Menu,
+  PackageCheck,
   Printer,
   RefreshCw,
   Store,
@@ -32,8 +32,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { getAPIBaseURL } from '@/lib/config';
-import { Order } from '@/lib/api';
-import ReadyTimeCountdown, { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
+import type { Order } from '@/lib/api';
+import { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
 import KitchenMenuPanel from './KitchenMenuPanel';
 
 declare global {
@@ -82,6 +82,7 @@ type AssignmentInfo = {
 };
 
 type RestaurantStatus = 'open' | 'busy' | 'closed';
+type ViewMode = 'live' | 'today' | 'yesterday' | 'menu';
 
 type ParsedItem = {
   name: string;
@@ -94,11 +95,7 @@ type ParsedItem = {
 
 const TIME_OPTIONS = [10, 15, 20, 30, 45];
 const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
-const DELIVERY_PENDING_STATUSES = new Set([
-  'out_for_delivery',
-  'picked_up',
-  'on_the_way',
-]);
+const DELIVERY_PENDING_STATUSES = new Set(['out_for_delivery', 'picked_up', 'on_the_way']);
 
 function money(value: unknown): string {
   const amount = Number(value);
@@ -137,18 +134,10 @@ function normalizeOrder(raw: any): KitchenOrder {
 }
 
 function extractOrders(payload: any): KitchenOrder[] {
-  const possible = [
-    payload,
-    payload?.items,
-    payload?.data,
-    payload?.data?.items,
-  ].find(Array.isArray);
-
+  const possible = [payload, payload?.items, payload?.data, payload?.data?.items].find(Array.isArray);
   if (!Array.isArray(possible)) return [];
 
-  return possible
-    .map(normalizeOrder)
-    .filter((order) => order.id > 0);
+  return possible.map(normalizeOrder).filter((order) => order.id > 0);
 }
 
 function parseItems(itemsJson: unknown): ParsedItem[] {
@@ -159,9 +148,9 @@ function parseItems(itemsJson: unknown): ParsedItem[] {
     return parsed.map((item: any) => {
       let extras: string[] = [];
       if (Array.isArray(item?.extras)) {
-        extras = item.extras.map((extra: any) =>
-          typeof extra === 'string' ? extra : String(extra?.name || '')
-        ).filter(Boolean);
+        extras = item.extras
+          .map((extra: any) => (typeof extra === 'string' ? extra : String(extra?.name || '')))
+          .filter(Boolean);
       } else if (typeof item?.extras === 'string' && item.extras.trim()) {
         extras = item.extras.split(',').map((extra: string) => extra.trim()).filter(Boolean);
       }
@@ -194,6 +183,30 @@ function formatUaeTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function getCountdownMinutes(order: KitchenOrder): number | null {
+  if (!order.estimated_time) return null;
+  const eta = new Date(order.estimated_time).getTime();
+  if (!Number.isFinite(eta)) return null;
+  return Math.max(0, Math.ceil((eta - Date.now()) / 60000));
+}
+
+function getElapsedMinutes(value: string): number {
+  const created = new Date(value).getTime();
+  if (!Number.isFinite(created)) return 0;
+  return Math.max(0, Math.floor((Date.now() - created) / 60000));
+}
+
+function totalItems(order: KitchenOrder): number {
+  return parseItems(order.items_json).reduce((sum, item) => sum + item.quantity, 0);
+}
+
+function paymentLabel(order: KitchenOrder): string {
+  const raw = String(order.payment_method || 'Cash').toLowerCase();
+  if (raw.includes('cash')) return 'Cash on delivery';
+  if (raw.includes('card')) return 'Card';
+  return String(order.payment_method || 'Cash');
 }
 
 class KitchenAlarm {
@@ -256,32 +269,123 @@ class KitchenAlarm {
   stop() {
     if (this.intervalId) clearInterval(this.intervalId);
     this.intervalId = null;
+    try {
+      window.VitaPrinter?.stopOrderAlarm?.();
+    } catch {
+      // ignore native stop failures
+    }
   }
 }
 
 const kitchenAlarm = new KitchenAlarm();
 
-function OrderTimer({ createdAt }: { createdAt: string }) {
-  const [elapsed, setElapsed] = useState('0:00');
+function TimerCircle({ order }: { order: KitchenOrder }) {
+  const [, setTick] = useState(0);
 
   useEffect(() => {
-    const update = () => {
-      const created = new Date(createdAt).getTime();
-      if (!Number.isFinite(created)) {
-        setElapsed('0:00');
-        return;
-      }
-      const seconds = Math.max(0, Math.floor((Date.now() - created) / 1000));
-      const minutes = Math.floor(seconds / 60);
-      setElapsed(`${minutes}:${String(seconds % 60).padStart(2, '0')}`);
-    };
-
-    update();
-    const timer = setInterval(update, 1000);
+    const timer = setInterval(() => setTick((value) => value + 1), 30000);
     return () => clearInterval(timer);
-  }, [createdAt]);
+  }, []);
 
-  return <span className="text-orange-400 text-xs font-mono font-bold">{elapsed}</span>;
+  const countdown = getCountdownMinutes(order);
+  const value = countdown !== null ? countdown : getElapsedMinutes(order.created_at);
+  const label = countdown !== null ? 'mins' : 'min';
+
+  return (
+    <div className="w-16 h-16 rounded-full border-[3px] border-emerald-500 flex flex-col items-center justify-center text-emerald-700 bg-emerald-50 shrink-0">
+      <span className="text-2xl leading-none font-black">{value}</span>
+      <span className="text-[10px] uppercase tracking-wide font-semibold">{label}</span>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-1 items-center justify-center py-20">
+      <div className="text-center">
+        <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-slate-100 text-slate-500">
+          <ChefHat className="h-10 w-10" />
+        </div>
+        <h2 className="text-4xl font-black text-slate-900">No active orders</h2>
+        <p className="mt-3 text-lg text-slate-500">New orders will appear here automatically.</p>
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: RestaurantStatus }) {
+  const styles =
+    status === 'open'
+      ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+      : status === 'busy'
+        ? 'bg-amber-100 text-amber-700 border-amber-200'
+        : 'bg-red-100 text-red-700 border-red-200';
+
+  return <span className={`rounded-full border px-3 py-1 text-sm font-bold ${styles}`}>{status.toUpperCase()}</span>;
+}
+
+function SectionTitle({ title, count }: { title: string; count: number }) {
+  return (
+    <div className="mb-3 flex items-center justify-between">
+      <h2 className="text-[2.1rem] font-black tracking-tight text-slate-900">{title} <span className="text-orange-500">{count}</span></h2>
+    </div>
+  );
+}
+
+function BoardSection({ title, orders, emptyText, onOpen }: {
+  title: string;
+  orders: KitchenOrder[];
+  emptyText: string;
+  onOpen: (orderId: number) => void;
+}) {
+  return (
+    <section className="mb-7">
+      <SectionTitle title={title} count={orders.length} />
+      {orders.length === 0 ? (
+        <div className="rounded-3xl border border-slate-200 bg-white px-5 py-8 text-lg text-slate-400 shadow-sm">{emptyText}</div>
+      ) : (
+        <div className="space-y-4">
+          {orders.map((order) => (
+            <button
+              key={order.id}
+              type="button"
+              onClick={() => onOpen(order.id)}
+              className="block w-full rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-slate-300 hover:shadow-md"
+            >
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-3">
+                    <h3 className="text-5xl font-black tracking-tight text-slate-900">#{order.id}</h3>
+                    <Badge className={isDeliveryOrder(order)
+                      ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
+                      : 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'}>
+                      {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-lg text-slate-500">{order.customer_phone || order.customer_name} · {totalItems(order)} item{totalItems(order) === 1 ? '' : 's'}</p>
+                  <p className="mt-3 text-xl font-medium text-slate-700">
+                    {isDeliveryOrder(order)
+                      ? (order.status === 'ready' ? 'Waiting rider pickup' : 'Rider is on the way')
+                      : order.status === 'ready' ? 'Ready for pickup' : 'Kitchen in progress'}
+                  </p>
+                </div>
+                <TimerCircle order={order} />
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Line({ label, value, valueClassName = 'text-slate-700' }: { label: string; value: ReactNode; valueClassName?: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-xl">
+      <span className="text-slate-500">{label}</span>
+      <span className={`text-right font-semibold ${valueClassName}`}>{value}</span>
+    </div>
+  );
 }
 
 export default function KitchenOrders() {
@@ -290,19 +394,14 @@ export default function KitchenOrders() {
   const [pin, setPin] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [acceptingOrder, setAcceptingOrder] = useState<number | null>(null);
   const [selectedTime, setSelectedTime] = useState(20);
   const [customTime, setCustomTime] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
-  const [viewMode, setViewMode] = useState<'live' | 'today' | 'yesterday' | 'menu'>('live');
+  const [viewMode, setViewMode] = useState<ViewMode>('live');
   const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatus>('open');
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [savingRestaurantStatus, setSavingRestaurantStatus] = useState(false);
-  // Browser-generated tone is intentionally disabled.
-  // The Android KitchenOrderService is the single alarm source and plays only
-  // the ringtone selected by Admin.
-  const soundEnabled = false;
+  const [soundEnabled] = useState(() => localStorage.getItem('kitchen_sound') !== 'off');
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>({
     printer_ip: '192.168.70.125',
     printer_port: 9100,
@@ -311,79 +410,54 @@ export default function KitchenOrders() {
     restaurant_name: 'Fai Fai Juice',
   });
   const [assignments, setAssignments] = useState<Record<number, AssignmentInfo>>({});
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
   const loadInProgressRef = useRef(false);
 
-  const kitchenPin = useCallback(
-    () => localStorage.getItem('kitchen_pin') || '',
-    []
-  );
+  const kitchenPin = useCallback(() => localStorage.getItem('kitchen_pin') || '', []);
 
   const kitchenHeaders = useCallback(
     () => ({
       'Content-Type': 'application/json',
       'X-Kitchen-Pin': kitchenPin(),
     }),
-    [kitchenPin]
+    [kitchenPin],
   );
 
   const loadReceiptSettings = useCallback(async () => {
     try {
-      const response = await axios.get(
-        `${getAPIBaseURL()}/api/v1/receipt-settings`,
-        { timeout: 12000 }
-      );
+      const response = await axios.get(`${getAPIBaseURL()}/api/v1/receipt-settings`, { timeout: 12000 });
       if (response.data && typeof response.data === 'object') {
         setReceiptSettings((current) => ({ ...current, ...response.data }));
       }
     } catch {
-      // Defaults remain available; receipt settings failure must never blank Kitchen.
+      // keep defaults
     }
   }, []);
 
   const loadRestaurantStatus = useCallback(async () => {
     try {
-      const response = await axios.get(
-        `${getAPIBaseURL()}/api/v1/entities/restaurant_settings`,
-        { params: { limit: 1, sort: '-id' }, timeout: 12000 },
-      );
+      const response = await axios.get(`${getAPIBaseURL()}/api/v1/entities/restaurant_settings`, {
+        params: { limit: 1, sort: '-id' },
+        timeout: 12000,
+      });
       const settings = response.data?.items?.[0];
       if (!settings) return;
       const nextStatus = String(settings.restaurant_status || 'open').toLowerCase();
-      setRestaurantStatus(
-        nextStatus === 'busy' || nextStatus === 'closed' ? nextStatus : 'open',
-      );
+      setRestaurantStatus(nextStatus === 'busy' || nextStatus === 'closed' ? nextStatus : 'open');
     } catch (error) {
       console.error('Restaurant status loading failed:', error);
     }
   }, []);
 
-  async function updateRestaurantStatus(nextStatus: RestaurantStatus) {
-    setSavingRestaurantStatus(true);
-    try {
-      await axios.put(
-        `${getAPIBaseURL()}/api/v1/kitchen/restaurant-status`,
-        { status: nextStatus },
-        { headers: kitchenHeaders(), timeout: 15000 },
-      );
-      setRestaurantStatus(nextStatus);
-      setStatusDialogOpen(false);
-      toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
-    } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Shop status could not be saved.');
-    } finally {
-      setSavingRestaurantStatus(false);
-    }
-  }
-
   const loadRiderData = useCallback(async () => {
     try {
-      const assignmentsResponse = await axios.get(
-        `${getAPIBaseURL()}/api/v1/rider/admin/assignments`,
-        { headers: kitchenHeaders(), timeout: 12000 },
-      );
+      const assignmentsResponse = await axios.get(`${getAPIBaseURL()}/api/v1/rider/admin/assignments`, {
+        headers: kitchenHeaders(),
+        timeout: 12000,
+      });
       const map: Record<number, AssignmentInfo> = {};
       for (const assignment of assignmentsResponse.data?.items || []) {
         const orderId = Number(assignment?.order_id || 0);
@@ -401,31 +475,28 @@ export default function KitchenOrders() {
     setRefreshing(true);
 
     try {
-      const response = await axios.get(
-        `${getAPIBaseURL()}/api/v1/admin/kitchen/orders`,
-        {
-          headers: kitchenHeaders(),
-          params: { limit: 300 },
-          timeout: 15000,
-        }
-      );
+      const response = await axios.get(`${getAPIBaseURL()}/api/v1/admin/kitchen/orders`, {
+        headers: kitchenHeaders(),
+        params: { limit: 300 },
+        timeout: 15000,
+      });
 
       const nextOrders = extractOrders(response.data);
-      const currentNewIds = new Set(
-        nextOrders.filter((order) => order.status === 'new').map((order) => order.id)
-      );
+      const currentNewIds = new Set(nextOrders.filter((order) => order.status === 'new').map((order) => order.id));
 
       if (!firstLoadRef.current) {
-        const newIds = [...currentNewIds].filter(
-          (orderId) => !previousNewIdsRef.current.has(orderId)
-        );
+        const newIds = [...currentNewIds].filter((orderId) => !previousNewIdsRef.current.has(orderId));
         if (newIds.length > 0) {
           toast.success(`${newIds.length} new order${newIds.length > 1 ? 's' : ''} received`);
+          if (soundEnabled) kitchenAlarm.start();
         }
       }
 
-      // Do not play any browser-generated tone here.
-      // Android KitchenOrderService handles the admin-selected ringtone.
+      if (currentNewIds.size > 0 && soundEnabled) {
+        kitchenAlarm.start();
+      } else {
+        kitchenAlarm.stop();
+      }
 
       previousNewIdsRef.current = currentNewIds;
       firstLoadRef.current = false;
@@ -449,9 +520,15 @@ export default function KitchenOrders() {
   }, [kitchenHeaders, soundEnabled]);
 
   useEffect(() => {
+    kitchenAlarm.setEnabled(soundEnabled);
+    return () => kitchenAlarm.stop();
+  }, [soundEnabled]);
+
+  useEffect(() => {
     setAuthenticated(localStorage.getItem('kitchen_auth') === 'true');
     void loadReceiptSettings();
     void loadRestaurantStatus();
+    return () => kitchenAlarm.stop();
   }, [loadReceiptSettings, loadRestaurantStatus]);
 
   useEffect(() => {
@@ -464,6 +541,12 @@ export default function KitchenOrders() {
     }, 8000);
     return () => clearInterval(timer);
   }, [authenticated, loadOrders, loadRiderData]);
+
+  useEffect(() => {
+    if (selectedOrderId === null) return;
+    const exists = orders.some((order) => order.id === selectedOrderId);
+    if (!exists) setSelectedOrderId(null);
+  }, [orders, selectedOrderId]);
 
   async function handlePinLogin(event: FormEvent) {
     event.preventDefault();
@@ -486,6 +569,8 @@ export default function KitchenOrders() {
       localStorage.setItem('kitchen_auth', 'true');
       localStorage.setItem('kitchen_pin', normalizedPin);
       setAuthenticated(true);
+      kitchenAlarm.unlock();
+      if (soundEnabled) kitchenAlarm.playOnce();
       toast.success('Kitchen opened');
     } catch {
       toast.error('Invalid Kitchen PIN');
@@ -495,6 +580,7 @@ export default function KitchenOrders() {
   function logoutKitchen() {
     localStorage.removeItem('kitchen_auth');
     localStorage.removeItem('kitchen_pin');
+    kitchenAlarm.stop();
     setOrders([]);
     setAuthenticated(false);
   }
@@ -526,38 +612,38 @@ export default function KitchenOrders() {
       return true;
     } catch (error) {
       console.error('Receipt print failed:', error);
-      toast.error('Receipt printing failed. Press Reprint again.');
+      toast.error('Receipt printing failed. Press print again.');
       return false;
     }
   }
 
-  async function updateOrderStatus(
-    order: KitchenOrder,
-    status: string,
-    estimatedMinutes?: number
-  ) {
-    // Stop both WebView and native Android alarm immediately when Accept is pressed.
-    // Do not wait for the API response or the next 8-10 second poll.
-    if (status === 'accepted') {
-        try { window.VitaPrinter?.stopOrderAlarm?.(); } catch {}
+  async function updateRestaurantStatus(nextStatus: RestaurantStatus) {
+    setSavingRestaurantStatus(true);
+    try {
+      await axios.put(
+        `${getAPIBaseURL()}/api/v1/kitchen/restaurant-status`,
+        { status: nextStatus },
+        { headers: kitchenHeaders(), timeout: 15000 },
+      );
+      setRestaurantStatus(nextStatus);
+      setStatusDialogOpen(false);
+      toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || 'Shop status could not be saved.');
+    } finally {
+      setSavingRestaurantStatus(false);
     }
+  }
 
+  async function updateOrderStatus(order: KitchenOrder, status: string, estimatedMinutes?: number) {
     try {
       const response = await axios.put(
         `${getAPIBaseURL()}/api/v1/admin/kitchen/orders/${order.id}/status`,
-        {
-          status,
-          estimated_minutes: estimatedMinutes,
-        },
-        {
-          headers: kitchenHeaders(),
-          timeout: 15000,
-        }
+        { status, estimated_minutes: estimatedMinutes },
+        { headers: kitchenHeaders(), timeout: 15000 },
       );
 
-      const serverOrder = response.data?.order
-        ? normalizeOrder(response.data.order)
-        : null;
+      const serverOrder = response.data?.order ? normalizeOrder(response.data.order) : null;
 
       setOrders((current) =>
         current.map((item) =>
@@ -566,56 +652,47 @@ export default function KitchenOrders() {
                 ...item,
                 status,
                 updated_at: new Date().toISOString(),
-                estimated_time: estimatedMinutes
-                  ? makeLocalReadyTime(estimatedMinutes)
-                  : item.estimated_time,
+                estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : item.estimated_time,
               }
-            : item
-        )
+            : item,
+        ),
       );
-
-      if (selectedOrder?.id === order.id) {
-        setSelectedOrder((current) =>
-          current?.id === order.id
-            ? serverOrder || {
-                ...current,
-                status,
-                updated_at: new Date().toISOString(),
-                estimated_time: estimatedMinutes
-                  ? makeLocalReadyTime(estimatedMinutes)
-                  : current.estimated_time,
-              }
-            : current
-        );
-      }
 
       if (status === 'accepted') {
         previousNewIdsRef.current.delete(order.id);
+        kitchenAlarm.stop();
+
+        const remainingNew = orders.filter((item) => item.id !== order.id && item.status === 'new');
+        if (remainingNew.length > 0 && soundEnabled) kitchenAlarm.start();
+
         const printKey = `kitchen_original_printed_${order.id}`;
-        if (
-          receiptSettings.auto_print_on_accept !== false &&
-          localStorage.getItem(printKey) !== 'true'
-        ) {
+        if (receiptSettings.auto_print_on_accept !== false && localStorage.getItem(printKey) !== 'true') {
           const printed = printReceipt(
             {
               ...order,
               status: 'accepted',
               estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : '',
             },
-            false
+            false,
           );
           if (printed) localStorage.setItem(printKey, 'true');
         }
       }
 
-      setAcceptingOrder(null);
+      if (status !== 'new') {
+        try {
+          window.VitaPrinter?.stopOrderAlarm?.();
+        } catch {
+          // ignore
+        }
+      }
+
       setCustomTime('');
       toast.success(`Order #${order.id} → ${status}`);
       setTimeout(() => void loadOrders(), 700);
     } catch (error: any) {
       console.error('Kitchen status update failed:', error);
-      const message = error?.response?.data?.detail || 'Order update failed';
-      toast.error(String(message));
+      toast.error(String(error?.response?.data?.detail || 'Order update failed'));
     }
   }
 
@@ -638,59 +715,247 @@ export default function KitchenOrders() {
   function relativeUaeDateKey(dayOffset: number): string {
     const uaeNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Dubai' }));
     uaeNow.setDate(uaeNow.getDate() + dayOffset);
-    return [
-      uaeNow.getFullYear(),
-      String(uaeNow.getMonth() + 1).padStart(2, '0'),
-      String(uaeNow.getDate()).padStart(2, '0'),
-    ].join('-');
+    return [uaeNow.getFullYear(), String(uaeNow.getMonth() + 1).padStart(2, '0'), String(uaeNow.getDate()).padStart(2, '0')].join('-');
   }
 
-  const activeOrders = useMemo(
-    () => orders.filter((order) => ACTIVE_STATUSES.has(order.status)),
-    [orders]
-  );
-
+  const activeOrders = useMemo(() => orders.filter((order) => ACTIVE_STATUSES.has(order.status)), [orders]);
   const historyOrders = useMemo(
-    () => orders.filter((order) => ['completed', 'cancelled', 'out_for_delivery'].includes(order.status)),
-    [orders]
+    () => orders.filter((order) => ['completed', 'cancelled', 'out_for_delivery', 'picked_up', 'on_the_way'].includes(order.status)),
+    [orders],
   );
-
   const todayHistory = useMemo(() => {
     const key = relativeUaeDateKey(0);
     return historyOrders.filter((order) => uaeDateKey(order.updated_at || order.created_at) === key);
   }, [historyOrders]);
-
   const yesterdayHistory = useMemo(() => {
     const key = relativeUaeDateKey(-1);
     return historyOrders.filter((order) => uaeDateKey(order.updated_at || order.created_at) === key);
   }, [historyOrders]);
 
-  const newOrders = useMemo(
-    () => activeOrders.filter((order) => order.status === 'new'),
-    [orders]
+  const newOrders = useMemo(() => activeOrders.filter((order) => order.status === 'new'), [activeOrders]);
+  const acceptedOrders = useMemo(() => activeOrders.filter((order) => ['accepted', 'preparing'].includes(order.status)), [activeOrders]);
+  const upcomingOrders = useMemo(() => activeOrders.filter((order) => order.status === 'ready'), [activeOrders]);
+  const selectedOrder = useMemo(
+    () => (selectedOrderId === null ? null : orders.find((order) => order.id === selectedOrderId) || null),
+    [orders, selectedOrderId],
   );
-  const progressOrders = useMemo(
-    () => activeOrders.filter((order) => ['accepted', 'preparing'].includes(order.status)),
-    [activeOrders]
-  );
-  const readyPickupOrders = useMemo(
-    () => activeOrders.filter((order) => order.status === 'ready' && !isDeliveryOrder(order)),
-    [activeOrders]
-  );
-  const readyDeliveryOrders = useMemo(
-    () => activeOrders.filter((order) => order.status === 'ready' && isDeliveryOrder(order)),
-    [activeOrders]
-  );
+
+  function renderOrderDetail(order: KitchenOrder) {
+    const items = parseItems(order.items_json);
+    const subtotal = Number(order.subtotal_amount || items.reduce((sum, item) => sum + Number(item.totalPrice || item.price || 0) * Math.max(item.quantity, 1), 0));
+    const deliveryFee = Number(order.delivery_charge || 0);
+    const serviceFee = Number(order.service_fee || 0);
+    const smallOrderFee = Number(order.small_order_fee || 0);
+    const discount = Number(order.discount_amount || 0);
+    const taxAmount = Number(order.tax_amount || 0);
+    const assignment = assignments[order.id];
+
+    return (
+      <div className="min-h-screen bg-white">
+        <div className="mx-auto max-w-4xl px-4 pb-12 pt-3">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <button type="button" onClick={() => setSelectedOrderId(null)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
+              <ChevronLeft className="h-6 w-6" />
+            </button>
+            <div className="min-w-0 px-2 text-center">
+              <h1 className="truncate text-3xl font-black text-slate-900">#{order.id}</h1>
+              <p className="text-sm text-slate-500">{formatUaeTime(order.created_at)}</p>
+            </div>
+            <button type="button" onClick={() => printReceipt(order, true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
+              <Printer className="h-6 w-6" />
+            </button>
+          </div>
+
+          <div className="space-y-4 pt-5">
+            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Badge className={isDeliveryOrder(order)
+                      ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
+                      : 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'}>
+                      {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
+                    </Badge>
+                    <Badge className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-700 border-slate-200 capitalize">
+                      {order.status.replaceAll('_', ' ')}
+                    </Badge>
+                  </div>
+                  <h2 className="mt-4 text-3xl font-black text-slate-900">{order.customer_name}</h2>
+                  {order.customer_phone && <p className="mt-1 text-lg text-slate-500">{order.customer_phone}</p>}
+                </div>
+                <TimerCircle order={order} />
+              </div>
+
+              <div className="mt-5 grid gap-3">
+                <Line label="Payment" value={paymentLabel(order)} />
+                <Line label="Items" value={`${totalItems(order)} item${totalItems(order) === 1 ? '' : 's'}`} />
+                {assignment && <Line label="Rider" value={`${assignment.rider_name} · ${String(assignment.status).replaceAll('_', ' ')}`} />}
+                {order.order_notes && <Line label="Notes" value={order.order_notes} />}
+              </div>
+            </Card>
+
+            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="mb-4 text-3xl font-black text-slate-900">Items</h3>
+              <div className="space-y-4">
+                {items.length === 0 ? (
+                  <p className="text-lg text-slate-400">No item details available.</p>
+                ) : (
+                  items.map((item, index) => (
+                    <div key={`${order.id}-${index}`} className="rounded-2xl bg-slate-50 px-4 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-2xl font-bold text-slate-900">{item.quantity} × {item.name}</p>
+                          {item.size && <p className="mt-1 text-lg text-slate-500">{item.size}</p>}
+                          {item.extras.length > 0 && <p className="mt-1 text-base text-slate-500">Extras: {item.extras.join(', ')}</p>}
+                        </div>
+                        <div className="text-right text-2xl font-bold text-slate-900">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+
+            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="mb-4 text-3xl font-black text-slate-900">Total</h3>
+              <div className="space-y-3">
+                <Line label="Subtotal" value={`AED ${money(subtotal)}`} />
+                {deliveryFee > 0 && <Line label="Delivery Fee" value={`AED ${money(deliveryFee)}`} />}
+                {serviceFee > 0 && <Line label="Service Fee" value={`AED ${money(serviceFee)}`} />}
+                {smallOrderFee > 0 && <Line label="Small Order Fee" value={`AED ${money(smallOrderFee)}`} />}
+                {discount > 0 && <Line label="Discount" value={`-AED ${money(discount)}`} valueClassName="text-red-600" />}
+                {taxAmount > 0 && <Line label="VAT (Incl.)" value={`AED ${money(taxAmount)}`} />}
+                <div className="border-t border-slate-200 pt-3">
+                  <Line label="Grand Total" value={`AED ${money(order.total_amount)}`} valueClassName="text-slate-900 text-3xl" />
+                </div>
+              </div>
+            </Card>
+
+            {order.status === 'new' && (
+              <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="mb-4 text-3xl font-black text-slate-900">Accept order</h3>
+                <div className="mb-4 grid grid-cols-5 gap-2">
+                  {TIME_OPTIONS.map((minutes) => (
+                    <button
+                      key={minutes}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTime(minutes);
+                        setCustomTime('');
+                      }}
+                      className={`rounded-2xl px-2 py-4 text-lg font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      {minutes}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={customTime}
+                  onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
+                  inputMode="numeric"
+                  placeholder="Custom minutes"
+                  className="mb-4 w-full rounded-2xl border border-slate-200 px-4 py-4 text-xl outline-none focus:border-emerald-500"
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    onClick={() => {
+                      const minutes = Number(customTime || selectedTime);
+                      void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
+                    }}
+                    className="h-14 rounded-2xl bg-emerald-600 text-lg font-bold hover:bg-emerald-700"
+                  >
+                    <Check className="mr-2 h-5 w-5" /> Accept
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (window.confirm(`Cancel order #${order.id}?`)) {
+                        void updateOrderStatus(order, 'cancelled');
+                        setSelectedOrderId(null);
+                      }
+                    }}
+                    className="h-14 rounded-2xl border-red-200 text-lg font-bold text-red-600 hover:bg-red-50"
+                  >
+                    <X className="mr-2 h-5 w-5" /> Cancel
+                  </Button>
+                </div>
+              </Card>
+            )}
+
+            {order.status === 'accepted' && (
+              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-2xl font-black hover:bg-orange-600">
+                Start preparing
+              </Button>
+            )}
+
+            {order.status === 'preparing' && (
+              <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 w-full rounded-3xl bg-emerald-600 text-2xl font-black hover:bg-emerald-700">
+                {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
+              </Button>
+            )}
+
+            {order.status === 'ready' && !isDeliveryOrder(order) && (
+              <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-16 w-full rounded-3xl bg-slate-900 text-2xl font-black hover:bg-slate-800">
+                Complete pickup
+              </Button>
+            )}
+
+            {order.status === 'ready' && isDeliveryOrder(order) && (
+              <div className="rounded-3xl bg-blue-50 px-5 py-5 text-center text-xl font-semibold text-blue-700">
+                Waiting for rider pickup.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderHistory(ordersForDay: KitchenOrder[]) {
+    return (
+      <div className="space-y-4">
+        {ordersForDay.length === 0 ? (
+          <div className="rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center text-lg text-slate-400 shadow-sm">No orders found for this day.</div>
+        ) : (
+          ordersForDay.map((order) => (
+            <button
+              key={order.id}
+              type="button"
+              onClick={() => setSelectedOrderId(order.id)}
+              className="block w-full rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-4xl font-black text-slate-900">#{order.id}</span>
+                    <Badge className={order.status === 'completed'
+                      ? 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'
+                      : DELIVERY_PENDING_STATUSES.has(order.status)
+                        ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
+                        : 'rounded-full bg-red-100 px-3 py-1 text-sm font-bold text-red-700 border-red-200'}>
+                      {order.status.replaceAll('_', ' ')}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-lg text-slate-500">{formatUaeTime(order.updated_at || order.created_at)} · {order.customer_name}</p>
+                </div>
+                <div className="text-3xl font-black text-slate-900">AED {money(order.total_amount)}</div>
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+    );
+  }
 
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
         <div className="w-full max-w-xs text-center">
-          <div className="w-16 h-16 rounded-full bg-orange-600/20 flex items-center justify-center mx-auto mb-4">
-            <ChefHat className="w-8 h-8 text-orange-500" />
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm">
+            <ChefHat className="h-8 w-8 text-slate-600" />
           </div>
-          <h1 className="text-white text-2xl font-bold mb-2">Kitchen Display</h1>
-          <p className="text-gray-400 mb-6 text-sm">Enter PIN to access Kitchen orders</p>
+          <h1 className="mb-2 text-2xl font-black text-slate-900">Kitchen Display</h1>
+          <p className="mb-6 text-sm text-slate-500">Enter PIN to access Kitchen orders</p>
           <form onSubmit={handlePinLogin} className="space-y-4">
             <input
               type="password"
@@ -699,547 +964,102 @@ export default function KitchenOrders() {
               placeholder="Enter PIN"
               maxLength={8}
               inputMode="numeric"
-              className="w-full text-center text-2xl tracking-[0.5em] bg-gray-900 border border-gray-700 text-white rounded-xl py-4 px-4 focus:outline-none focus:border-orange-500"
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center text-2xl tracking-[0.5em] text-slate-900 outline-none focus:border-slate-400"
             />
-            <Button type="submit" className="w-full bg-orange-600 hover:bg-orange-700 py-5 text-lg">
-              Enter Kitchen
-            </Button>
+            <Button type="submit" className="h-14 w-full rounded-2xl bg-slate-900 text-lg hover:bg-slate-800">Enter Kitchen</Button>
           </form>
-          <p className="text-gray-600 text-xs mt-4">The PIN is controlled by KITCHEN_PIN in the Render Environment.</p>
         </div>
       </div>
-    );
-  }
-
-  function renderItems(order: KitchenOrder) {
-    const items = parseItems(order.items_json);
-    if (items.length === 0) {
-      return <p className="text-gray-500 text-xs">Items details unavailable</p>;
-    }
-
-    return items.map((item, index) => (
-      <div key={`${order.id}-${index}`} className="text-gray-100 text-sm font-medium">
-        <span>{item.quantity}x {item.name}</span>
-        {item.size && <span className="text-gray-400"> ({item.size})</span>}
-        {item.extras.length > 0 && (
-          <div className="text-gray-500 text-xs ml-3">+ {item.extras.join(', ')}</div>
-        )}
-      </div>
-    ));
-  }
-
-  function openOrder(order: KitchenOrder) {
-    setSelectedOrder(order);
-  }
-
-  function OrderDetail({ order }: { order: KitchenOrder }) {
-    const delivery = isDeliveryOrder(order);
-    const assignment = assignments[order.id];
-    const assignmentStatus = String(assignment?.status || '').toLowerCase();
-    const activeAssignment = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
-
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-white text-3xl font-black">#{order.id}</span>
-            <Badge className={delivery
-              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-              : 'bg-green-600/20 text-green-300 border-green-600/30'}>
-              {delivery ? 'Delivery' : 'Pickup'}
-            </Badge>
-          </div>
-          <div className="text-right">
-            <OrderTimer createdAt={order.created_at} />
-            <p className="text-gray-500 text-xs">{formatUaeTime(order.created_at)}</p>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-          <p className="text-gray-500 text-xs uppercase mb-1">Customer</p>
-          <p className="text-white font-semibold">{order.customer_name}</p>
-          {order.customer_phone && (
-            <a href={`tel:${order.customer_phone}`} className="text-blue-400 text-sm">
-              {order.customer_phone}
-            </a>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-          <p className="text-gray-500 text-xs uppercase mb-2">Items</p>
-          <div className="space-y-2">{renderItems(order)}</div>
-        </div>
-
-        {order.order_notes && (
-          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3">
-            <p className="text-yellow-300 text-xs font-semibold mb-1">Order Notes</p>
-            <p className="text-yellow-100 text-sm whitespace-pre-wrap">{order.order_notes}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
-            <p className="text-gray-500 text-xs uppercase">Payment</p>
-            <p className="text-white text-sm font-semibold mt-1">{order.payment_method || 'Cash'}</p>
-          </div>
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-right">
-            <p className="text-gray-500 text-xs uppercase">Total</p>
-            <p className="text-green-400 text-lg font-black mt-1">AED {money(order.total_amount)}</p>
-          </div>
-        </div>
-
-        {delivery && (
-          <div className={`rounded-xl border p-3 ${
-            activeAssignment
-              ? 'border-blue-700/40 bg-blue-950/40'
-              : 'border-amber-600/30 bg-amber-600/10'
-          }`}>
-            {activeAssignment ? (
-              <>
-                <p className="text-blue-300 font-semibold">Rider: {assignment.rider_name}</p>
-                {assignment.rider_phone && (
-                  <a href={`tel:${assignment.rider_phone}`} className="text-blue-200 text-sm">
-                    {assignment.rider_phone}
-                  </a>
-                )}
-                <p className="text-blue-400/80 text-xs mt-1">
-                  Status: {assignmentStatus.replaceAll('_', ' ')}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-amber-300 font-semibold">Waiting Rider</p>
-                <p className="text-amber-200/70 text-xs mt-1">Waiting for a rider to be assigned.</p>
-              </>
-            )}
-          </div>
-        )}
-
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => printReceipt(order, true)}
-          className="w-full border-gray-700"
-        >
-          <Printer className="w-4 h-4 mr-2" /> Reprint Order
-        </Button>
-      </div>
-    );
-  }
-
-  function OrderCard({ order, section }: { order: KitchenOrder; section: 'new' | 'progress' | 'ready' }) {
-    const delivery = isDeliveryOrder(order);
-    const assignment = assignments[order.id];
-    const assignmentStatus = String(assignment?.status || '').toLowerCase();
-    const hasActiveRider = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
-
-    return (
-      <Card className="bg-gray-900 border-gray-800 overflow-hidden">
-        <button
-          type="button"
-          onClick={() => openOrder(order)}
-          className="w-full p-4 text-left hover:bg-gray-800/50 transition-colors"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-white font-black text-2xl">#{order.id}</span>
-              <Badge className={delivery
-                ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-                : 'bg-green-600/20 text-green-300 border-green-600/30'}>
-                {delivery ? 'Delivery' : 'Pickup'}
-              </Badge>
-            </div>
-            <div className="text-right shrink-0">
-              <OrderTimer createdAt={order.created_at} />
-              <p className="text-gray-600 text-[10px]">{formatUaeTime(order.created_at)}</p>
-            </div>
-          </div>
-
-          {order.estimated_time && section !== 'new' && (
-            <div className="mt-3">
-              <ReadyTimeCountdown
-                estimatedTime={order.estimated_time}
-                referenceTime={order.updated_at || order.created_at}
-                status={order.status}
-                compact
-              />
-            </div>
-          )}
-
-          {delivery && (
-            <div className={`mt-3 rounded-lg border px-3 py-2 ${
-              hasActiveRider
-                ? 'border-blue-700/30 bg-blue-950/30'
-                : 'border-amber-600/30 bg-amber-600/10'
-            }`}>
-              <p className={`text-sm font-semibold ${hasActiveRider ? 'text-blue-300' : 'text-amber-300'}`}>
-                {hasActiveRider ? `Rider: ${assignment.rider_name}` : 'Waiting Rider'}
-              </p>
-            </div>
-          )}
-
-          <div className="mt-3 flex items-center justify-between text-xs">
-            <span className="text-gray-500">Tap order to view details</span>
-            <ChevronRight className="w-4 h-4 text-gray-600" />
-          </div>
-        </button>
-
-        <div className="border-t border-gray-800 p-3">
-          {section === 'new' && acceptingOrder !== order.id && (
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                onClick={() => setAcceptingOrder(order.id)}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                <Check className="w-4 h-4 mr-1" /> Accept
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (window.confirm(`Cancel order #${order.id}?`)) {
-                    void updateOrderStatus(order, 'cancelled');
-                  }
-                }}
-                className="border-red-700 text-red-400 hover:bg-red-950"
-              >
-                <X className="w-4 h-4 mr-1" /> Cancel
-              </Button>
-            </div>
-          )}
-
-          {section === 'new' && acceptingOrder === order.id && (
-            <div className="bg-gray-800 rounded-xl p-2.5">
-              <p className="text-green-400 text-xs font-semibold mb-2">Select ready time</p>
-              <div className="grid grid-cols-5 gap-1 mb-2">
-                {TIME_OPTIONS.map((minutes) => (
-                  <button
-                    key={minutes}
-                    type="button"
-                    onClick={() => {
-                      setSelectedTime(minutes);
-                      setCustomTime('');
-                    }}
-                    className={`rounded-lg py-2 text-xs font-bold ${
-                      selectedTime === minutes && !customTime
-                        ? 'bg-green-600 text-white'
-                        : 'bg-gray-700 text-gray-300'
-                    }`}
-                  >
-                    {minutes}
-                  </button>
-                ))}
-              </div>
-              <input
-                value={customTime}
-                onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-                inputMode="numeric"
-                placeholder="Custom minutes"
-                className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm mb-2"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  onClick={() => {
-                    const minutes = Number(customTime || selectedTime);
-                    void updateOrderStatus(
-                      order,
-                      'accepted',
-                      Number.isFinite(minutes) && minutes > 0 ? minutes : 20,
-                    );
-                  }}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  Accept
-                </Button>
-                <Button variant="outline" onClick={() => setAcceptingOrder(null)}>
-                  Back
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {section === 'progress' && order.status === 'accepted' && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'preparing')}
-              className="w-full bg-yellow-600 hover:bg-yellow-700"
-            >
-              Preparing
-            </Button>
-          )}
-
-          {section === 'progress' && order.status === 'preparing' && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'ready')}
-              className="w-full bg-purple-600 hover:bg-purple-700"
-            >
-              Ready
-            </Button>
-          )}
-
-          {section === 'ready' && !delivery && (
-            <Button
-              onClick={() => void updateOrderStatus(order, 'completed')}
-              className="w-full bg-gray-700 hover:bg-gray-600"
-            >
-              Completed
-            </Button>
-          )}
-
-          {section === 'ready' && delivery && (
-            <div className="rounded-lg border border-blue-700/30 bg-blue-950/30 px-3 py-2 text-center">
-              <p className="text-blue-300 text-sm font-semibold">
-                {hasActiveRider ? 'Waiting for Rider Pickup' : 'Waiting Rider Assignment'}
-              </p>
-            </div>
-          )}
-        </div>
-      </Card>
-    );
-  }
-
-  function HistoryOrdersList({ orders: historyOrders }: { orders: KitchenOrder[] }) {
-    const total = historyOrders
-      .filter((order) => order.status === 'completed')
-      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
-
-    return (
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <p className="text-gray-500 text-xs uppercase">Orders</p>
-            <p className="text-white text-2xl font-black mt-1">{historyOrders.length}</p>
-          </Card>
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <p className="text-gray-500 text-xs uppercase">Completed Sale</p>
-            <p className="text-green-400 text-xl font-black mt-1">AED {money(total)}</p>
-          </Card>
-        </div>
-
-        {historyOrders.length === 0 ? (
-          <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
-            There are no completed, pending delivery, or cancelled orders for this day.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {historyOrders.map((order) => (
-              <Card key={order.id} className="bg-gray-900 border-gray-800 p-3">
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-white text-lg font-black">#{order.id}</span>
-                      <Badge
-                        className={
-                          order.status === 'completed'
-                            ? 'bg-green-600/20 text-green-300 border-green-600/30'
-                            : DELIVERY_PENDING_STATUSES.has(order.status)
-                              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
-                              : 'bg-red-600/20 text-red-300 border-red-600/30'
-                        }
-                      >
-                        {order.status === 'completed'
-                          ? 'Completed'
-                          : DELIVERY_PENDING_STATUSES.has(order.status)
-                            ? 'Delivery Pending'
-                            : 'Cancelled'}
-                      </Badge>
-                    </div>
-                    <p className="text-gray-500 text-xs mt-1">
-                      {formatUaeTime(order.updated_at || order.created_at)}
-                    </p>
-                  </div>
-                  <span className="text-green-400 font-black">AED {money(order.total_amount)}</span>
-                </div>
-                <p className="text-gray-300 text-sm font-medium mb-2">{order.customer_name}</p>
-                {DELIVERY_PENDING_STATUSES.has(order.status) && assignments[order.id] && (
-                  <div className="mb-2 rounded-lg border border-blue-700/30 bg-blue-950/30 px-2 py-1.5">
-                    <p className="text-blue-300 text-xs font-semibold">Rider: {assignments[order.id].rider_name}</p>
-                    {assignments[order.id].rider_phone && (
-                      <p className="text-blue-200/80 text-xs">{assignments[order.id].rider_phone}</p>
-                    )}
-                    <p className="text-blue-400/70 text-[11px]">Status: {String(assignments[order.id].status).replaceAll('_', ' ')}</p>
-                  </div>
-                )}
-                <div className="space-y-1">{renderItems(order)}</div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => printReceipt(order, true)}
-                  className="w-full mt-3 border-gray-700"
-                >
-                  <Printer className="w-4 h-4 mr-2" /> Reprint Copy
-                </Button>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function Column({
-    title,
-    count,
-    dotClass,
-    children,
-  }: {
-    title: string;
-    count: number;
-    dotClass: string;
-    emptyText?: string;
-    children: ReactNode;
-  }) {
-    if (count === 0) return null;
-
-    return (
-      <section className="space-y-2">
-        <div className="flex items-center gap-2 px-1">
-          <span className={`w-3 h-3 rounded-full ${dotClass}`} />
-          <h2 className="text-gray-300 font-bold text-xs tracking-wide">{title} ({count})</h2>
-        </div>
-        <div className="space-y-2">{children}</div>
-      </section>
     );
   }
 
   return (
-    <div className={`min-h-screen px-3 py-3 ${viewMode === 'live' && activeOrders.length === 0 ? 'bg-white text-gray-900' : 'bg-gray-950 text-white'}`}>
-      <div className="max-w-4xl mx-auto">
-        <header className="flex items-center justify-between gap-3 mb-4">
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className={`p-2.5 rounded-lg ${viewMode === 'live' && activeOrders.length === 0 ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300 hover:bg-gray-900'}`}
-            aria-label="Open Kitchen menu"
-          >
-            <Menu className="w-8 h-8" />
-          </button>
-
-          <div className="flex items-center gap-2">
-            {selectedOrder && nativePrinterAvailable() && (
-              <button
-                type="button"
-                onClick={() => printReceipt(selectedOrder, true)}
-                className="p-2 rounded-lg text-orange-400 hover:bg-orange-950/30"
-                title={`Reprint order #${selectedOrder.id}`}
-                aria-label="Reprint selected order"
-              >
-                <Printer className="w-5 h-5" />
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      <div className="mx-auto max-w-5xl px-4 pb-12 pt-3">
+        <header className="mb-4 flex items-center justify-between gap-3 rounded-3xl bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            {!selectedOrder && (
+              <button type="button" onClick={() => setDrawerOpen(true)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
+                <Menu className="h-7 w-7" />
               </button>
             )}
+            {selectedOrder ? (
+              <button type="button" onClick={() => setSelectedOrderId(null)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
+                <ChevronLeft className="h-7 w-7" />
+              </button>
+            ) : null}
+            <ChefHat className="h-8 w-8 text-slate-500" />
+          </div>
 
-            <button
-              type="button"
-              onClick={() => setStatusDialogOpen(true)}
-              className={`h-11 rounded-full px-4 flex items-center gap-2 text-sm font-black ${
-                restaurantStatus === 'open'
-                  ? 'bg-green-600/15 text-green-400'
-                  : restaurantStatus === 'busy'
-                    ? 'bg-amber-600/15 text-amber-400'
-                    : 'bg-red-600/15 text-red-400'
-              }`}
-              title="Change shop status"
-            >
-              <span className={`w-2.5 h-2.5 rounded-full ${
-                restaurantStatus === 'open'
-                  ? 'bg-green-500'
-                  : restaurantStatus === 'busy'
-                    ? 'bg-amber-500'
-                    : 'bg-red-500'
-              }`} />
-              {restaurantStatus.toUpperCase()}
-            </button>
+          <div className="flex items-center gap-3">
+            {!selectedOrder && (
+              <button type="button" onClick={() => setStatusDialogOpen(true)}>
+                <StatusPill status={restaurantStatus} />
+              </button>
+            )}
+            {!selectedOrder && (
+              <button type="button" onClick={() => void loadOrders()} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100" disabled={refreshing}>
+                <RefreshCw className={`h-6 w-6 ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+            {!selectedOrder && (
+              <button type="button" onClick={logoutKitchen} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
+                <LogOut className="h-6 w-6" />
+              </button>
+            )}
           </div>
         </header>
 
-        {viewMode === 'menu' ? (
+        {!selectedOrder && (
+          <div className="mb-4 flex items-center justify-between px-1 text-sm text-slate-500">
+            <div className="flex items-center gap-2">
+              <Clock3 className="h-4 w-4" />
+              Last update: {lastRefresh.toLocaleTimeString()}
+            </div>
+            <div>{nativePrinterAvailable() ? 'Printer connected' : 'Printer not connected'}</div>
+          </div>
+        )}
+
+        {selectedOrder ? (
+          renderOrderDetail(selectedOrder)
+        ) : viewMode === 'menu' ? (
           <KitchenMenuPanel embedded />
-        ) : viewMode === 'live' ? (
-          activeOrders.length === 0 ? (
-            <div className="relative min-h-[78vh] overflow-hidden flex flex-col items-center justify-center text-center px-6">
-              <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-                <div className="absolute inset-[-22%] flex flex-col items-center justify-center gap-10 rotate-[-28deg] select-none">
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="whitespace-nowrap text-[clamp(5rem,14vw,11rem)] leading-none font-black tracking-[0.05em] text-slate-900/[0.045]"
-                    >
-                      MAHI SHAH
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="relative z-10 flex flex-col items-center">
-                <div className="w-28 h-28 rounded-[2rem] bg-violet-50 border border-violet-100 shadow-sm flex items-center justify-center mb-7">
-                  <ChefHat className="w-14 h-14 text-violet-600" />
-                </div>
-                <h1 className="text-gray-900 text-4xl md:text-5xl font-black tracking-tight">
-                  No active orders
-                </h1>
-                <p className="text-slate-500 text-lg md:text-xl mt-4 max-w-lg">
-                  New orders will appear here automatically.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-5">
-              <Column title="NEW" count={newOrders.length} dotClass="bg-blue-500" emptyText="">
-                {newOrders.map((order) => (
-                  <OrderCard key={order.id} order={order} section="new" />
-                ))}
-              </Column>
-
-              <Column title="IN PROGRESS" count={progressOrders.length} dotClass="bg-yellow-500" emptyText="">
-                {progressOrders.map((order) => (
-                  <OrderCard key={order.id} order={order} section="progress" />
-                ))}
-              </Column>
-
-              <Column title="READY - PICKUP" count={readyPickupOrders.length} dotClass="bg-purple-500" emptyText="">
-                {readyPickupOrders.map((order) => (
-                  <OrderCard key={order.id} order={order} section="ready" />
-                ))}
-              </Column>
-
-              <Column title="READY - DELIVERY" count={readyDeliveryOrders.length} dotClass="bg-blue-500" emptyText="">
-                {readyDeliveryOrders.map((order) => (
-                  <OrderCard key={order.id} order={order} section="ready" />
-                ))}
-              </Column>
-            </div>
-          )
+        ) : viewMode === 'today' ? (
+          renderHistory(todayHistory)
+        ) : viewMode === 'yesterday' ? (
+          renderHistory(yesterdayHistory)
+        ) : activeOrders.length === 0 ? (
+          <EmptyState />
         ) : (
-          <HistoryOrdersList orders={viewMode === 'today' ? todayHistory : yesterdayHistory} />
+          <div>
+            <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} />
+            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} />
+            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} />
+          </div>
         )}
       </div>
 
       {drawerOpen && (
         <div className="fixed inset-0 z-50">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/70"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="Close Kitchen menu"
-          />
-          <aside className="absolute left-0 top-0 bottom-0 w-[86%] max-w-sm bg-gray-950 border-r border-gray-800 p-4 shadow-2xl">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <ChefHat className="w-6 h-6 text-orange-500" />
+          <button type="button" className="absolute inset-0 bg-black/30" onClick={() => setDrawerOpen(false)} aria-label="Close menu" />
+          <aside className="absolute left-0 top-0 bottom-0 w-[82%] max-w-sm bg-white p-4 shadow-2xl">
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-slate-100 p-3"><ChefHat className="h-6 w-6 text-slate-600" /></div>
                 <div>
-                  <p className="text-white font-bold">Fai Fai Kitchen</p>
-                  <p className="text-gray-500 text-xs">Orders & history</p>
+                  <p className="font-black text-slate-900">Kitchen</p>
+                  <p className="text-sm text-slate-500">Orders and history</p>
                 </div>
               </div>
-              <button type="button" onClick={() => setDrawerOpen(false)} className="p-2 text-gray-400">
-                <X className="w-5 h-5" />
-              </button>
+              <button type="button" onClick={() => setDrawerOpen(false)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {[
-                { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, count: activeOrders.length, total: null },
-                { key: 'today' as const, label: 'Today Orders', icon: CalendarDays, count: todayHistory.length, total: todayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
-                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, count: yesterdayHistory.length, total: yesterdayHistory.filter((order) => order.status === 'completed').reduce((sum, order) => sum + Number(order.total_amount || 0), 0) },
-                { key: 'menu' as const, label: 'Menu Availability', icon: UtensilsCrossed, count: null, total: null },
+                { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, note: `${activeOrders.length} active orders` },
+                { key: 'today' as const, label: 'Today Orders', icon: PackageCheck, note: `${todayHistory.length} orders` },
+                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, note: `${yesterdayHistory.length} orders` },
+                { key: 'menu' as const, label: 'Menu Availability', icon: UtensilsCrossed, note: 'Available / Sold out' },
               ].map((item) => {
                 const Icon = item.icon;
                 return (
@@ -1250,24 +1070,14 @@ export default function KitchenOrders() {
                       setViewMode(item.key);
                       setDrawerOpen(false);
                     }}
-                    className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left ${
-                      viewMode === item.key
-                        ? 'bg-orange-600/15 border-orange-600/40'
-                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
-                    }`}
+                    className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left ${viewMode === item.key ? 'border-slate-900 bg-slate-50' : 'border-slate-200 bg-white'}`}
                   >
-                    <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-orange-400" />
+                    <div className="rounded-2xl bg-slate-100 p-3"><Icon className="h-5 w-5 text-slate-700" /></div>
+                    <div className="flex-1">
+                      <p className="font-bold text-slate-900">{item.label}</p>
+                      <p className="text-sm text-slate-500">{item.note}</p>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-semibold text-sm">{item.label}</p>
-                      <p className="text-gray-500 text-xs">
-                        {item.key === 'menu'
-                          ? 'Available / Sold Out'
-                          : `${item.count} order${item.count === 1 ? '' : 's'}${item.total !== null ? ` · AED ${money(item.total)}` : ''}`}
-                      </p>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-gray-600" />
+                    <ChevronRight className="h-5 w-5 text-slate-400" />
                   </button>
                 );
               })}
@@ -1277,55 +1087,31 @@ export default function KitchenOrders() {
       )}
 
       <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
-        <DialogContent className="bg-gray-950 border-gray-800 text-white max-w-sm">
+        <DialogContent className="max-w-sm rounded-3xl border-slate-200 bg-white text-slate-900">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Store className="w-5 h-5 text-orange-500" /> Shop Status
-            </DialogTitle>
-            <DialogDescription className="text-gray-500">
-              The shop status updates immediately in the Customer app.
-            </DialogDescription>
+            <DialogTitle className="flex items-center gap-2 text-xl font-black"><Store className="h-5 w-5 text-slate-600" /> Shop Status</DialogTitle>
+            <DialogDescription className="text-slate-500">The shop status updates immediately in the Customer app.</DialogDescription>
           </DialogHeader>
-
           <div className="grid gap-2">
             {([
-              { key: 'open' as const, label: 'OPEN', note: 'Orders are received normally', className: 'border-green-600/40 bg-green-600/10 text-green-400' },
-              { key: 'busy' as const, label: 'BUSY', note: 'Customers will see the Busy status', className: 'border-amber-600/40 bg-amber-600/10 text-amber-400' },
-              { key: 'closed' as const, label: 'CLOSED', note: 'Customers will see that the shop is closed', className: 'border-red-600/40 bg-red-600/10 text-red-400' },
+              { key: 'open' as const, label: 'OPEN', note: 'Orders are received normally', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+              { key: 'busy' as const, label: 'BUSY', note: 'Customers will see the Busy status', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+              { key: 'closed' as const, label: 'CLOSED', note: 'Customers will see that the shop is closed', className: 'border-red-200 bg-red-50 text-red-700' },
             ]).map((option) => (
               <button
                 key={option.key}
                 type="button"
                 disabled={savingRestaurantStatus}
                 onClick={() => void updateRestaurantStatus(option.key)}
-                className={`rounded-xl border p-3 text-left disabled:opacity-50 ${option.className} ${restaurantStatus === option.key ? 'ring-2 ring-white/30' : ''}`}
+                className={`rounded-2xl border p-4 text-left ${option.className} ${restaurantStatus === option.key ? 'ring-2 ring-slate-300' : ''}`}
               >
                 <p className="font-black">{option.label}</p>
-                <p className="text-xs opacity-75 mt-0.5">{option.note}</p>
+                <p className="mt-1 text-sm opacity-80">{option.note}</p>
               </button>
             ))}
           </div>
         </DialogContent>
       </Dialog>
-
-
-      <Dialog
-        open={Boolean(selectedOrder)}
-        onOpenChange={(open) => {
-          if (!open) setSelectedOrder(null);
-        }}
-      >
-        <DialogContent className="bg-gray-950 border-gray-800 text-white max-w-md max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Order Details</DialogTitle>
-            <DialogDescription className="text-gray-500">
-              Full customer, item and payment details.
-            </DialogDescription>
-          </DialogHeader>
-          {selectedOrder && <OrderDetail order={selectedOrder} />}
-        </DialogContent>
-      </Dialog>
-
     </div>
   );
 }
