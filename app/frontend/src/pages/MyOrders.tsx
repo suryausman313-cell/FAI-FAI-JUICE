@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,10 +10,7 @@ import { useTranslation } from '@/lib/i18n';
 import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
-import {
-  enableCustomerPush,
-  syncCustomerPushIfAllowed,
-} from '@/lib/customer-push';
+import { syncCustomerPushIfAllowed } from '@/lib/customer-push';
 
 const PICKUP_STEPS = [
   { key: 'new', label: 'Order Placed', icon: Store },
@@ -270,7 +267,7 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
   // Only show for 'new' (pending) orders
   if (order.status !== 'new') return null;
 
-  const restaurantPhone = '+971523187415'; // Restaurant WhatsApp number
+  const restaurantPhone = '+971521091092'; // Restaurant WhatsApp number
   const whatsappMessage = encodeURIComponent(
     t('orders.whatsapp_pending_message').replace('{orderId}', String(order.id))
   );
@@ -425,10 +422,6 @@ export default function MyOrders() {
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
-  const [notificationStatus, setNotificationStatus] = useState<
-    'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
-  >('checking');
-  const [notificationMessage, setNotificationMessage] = useState('');
 
   // Admin-configured timeouts
   const [acceptTimeout, setAcceptTimeout] = useState(5); // minutes
@@ -438,37 +431,12 @@ export default function MyOrders() {
 
   useEffect(() => {
     void loadInitialData();
-    void checkReadyNotifications();
+    void syncCustomerPushIfAllowed().catch(() => undefined);
     const interval = setInterval(() => {
       void loadOrders();
     }, 8000);
     return () => clearInterval(interval);
   }, []);
-
-  async function checkReadyNotifications() {
-    if (!localStorage.getItem('vita_customer_token')) {
-      setNotificationStatus('login_required');
-      return;
-    }
-    try {
-      const state = await syncCustomerPushIfAllowed();
-      if (!state.supported) setNotificationStatus('unsupported');
-      else if (state.permission === 'denied') setNotificationStatus('blocked');
-      else if (state.permission === 'granted' && state.subscribed) setNotificationStatus('enabled');
-      else setNotificationStatus('available');
-    } catch (error: any) {
-      // A stale browser subscription should not leave the customer trapped on
-      // an error card. The Enable button will repair/recreate it on demand.
-      setNotificationStatus('available');
-      setNotificationMessage(error?.message || 'Could not check notifications');
-    }
-  }
-
-  async function handleEnableReadyNotifications() {
-    if (!localStorage.getItem('vita_customer_token')) {
-      navigate('/account');
-      return;
-    }
     setNotificationStatus('enabling');
     setNotificationMessage('');
     try {
@@ -691,69 +659,7 @@ export default function MyOrders() {
           </Button>
         </div>
 
-        <div className={`rounded-xl border p-4 mb-5 ${
-          notificationStatus === 'enabled'
-            ? 'border-green-600/30 bg-green-600/10'
-            : notificationStatus === 'blocked' || notificationStatus === 'error'
-              ? 'border-red-600/30 bg-red-600/10'
-              : 'border-gray-700 bg-gray-900'
-        }`}>
-          <div className="flex items-start gap-3">
-            <div className={`rounded-full p-2 ${
-              notificationStatus === 'enabled' ? 'bg-green-600/20' : 'bg-gray-800'
-            }`}>
-              {notificationStatus === 'blocked' || notificationStatus === 'unsupported' ? (
-                <BellOff className="w-5 h-5 text-red-400" />
-              ) : (
-                <Bell className={`w-5 h-5 ${notificationStatus === 'enabled' ? 'text-green-400' : 'text-yellow-400'}`} />
-              )}
-            </div>
-            <div className="flex-1">
-              <p className="text-white font-semibold text-sm">
-                {notificationStatus === 'enabled'
-                  ? 'Ready notifications enabled'
-                  : notificationStatus === 'blocked'
-                    ? 'Notifications are blocked'
-                    : notificationStatus === 'unsupported'
-                      ? 'Notifications are not supported'
-                      : 'Get notified when your order is ready'}
-              </p>
-              <p className="text-gray-400 text-xs mt-1">
-                {notificationStatus === 'enabled'
-                  ? 'You will receive a phone alert when Kitchen marks your order Ready.'
-                  : notificationStatus === 'blocked'
-                    ? 'Open browser settings and allow notifications for Fai Fai Juice.'
-                    : notificationMessage || 'Enable once to receive Ready alerts even when the app is in background.'}
-              </p>
-              {!['enabled', 'blocked', 'unsupported', 'checking'].includes(notificationStatus) && (
-                <Button
-                  onClick={handleEnableReadyNotifications}
-                  disabled={notificationStatus === 'enabling'}
-                  size="sm"
-                  className="mt-3 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
-                >
-                  <Bell className="w-4 h-4 mr-2" />
-                  {notificationStatus === 'login_required'
-                    ? 'Login to Enable'
-                    : notificationStatus === 'enabling'
-                      ? 'Enabling...'
-                      : 'Enable Notifications'}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {orders.length === 0 ? (
-          <div className="text-center py-16">
-            <div className="text-5xl mb-4">🥤</div>
-            <p className="text-gray-400 text-lg font-medium">No orders yet</p>
-            <p className="text-gray-600 text-sm mt-2">Your orders will appear here after you place them</p>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Active Orders */}
-            {activeOrders.length > 0 && (
+        {activeOrders.length > 0 && (
               <div>
                 <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">Active Orders</h2>
                 <div className="space-y-4">

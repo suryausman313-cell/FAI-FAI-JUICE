@@ -1074,21 +1074,7 @@ export default function Checkout() {
                     className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700"
                     style={{ zIndex: 1 }}
                   />
-                  {/* Zone legend */}
-                  <div className="flex flex-wrap gap-3 mt-2 text-xs">
-                    {deliveryZones.length > 0 ? (
-                      deliveryZones.map((z, i) => (
-                        <span key={i} className={`${i === 0 ? 'text-green-400' : i === 1 ? 'text-yellow-400' : 'text-orange-400'}`}>
-                          ● {z.min_distance_km}-{z.max_distance_km} km = AED {z.charge}
-                        </span>
-                      ))
-                    ) : (
-                      <>
-                        <span className="text-green-400">● Near zone (AED {nearCharge})</span>
-                        <span className="text-yellow-400">● Far zone (AED {farCharge})</span>
-                      </>
-                    )}
-                  </div>
+                  {/* Customer sees only the final charge for the selected delivery pin. */}
                   {/* Location permission denied - friendly guidance */}
                   {locationPermissionDenied && !locationShared && (
                     <div className="mt-2 p-3 rounded-lg bg-yellow-600/10 border border-yellow-600/30">
@@ -1139,7 +1125,11 @@ export default function Checkout() {
                   {locationShared && !deliveryZoneError && (
                     <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
                       <CheckCircle className="w-4 h-4" />
-                      <span>Location selected{roadDistanceKm !== null ? ` — Road: ${roadDistanceKm.toFixed(1)} km` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
+                      <span>
+                        Delivery available
+                        {roadDistanceKm !== null ? ` · ${roadDistanceKm.toFixed(1)} km away` : ''}
+                        {` · Delivery AED ${Number(calculatedDeliveryCharge || 0).toFixed(2)}`}
+                      </span>
                     </div>
                   )}
                   {deliveryZoneError && (

@@ -27,6 +27,11 @@ function riderApi(options: RiderApiOptions) {
   });
 }
 
+function isNativeRiderApp(): boolean {
+  return typeof (window as any).FaiFaiRider !== 'undefined' ||
+    navigator.userAgent.includes('FaiFaiRider/');
+}
+
 // Fix leaflet default marker icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -167,6 +172,7 @@ export default function RiderPanel() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const prevDeliveryIdsRef = useRef<number[]>([]);
+  const riderAlarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -270,6 +276,7 @@ export default function RiderPanel() {
       const newDelivery = deliveries.find(d => newIds.includes(d.id));
       if (newDelivery) {
         toast.success(`🛵 New Delivery #${newDelivery.order_id} - ${newDelivery.customer_name}`, { duration: 10000 });
+        if (!isNativeRiderApp()) playNotificationSound();
       }
     }
     prevDeliveryIdsRef.current = activeIds;
@@ -284,12 +291,38 @@ export default function RiderPanel() {
       rider && deliveries.some(delivery => delivery.status === 'assigned'),
     );
 
-    if (waitingForDecision) {
+    if (riderAlarmIntervalRef.current !== null) {
+      clearInterval(riderAlarmIntervalRef.current);
+      riderAlarmIntervalRef.current = null;
+    }
+
+    if (waitingForDecision && !isNativeRiderApp()) {
+      playNotificationSound();
+      riderAlarmIntervalRef.current = setInterval(playNotificationSound, 3500);
     }
 
     return () => {
+      if (riderAlarmIntervalRef.current !== null) {
+        clearInterval(riderAlarmIntervalRef.current);
+        riderAlarmIntervalRef.current = null;
+      }
     };
   }, [deliveries, rider]);
+
+  function playNotificationSound() {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.frequency.value = 800;
+      oscillator.type = 'sine';
+      gainNode.gain.value = 0.3;
+      oscillator.start();
+      setTimeout(() => { oscillator.frequency.value = 1000; setTimeout(() => { oscillator.frequency.value = 1200; setTimeout(() => { oscillator.stop(); audioContext.close(); }, 150); }, 150); }, 150);
+    } catch { /* ignore */ }
+  }
 
   async function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
@@ -345,18 +378,7 @@ export default function RiderPanel() {
   }
 
   function updateMap() {
-    const latestByOrder = new Map<number, Delivery>();
-    deliveries.forEach((delivery) => {
-      const existing = latestByOrder.get(delivery.order_id);
-      if (!existing || Number(delivery.id) > Number(existing.id)) {
-        latestByOrder.set(delivery.order_id, delivery);
-      }
-    });
-    const activeDeliveries = Array.from(latestByOrder.values()).filter(
-      d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
-        && d.customer_lat
-        && d.customer_lng
-    );
+    const activeDeliveries = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status) && d.customer_lat && d.customer_lng);
     if (activeDeliveries.length === 0) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     if (!mapContainerRef.current) return;
@@ -390,7 +412,7 @@ export default function RiderPanel() {
         loadStats(riderData.id);
         loadFinance(riderData.id, 'today');
         loadCashSubmissions(riderData.id);
-        if ('Notification' in window && Notification.permission === 'default') {
+        if (!isNativeRiderApp() && 'Notification' in window && Notification.permission === 'default') {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
       }
@@ -409,6 +431,10 @@ export default function RiderPanel() {
     setCashNote('');
     localStorage.removeItem('rider_auth');
     prevDeliveryIdsRef.current = [];
+    if (riderAlarmIntervalRef.current !== null) {
+      clearInterval(riderAlarmIntervalRef.current);
+      riderAlarmIntervalRef.current = null;
+    }
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   }
 
@@ -519,6 +545,16 @@ export default function RiderPanel() {
   }
 
   async function updateStatus(assignmentId: number, newStatus: string) {
+    // Native Rider app polls every ~10s. Tell it to stop the looping Admin ring
+    // immediately on Accept/Reject instead of waiting for the next poll.
+    if (newStatus === 'accepted' || newStatus === 'rejected') {
+      if (riderAlarmIntervalRef.current !== null) {
+        clearInterval(riderAlarmIntervalRef.current);
+        riderAlarmIntervalRef.current = null;
+      }
+      try { (window as any).FaiFaiRider?.stopOrderAlarm?.(); } catch {}
+    }
+
     try {
       await riderApi({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
@@ -581,20 +617,8 @@ export default function RiderPanel() {
     );
   }
 
-  const latestByOrder = new Map<number, Delivery>();
-  deliveries.forEach((delivery) => {
-    const existing = latestByOrder.get(delivery.order_id);
-    if (!existing || Number(delivery.id) > Number(existing.id)) {
-      latestByOrder.set(delivery.order_id, delivery);
-    }
-  });
-  const uniqueDeliveries = Array.from(latestByOrder.values());
-  const activeDeliveries = uniqueDeliveries.filter(
-    d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
-  );
-  const completedDeliveries = uniqueDeliveries.filter(
-    d => String(d.status || '').toLowerCase() === 'delivered'
-  );
+  const activeDeliveries = deliveries.filter(d => !['delivered', 'rejected'].includes(d.status));
+  const completedDeliveries = deliveries.filter(d => d.status === 'delivered');
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -635,6 +659,24 @@ export default function RiderPanel() {
             📊 Dashboard
           </button>
         </div>
+
+        {/* Notification Permission Banner */}
+        {!isNativeRiderApp() && notificationPermission === 'default' && (
+          <div className="mb-4 p-3 rounded-xl bg-blue-600/10 border border-blue-600/30">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-blue-400 text-sm font-medium">🔔 Enable Notifications</p>
+                <p className="text-blue-400/70 text-xs mt-0.5">Get alerts for new orders in background</p>
+              </div>
+              <Button onClick={requestNotificationPermission} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer">Enable</Button>
+            </div>
+          </div>
+        )}
+        {!isNativeRiderApp() && notificationPermission === 'denied' && (
+          <div className="mb-4 p-3 rounded-xl bg-red-600/10 border border-red-600/30">
+            <p className="text-red-400 text-sm">⚠️ Notifications blocked. Enable in browser settings.</p>
+          </div>
+        )}
 
         {/* FINANCE / DASHBOARD TAB */}
         {activeTab === 'stats' && (
@@ -899,6 +941,7 @@ export default function RiderPanel() {
                     <Bike className="w-12 h-12 text-gray-700 mx-auto mb-3" />
                     <p className="text-gray-500">No active deliveries</p>
                     <p className="text-gray-600 text-sm mt-1">New deliveries will appear here automatically</p>
+                    {notificationsEnabled && <p className="text-green-500/70 text-xs mt-3">🔔 You'll be notified when new orders arrive</p>}
                   </div>
                 )}
 

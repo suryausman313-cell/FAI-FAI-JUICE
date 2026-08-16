@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
+import { enableCustomerPush, requestCustomerPushPermissionOnLogin } from '@/lib/customer-push';
 
 type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
 
@@ -215,9 +216,9 @@ export default function CustomerAuth() {
   const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(
     hasKnownAccountOnDevice,
   );
-  // Always start with Login on every device.
-  // New customers can switch to Sign Up manually.
-  const [mode, setMode] = useState<ScreenMode>('login');
+  const [mode, setMode] = useState<ScreenMode>(() =>
+    hasKnownAccountOnDevice() ? 'login' : 'signup',
+  );
   const [loading, setLoading] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(
     Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
@@ -263,28 +264,10 @@ export default function CustomerAuth() {
         setActiveCustomer(customer || getStoredCustomer());
         setRegisteredOnThisDevice(true);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return;
-
-        const status = Number((error as any)?.response?.status || 0);
-
-        // Only remove the saved login when the backend clearly says
-        // the token is invalid/expired. A temporary network, Safari/PWA,
-        // Render wake-up, timeout, or offline error must NOT log the
-        // customer out and ask for the PIN again.
-        if (status === 401 || status === 403) {
-          clearCustomerSession();
-          setActiveCustomer(null);
-          return;
-        }
-
-        const storedCustomer = getStoredCustomer();
-        if (storedCustomer) {
-          setActiveCustomer(storedCustomer);
-          setRegisteredOnThisDevice(true);
-        } else {
-          setActiveCustomer(null);
-        }
+        clearCustomerSession();
+        setActiveCustomer(null);
       })
       .finally(() => {
         if (!cancelled) setSessionChecking(false);
@@ -313,12 +296,12 @@ export default function CustomerAuth() {
       mode !== 'changePin'
     ) {
       const timer = window.setTimeout(() => {
-        navigate('/', { replace: true });
+        window.location.replace('/');
       }, 50);
 
       return () => window.clearTimeout(timer);
     }
-  }, [manageMode, sessionChecking, activeCustomer, mode, navigate]);
+  }, [manageMode, sessionChecking, activeCustomer, mode]);
 
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
@@ -351,6 +334,19 @@ export default function CustomerAuth() {
     return phone;
   }
 
+  async function finishCustomerPushAfterAuth(
+    permissionPromise: Promise<NotificationPermission | 'unsupported'>,
+  ): Promise<void> {
+    try {
+      const permission = await permissionPromise;
+      if (permission === 'granted') {
+        await enableCustomerPush();
+      }
+    } catch {
+      // Push setup must never block login/signup.
+    }
+  }
+
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
     const phone = validatePhoneOrShow(loginPhone);
@@ -360,6 +356,8 @@ export default function CustomerAuth() {
       toast.error('PIN must be exactly 4 digits.');
       return;
     }
+
+    const notificationPermission = requestCustomerPushPermissionOnLogin();
 
     setLoading(true);
     try {
@@ -371,8 +369,9 @@ export default function CustomerAuth() {
       setRegisteredOnThisDevice(true);
       setActiveCustomer(customer);
       setLoginPin('');
+      await finishCustomerPushAfterAuth(notificationPermission);
       toast.success('Login successful');
-      navigate('/', { replace: true });
+      window.location.replace('/');
     } catch (error) {
       const message = getErrorMessage(error, 'Login failed');
       toast.error(message);
@@ -406,6 +405,8 @@ export default function CustomerAuth() {
       return;
     }
 
+    const notificationPermission = requestCustomerPushPermissionOnLogin();
+
     setLoading(true);
     try {
       const result = await postCustomerAuth<AuthResponse>(
@@ -423,8 +424,9 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setSignupPin('');
       setSignupConfirmPin('');
+      await finishCustomerPushAfterAuth(notificationPermission);
       toast.success('Account created successfully');
-      navigate('/', { replace: true });
+      window.location.replace('/');
     } catch (error) {
       const message = getErrorMessage(error, 'Could not create account');
       toast.error(message);
@@ -613,7 +615,7 @@ export default function CustomerAuth() {
           </div>
         )}
 
-        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && (
+        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && !registeredOnThisDevice && (
           <div className="mb-7 grid grid-cols-2 rounded-xl border border-slate-800 bg-slate-950 p-1">
             <button
               type="button"
@@ -711,7 +713,7 @@ export default function CustomerAuth() {
           </form>
         )}
 
-        {!sessionChecking && !activeCustomer && mode === 'signup' && (
+        {!sessionChecking && !activeCustomer && mode === 'signup' && !registeredOnThisDevice && (
           <form onSubmit={handleSignup} className={cardClass}>
             <div>
               <h2 className="text-xl font-bold">Create Customer Account</h2>
