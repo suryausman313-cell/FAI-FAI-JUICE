@@ -437,22 +437,6 @@ export default function MyOrders() {
     }, 8000);
     return () => clearInterval(interval);
   }, []);
-    setNotificationStatus('enabling');
-    setNotificationMessage('');
-    try {
-      await enableCustomerPush();
-      setNotificationStatus('enabled');
-    } catch (error: any) {
-      const message = error?.message || 'Could not enable notifications';
-      setNotificationMessage(message);
-      setNotificationStatus(
-        typeof Notification !== 'undefined' && Notification.permission === 'denied'
-          ? 'blocked'
-          : 'error',
-      );
-    }
-  }
-
   async function loadInitialData() {
     try {
       await Promise.all([loadOrders(), loadReviewedOrders(), loadSettings()]);
