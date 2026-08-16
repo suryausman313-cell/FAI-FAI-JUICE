@@ -160,6 +160,47 @@ function numeric(value: unknown): number {
   return Number.isFinite(number) ? number : 0;
 }
 
+function buildFallbackTotals(orders: ReportOrder[]): FinanceTotals {
+  return orders.filter(isCountedOrder).reduce<FinanceTotals>(
+    (totals, order) => {
+      const customerTotal = numeric(order.total_amount);
+      const subtotal = numeric(order.subtotal_amount);
+      const discount = numeric(order.discount_amount);
+      const serviceFee = numeric(order.service_fee);
+      const smallOrderFee = numeric(order.small_order_fee);
+      const deliveryCharge = numeric(order.delivery_charge);
+      const tip = numeric(order.tip_amount);
+      const isDelivery = String(order.order_type || '').toLowerCase() === 'delivery';
+      const riderTip = String(order.tip_type || '').toLowerCase() === 'rider' ? tip : 0;
+      const shopTip = String(order.tip_type || '').toLowerCase() === 'shop' ? tip : 0;
+
+      totals.orders += 1;
+      totals.delivered_orders += isDelivery ? 1 : 0;
+      totals.customer_total += customerTotal;
+      totals.food_subtotal += subtotal;
+      totals.discount_amount += discount;
+      totals.shop_food_sale += Math.max(subtotal - discount, 0);
+      totals.service_fee += serviceFee;
+      totals.small_order_fee += smallOrderFee;
+      totals.delivery_charges += deliveryCharge;
+      totals.rider_tips += riderTip;
+      totals.shop_tips += shopTip;
+      totals.rider_earnings += isDelivery ? deliveryCharge + riderTip : 0;
+
+      if (isCashPayment(order.payment_method)) {
+        totals.cash_collected += customerTotal;
+        totals.cash_orders += 1;
+        totals.cash_payable_to_shop += Math.max(customerTotal - (isDelivery ? deliveryCharge + riderTip : 0), 0);
+      } else {
+        totals.card_orders += 1;
+      }
+
+      return totals;
+    },
+    { ...EMPTY_TOTALS },
+  );
+}
+
 function isCountedOrder(order: ReportOrder): boolean {
   const status = String(order.status || '').toLowerCase();
   return status === 'completed';
@@ -301,7 +342,11 @@ export default function AdminSales() {
         setSummary(summaryResult.value.data as FinanceSummary);
       } else {
         console.error('Finance summary failed:', summaryResult.reason);
-        toast.error('Could not load the finance summary');
+        setSummary(null);
+        // The detailed orders endpoint is independent. If finance summary fails,
+        // the screen will calculate the visible sales totals from those orders
+        // instead of incorrectly showing AED 0.00 everywhere.
+        toast.error('Finance summary unavailable — showing totals from orders');
       }
 
       if (ordersResult.status === 'fulfilled') {
@@ -490,7 +535,7 @@ export default function AdminSales() {
   }, [countedOrders]);
 
 
-  const totals = summary?.totals || EMPTY_TOTALS;
+  const totals = useMemo(() => summary?.totals || buildFallbackTotals(periodOrders), [summary, periodOrders]);
   const averageOrder =
     totals.orders > 0 ? totals.customer_total / totals.orders : 0;
 
