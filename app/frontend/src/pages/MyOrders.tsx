@@ -437,6 +437,7 @@ export default function MyOrders() {
     }, 8000);
     return () => clearInterval(interval);
   }, []);
+
   async function loadInitialData() {
     try {
       await Promise.all([loadOrders(), loadReviewedOrders(), loadSettings()]);
@@ -643,7 +644,16 @@ export default function MyOrders() {
           </Button>
         </div>
 
-        {activeOrders.length > 0 && (
+        {orders.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="text-5xl mb-4">🥤</div>
+            <p className="text-gray-400 text-lg font-medium">No orders yet</p>
+            <p className="text-gray-600 text-sm mt-2">Your orders will appear here after you place them</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Active Orders */}
+            {activeOrders.length > 0 && (
               <div>
                 <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">Active Orders</h2>
                 <div className="space-y-4">
