@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   Save,
+  Search,
   ShieldOff,
   Trash2,
   Undo2,
@@ -240,7 +241,7 @@ export default function AdminDeliverySettings() {
               Road Distance Charges
             </h2>
             <p className="text-gray-500 text-sm mb-4">
-              Actual driving distance selects the first matching active charge slab
+              Actual driving distance chooses a custom slab. Edit km and AED anytime.
             </p>
             <DeliveryZonesManager />
           </Card>
@@ -350,8 +351,7 @@ function DeliveryZonesManager() {
 
   function validZone(zone: typeof newZone): boolean {
     return Boolean(
-      zone.zone_name &&
-        zone.min_distance_km !== '' &&
+      zone.min_distance_km !== '' &&
         zone.max_distance_km !== '' &&
         zone.charge !== '',
     );
@@ -369,7 +369,7 @@ function DeliveryZonesManager() {
         url: '/api/v1/entities/delivery_zones',
         method: 'POST',
         data: {
-          zone_name: newZone.zone_name,
+          zone_name: `${newZone.min_distance_km}-${newZone.max_distance_km} km`,
           min_distance_km: Number(newZone.min_distance_km),
           max_distance_km: Number(newZone.max_distance_km),
           charge: Number(newZone.charge),
@@ -492,11 +492,10 @@ function DeliveryZonesManager() {
 
               <div className="flex-1">
                 <p className="text-white font-medium text-sm">
-                  {zone.zone_name}
+                  {zone.min_distance_km}–{zone.max_distance_km} km
                 </p>
                 <p className="text-gray-400 text-xs">
-                  {zone.min_distance_km}–{zone.max_distance_km} km
-                  {' → '}AED {zone.charge}
+                  Delivery charge → AED {zone.charge}
                 </p>
               </div>
 
@@ -538,7 +537,7 @@ function DeliveryZonesManager() {
 
       <div className="pt-4 border-t border-gray-700">
         <p className="text-gray-400 text-sm mb-2">
-          Add New Zone
+          Add Custom Distance Charge
         </p>
         <ZoneInputs value={newZone} onChange={setNewZone} />
         <Button
@@ -548,7 +547,7 @@ function DeliveryZonesManager() {
           className="bg-red-600 hover:bg-red-700 text-white mt-3"
         >
           <Plus className="w-4 h-4 mr-1" />
-          {adding ? 'Adding...' : 'Add Zone'}
+          {adding ? 'Adding...' : 'Add Distance Slab'}
         </Button>
       </div>
     </div>
@@ -573,51 +572,44 @@ function ZoneInputs({
   }) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-      <Input
-        value={value.zone_name}
-        onChange={event =>
-          onChange({ ...value, zone_name: event.target.value })
-        }
-        placeholder="Zone name"
-        className="bg-gray-900 border-gray-700 text-white"
-      />
+    <div className="grid grid-cols-3 gap-2">
       <Input
         type="number"
+        min="0"
+        step="0.1"
         value={value.min_distance_km}
         onChange={event =>
-          onChange({
-            ...value,
-            min_distance_km: event.target.value,
-          })
+          onChange({ ...value, min_distance_km: event.target.value })
         }
-        placeholder="Min km"
+        placeholder="From km"
         className="bg-gray-900 border-gray-700 text-white"
       />
       <Input
         type="number"
+        min="0"
+        step="0.1"
         value={value.max_distance_km}
         onChange={event =>
-          onChange({
-            ...value,
-            max_distance_km: event.target.value,
-          })
+          onChange({ ...value, max_distance_km: event.target.value })
         }
-        placeholder="Max km"
+        placeholder="To km"
         className="bg-gray-900 border-gray-700 text-white"
       />
       <Input
         type="number"
+        min="0"
+        step="0.5"
         value={value.charge}
         onChange={event =>
           onChange({ ...value, charge: event.target.value })
         }
-        placeholder="AED"
+        placeholder="AED charge"
         className="bg-gray-900 border-gray-700 text-white"
       />
     </div>
   );
 }
+
 
 function BlockedAreasManager({
   shopLat,
@@ -626,21 +618,31 @@ function BlockedAreasManager({
   shopLat: number;
   shopLng: number;
 }) {
-  const [areas, setAreas] = useState<Zone[]>([]);
-  const [name, setName] = useState('');
-  const [draft, setDraft] = useState<[number, number][]>([]);
-  const [saving, setSaving] = useState(false);
+  type AreaSearchResult = {
+    name: string;
+    display_name: string;
+    country?: string;
+    lat: number;
+    lng: number;
+    boundingbox?: string[];
+    geometry: any;
+  };
 
-  useEffect(() => {
-    void loadAreas();
-  }, []);
+  const [areas, setAreas] = useState<Zone[]>([]);
+  const [searchText, setSearchText] = useState('');
+  const [results, setResults] = useState<AreaSearchResult[]>([]);
+  const [selected, setSelected] = useState<AreaSearchResult | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [draft, setDraft] = useState<[number, number][]>([]);
+
+  useEffect(() => { void loadAreas(); }, []);
 
   async function loadAreas() {
     try {
       const response = await client.apiCall.invoke({
-        url:
-          '/api/v1/entities/delivery_zones' +
-          '?query={"zone_type":"blocked"}&sort=zone_name&limit=100',
+        url: '/api/v1/entities/delivery_zones?query={"zone_type":"blocked"}&sort=zone_name&limit=100',
         method: 'GET',
       });
       setAreas(response?.data?.items || []);
@@ -650,277 +652,201 @@ function BlockedAreasManager({
     }
   }
 
-  async function saveArea() {
-    const cleanName = name.trim();
-    if (!cleanName) {
-      toast.error('Enter blocked area name, for example Madha');
+  async function searchArea() {
+    const query = searchText.trim();
+    if (query.length < 2) {
+      toast.error('Type an area name, for example Madha');
       return;
     }
-    if (draft.length < 3) {
-      toast.error('Tap at least 3 points on the map to draw the blocked area');
-      return;
+    setSearching(true);
+    setSelected(null);
+    try {
+      const response = await client.apiCall.invoke({
+        url: `/api/v1/entities/delivery_zones/area-search?q=${encodeURIComponent(query)}`,
+        method: 'GET',
+      });
+      const items = (response?.data?.items || []) as AreaSearchResult[];
+      setResults(items);
+      if (items.length === 0) toast.error('No full area boundary found. Use manual draw below.');
+    } catch (error: any) {
+      toast.error(error?.data?.detail || 'Could not search area');
+    } finally {
+      setSearching(false);
     }
+  }
 
+  async function saveSelectedArea() {
+    if (!selected?.geometry) return;
     setSaving(true);
     try {
       await client.apiCall.invoke({
         url: '/api/v1/entities/delivery_zones',
         method: 'POST',
         data: {
-          zone_name: cleanName,
-          min_distance_km: 0,
-          max_distance_km: 0,
-          charge: 0,
-          is_active: true,
-          zone_type: 'blocked',
-          polygon_json: JSON.stringify(draft),
+          zone_name: selected.name || searchText.trim(),
+          min_distance_km: 0, max_distance_km: 0, charge: 0,
+          is_active: true, zone_type: 'blocked',
+          polygon_json: JSON.stringify(selected.geometry),
         },
       });
-      setName('');
-      setDraft([]);
-      toast.success(`${cleanName} blocked for delivery`);
+      toast.success(`${selected.name} blocked for delivery`);
+      setSelected(null); setResults([]); setSearchText('');
       await loadAreas();
     } catch (error: any) {
-      toast.error(error?.data?.detail || 'Could not save blocked area');
-    } finally {
-      setSaving(false);
+      toast.error(error?.data?.detail || 'Could not block area');
+    } finally { setSaving(false); }
+  }
+
+  async function saveManualArea() {
+    const cleanName = manualName.trim();
+    if (!cleanName || draft.length < 3) {
+      toast.error('Enter a name and draw at least 3 points');
+      return;
     }
+    setSaving(true);
+    try {
+      await client.apiCall.invoke({
+        url: '/api/v1/entities/delivery_zones', method: 'POST',
+        data: { zone_name: cleanName, min_distance_km: 0, max_distance_km: 0, charge: 0, is_active: true, zone_type: 'blocked', polygon_json: JSON.stringify(draft) },
+      });
+      setManualName(''); setDraft([]);
+      toast.success(`${cleanName} blocked for delivery`);
+      await loadAreas();
+    } catch (error: any) { toast.error(error?.data?.detail || 'Could not save blocked area'); }
+    finally { setSaving(false); }
   }
 
   async function toggleArea(area: Zone) {
     try {
-      await client.apiCall.invoke({
-        url: `/api/v1/entities/delivery_zones/${area.id}`,
-        method: 'PUT',
-        data: { is_active: !area.is_active },
-      });
+      await client.apiCall.invoke({ url: `/api/v1/entities/delivery_zones/${area.id}`, method: 'PUT', data: { is_active: !area.is_active } });
       await loadAreas();
-    } catch {
-      toast.error('Could not change blocked area status');
-    }
+    } catch { toast.error('Could not change blocked area status'); }
   }
 
   async function deleteArea(area: Zone) {
     if (!window.confirm(`Delete blocked area "${area.zone_name}"?`)) return;
     try {
-      await client.apiCall.invoke({
-        url: `/api/v1/entities/delivery_zones/${area.id}`,
-        method: 'DELETE',
-      });
-      toast.success('Blocked area deleted');
-      await loadAreas();
-    } catch (error: any) {
-      toast.error(error?.data?.detail || 'Could not delete blocked area');
-    }
+      await client.apiCall.invoke({ url: `/api/v1/entities/delivery_zones/${area.id}`, method: 'DELETE' });
+      toast.success('Blocked area deleted'); await loadAreas();
+    } catch (error: any) { toast.error(error?.data?.detail || 'Could not delete blocked area'); }
   }
 
   return (
     <div className="space-y-4">
-      <div className="grid md:grid-cols-[1fr_auto] gap-2">
-        <Input
-          value={name}
-          onChange={event => setName(event.target.value)}
-          placeholder="Area name, e.g. Madha"
-          className="bg-gray-800 border-gray-700 text-white"
-        />
-        <Button
-          onClick={() => void saveArea()}
-          disabled={saving || draft.length < 3}
-          className="bg-red-600 hover:bg-red-700 text-white"
-        >
-          <ShieldOff className="w-4 h-4 mr-2" />
-          {saving ? 'Saving...' : 'Block This Area'}
-        </Button>
-      </div>
-
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <p className="text-gray-500">
-          Tap around the border of the area. Current points: {draft.length}
-        </p>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setDraft(points => points.slice(0, -1))}
-            disabled={draft.length === 0}
-            className="text-gray-300"
-          >
-            <Undo2 className="w-3 h-3 mr-1" /> Undo
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setDraft([])}
-            disabled={draft.length === 0}
-            className="text-red-300"
-          >
-            Clear
+      <div>
+        <Label className="text-gray-300">Search full area to block</Label>
+        <div className="grid md:grid-cols-[1fr_auto] gap-2 mt-2">
+          <Input value={searchText} onChange={e => setSearchText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void searchArea(); } }} placeholder="Madha, Mirbah, Khor Fakkan..." className="bg-gray-800 border-gray-700 text-white" />
+          <Button type="button" onClick={() => void searchArea()} disabled={searching} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Search className="w-4 h-4 mr-2" />{searching ? 'Searching...' : 'Search Area'}
           </Button>
         </div>
       </div>
 
-      <BlockedAreaMap
-        centerLat={Number.isFinite(shopLat) ? shopLat : 25.2747}
-        centerLng={Number.isFinite(shopLng) ? shopLng : 56.345}
-        areas={areas}
-        draft={draft}
-        onDraftChange={setDraft}
-      />
+      {results.length > 0 && (
+        <div className="space-y-2">
+          {results.map((item, index) => (
+            <button key={`${item.display_name}-${index}`} type="button" onClick={() => setSelected(item)} className={`w-full text-left p-3 rounded-lg border ${selected?.display_name === item.display_name ? 'border-red-500 bg-red-950/20' : 'border-gray-700 bg-gray-800'}`}>
+              <p className="text-white text-sm font-medium">{item.name}</p>
+              <p className="text-gray-400 text-xs mt-1">{item.display_name}</p>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <BlockedAreaMap centerLat={Number.isFinite(shopLat) ? shopLat : 25.2747} centerLng={Number.isFinite(shopLng) ? shopLng : 56.345} areas={areas} draft={draft} onDraftChange={setDraft} selectedGeometry={selected?.geometry || null} selectedBounds={selected?.boundingbox || null} />
+
+      {selected && (
+        <Button type="button" onClick={() => void saveSelectedArea()} disabled={saving} className="w-full bg-red-600 hover:bg-red-700 text-white">
+          <ShieldOff className="w-4 h-4 mr-2" />{saving ? 'Saving...' : `Block Full ${selected.name} Area`}
+        </Button>
+      )}
+
+      <p className="text-gray-500 text-xs">Area boundary data © OpenStreetMap contributors. Search is only sent when you press Search.</p>
+
+      <details className="border border-gray-800 rounded-xl p-3">
+        <summary className="text-gray-300 text-sm cursor-pointer">Manual custom block (backup)</summary>
+        <div className="mt-3 space-y-3">
+          <Input value={manualName} onChange={e => setManualName(e.target.value)} placeholder="Custom blocked area name" className="bg-gray-800 border-gray-700 text-white" />
+          <div className="flex justify-between gap-2 text-xs">
+            <span className="text-gray-500">Tap points on map: {draft.length}</span>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(points => points.slice(0, -1))} disabled={!draft.length} className="text-gray-300"><Undo2 className="w-3 h-3 mr-1" />Undo</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setDraft([])} disabled={!draft.length} className="text-red-300">Clear</Button>
+            </div>
+          </div>
+          <Button type="button" onClick={() => void saveManualArea()} disabled={saving || draft.length < 3} className="bg-red-600 hover:bg-red-700 text-white">Save Manual Block</Button>
+        </div>
+      </details>
 
       <div className="space-y-2">
         {areas.map(area => (
-          <div
-            key={area.id}
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-700 bg-gray-800"
-          >
-            <Switch
-              checked={area.is_active !== false}
-              onCheckedChange={() => void toggleArea(area)}
-            />
-            <div className="flex-1 min-w-0">
-              <p className="text-white text-sm font-medium">{area.zone_name}</p>
-              <p className="text-red-300 text-xs">
-                {area.is_active !== false ? 'Delivery blocked' : 'Block disabled'}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void deleteArea(area)}
-              className="text-red-400 p-1 h-auto"
-            >
-              <Trash2 className="w-4 h-4" />
-            </Button>
+          <div key={area.id} className="flex items-center gap-3 p-3 rounded-lg border border-gray-700 bg-gray-800">
+            <Switch checked={area.is_active !== false} onCheckedChange={() => void toggleArea(area)} />
+            <div className="flex-1 min-w-0"><p className="text-white text-sm font-medium">{area.zone_name}</p><p className="text-red-300 text-xs">{area.is_active !== false ? 'Delivery blocked' : 'Block disabled'}</p></div>
+            <Button size="sm" variant="ghost" onClick={() => void deleteArea(area)} className="text-red-400 p-1 h-auto"><Trash2 className="w-4 h-4" /></Button>
           </div>
         ))}
-        {areas.length === 0 && (
-          <p className="text-gray-500 text-sm">No blocked delivery areas yet.</p>
-        )}
+        {areas.length === 0 && <p className="text-gray-500 text-sm">No blocked delivery areas yet.</p>}
       </div>
     </div>
   );
 }
 
-function parsePolygon(area: Zone): [number, number][] {
-  try {
-    const value = JSON.parse(area.polygon_json || '[]');
-    if (!Array.isArray(value)) return [];
-    return value
-      .filter(point => Array.isArray(point) && point.length >= 2)
-      .map(point => [Number(point[0]), Number(point[1])] as [number, number])
-      .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
-  } catch {
-    return [];
-  }
+function savedGeometryToLayerData(area: Zone): any {
+  try { return JSON.parse(area.polygon_json || '[]'); } catch { return []; }
 }
 
-function BlockedAreaMap({
-  centerLat,
-  centerLng,
-  areas,
-  draft,
-  onDraftChange,
-}: {
-  centerLat: number;
-  centerLng: number;
-  areas: Zone[];
-  draft: [number, number][];
-  onDraftChange: (points: [number, number][]) => void;
+function BlockedAreaMap({ centerLat, centerLng, areas, draft, onDraftChange, selectedGeometry, selectedBounds }: {
+  centerLat: number; centerLng: number; areas: Zone[]; draft: [number, number][]; onDraftChange: (points: [number, number][]) => void; selectedGeometry: any; selectedBounds: string[] | null;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const savedLayerRef = useRef<L.LayerGroup | null>(null);
   const draftLayerRef = useRef<L.LayerGroup | null>(null);
+  const selectedLayerRef = useRef<L.LayerGroup | null>(null);
   const draftRef = useRef<[number, number][]>(draft);
   const onDraftChangeRef = useRef(onDraftChange);
 
-  useEffect(() => {
-    draftRef.current = draft;
-    onDraftChangeRef.current = onDraftChange;
-  }, [draft, onDraftChange]);
-
+  useEffect(() => { draftRef.current = draft; onDraftChangeRef.current = onDraftChange; }, [draft, onDraftChange]);
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
-    const map = L.map(mapRef.current).setView([centerLat, centerLng], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-    }).addTo(map);
-
-    savedLayerRef.current = L.layerGroup().addTo(map);
-    draftLayerRef.current = L.layerGroup().addTo(map);
-
-    map.on('click', event => {
-      const next: [number, number][] = [
-        ...draftRef.current,
-        [event.latlng.lat, event.latlng.lng],
-      ];
-      draftRef.current = next;
-      onDraftChangeRef.current(next);
-    });
-
+    const map = L.map(mapRef.current).setView([centerLat, centerLng], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    savedLayerRef.current = L.layerGroup().addTo(map); draftLayerRef.current = L.layerGroup().addTo(map); selectedLayerRef.current = L.layerGroup().addTo(map);
+    map.on('click', event => { const next: [number, number][] = [...draftRef.current, [event.latlng.lat, event.latlng.lng]]; draftRef.current = next; onDraftChangeRef.current(next); });
     mapInstanceRef.current = map;
-    return () => {
-      map.remove();
-      mapInstanceRef.current = null;
-      savedLayerRef.current = null;
-      draftLayerRef.current = null;
-    };
+    return () => { map.remove(); mapInstanceRef.current = null; };
   }, []);
 
   useEffect(() => {
-    const group = savedLayerRef.current;
-    if (!group) return;
-    group.clearLayers();
+    const group = savedLayerRef.current; if (!group) return; group.clearLayers();
     areas.forEach(area => {
-      const polygon = parsePolygon(area);
-      if (polygon.length < 3) return;
-      L.polygon(polygon, {
-        color: area.is_active !== false ? '#ef4444' : '#6b7280',
-        fillColor: area.is_active !== false ? '#ef4444' : '#6b7280',
-        fillOpacity: area.is_active !== false ? 0.18 : 0.06,
-        weight: 2,
-      })
-        .bindTooltip(`${area.zone_name} — ${area.is_active !== false ? 'BLOCKED' : 'disabled'}`)
-        .addTo(group);
+      const geometry = savedGeometryToLayerData(area);
+      if (Array.isArray(geometry)) { if (geometry.length >= 3) L.polygon(geometry as any).bindTooltip(`${area.zone_name} — BLOCKED`).addTo(group); }
+      else if (geometry?.type) L.geoJSON(geometry).bindTooltip(`${area.zone_name} — BLOCKED`).addTo(group);
     });
   }, [areas]);
 
   useEffect(() => {
-    const group = draftLayerRef.current;
-    if (!group) return;
-    group.clearLayers();
-    draft.forEach((point, index) => {
-      L.circleMarker(point, {
-        radius: 5,
-        color: '#f59e0b',
-        fillColor: '#f59e0b',
-        fillOpacity: 1,
-      })
-        .bindTooltip(String(index + 1))
-        .addTo(group);
-    });
-    if (draft.length >= 2) {
-      L.polyline(draft, { color: '#f59e0b', weight: 3 }).addTo(group);
+    const group = selectedLayerRef.current; const map = mapInstanceRef.current; if (!group || !map) return; group.clearLayers();
+    if (selectedGeometry?.type) L.geoJSON(selectedGeometry).bindTooltip('Selected full area').addTo(group);
+    if (selectedBounds && selectedBounds.length >= 4) {
+      const south = Number(selectedBounds[0]), north = Number(selectedBounds[1]), west = Number(selectedBounds[2]), east = Number(selectedBounds[3]);
+      if ([south, north, west, east].every(Number.isFinite)) map.fitBounds([[south, west], [north, east]], { padding: [18, 18] });
     }
-    if (draft.length >= 3) {
-      L.polygon(draft, {
-        color: '#ef4444',
-        fillColor: '#ef4444',
-        fillOpacity: 0.16,
-        weight: 2,
-      }).addTo(group);
-    }
+  }, [selectedGeometry, selectedBounds]);
+
+  useEffect(() => {
+    const group = draftLayerRef.current; if (!group) return; group.clearLayers();
+    draft.forEach((point, index) => L.circleMarker(point, { radius: 5 }).bindTooltip(String(index + 1)).addTo(group));
+    if (draft.length >= 2) L.polyline(draft).addTo(group);
+    if (draft.length >= 3) L.polygon(draft).addTo(group);
   }, [draft]);
 
-  return (
-    <div
-      ref={mapRef}
-      className="h-96 rounded-xl overflow-hidden border border-gray-700"
-    />
-  );
+  return <div ref={mapRef} className="h-96 rounded-xl overflow-hidden border border-gray-700" />;
 }
+
 
 function LocationMap({
   lat,

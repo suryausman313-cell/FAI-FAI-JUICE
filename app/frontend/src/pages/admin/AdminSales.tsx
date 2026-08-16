@@ -11,6 +11,7 @@ import {
   CircleDollarSign,
   CreditCard,
   Download,
+  MapPin,
   PackageCheck,
   Percent,
   RefreshCw,
@@ -96,6 +97,11 @@ interface ReportOrder {
   tip_amount?: number;
   tip_type?: string;
   rider_name?: string;
+  order_notes?: string;
+  delivery_area_name?: string;
+  delivery_country?: string;
+  delivery_distance_km?: number | null;
+  delivery_zone_name?: string;
   items_json?: string;
   created_at?: string;
 }
@@ -147,20 +153,6 @@ function numeric(value: unknown): number {
   return Number.isFinite(number) ? number : 0;
 }
 
-function orderGrossSales(order: ReportOrder): number {
-  const riderTip =
-    String(order.tip_type || '').toLowerCase() === 'rider'
-      ? numeric(order.tip_amount)
-      : 0;
-
-  return Math.max(
-    numeric(order.total_amount) -
-      numeric(order.delivery_charge) -
-      riderTip,
-    0,
-  );
-}
-
 function isCountedOrder(order: ReportOrder): boolean {
   const status = String(order.status || '').toLowerCase();
   return status === 'completed';
@@ -191,6 +183,16 @@ function dateKey(value: string | undefined): string {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+function orderAreaName(order: ReportOrder): string {
+  const direct = String(order.delivery_area_name || '').trim();
+  if (direct) return direct;
+  const notes = String(order.order_notes || '');
+  const match = notes.match(/(?:^|\|)\s*Zone:\s*([^|]+)/i);
+  if (match?.[1]) return match[1].trim();
+  const legacy = String(order.delivery_zone_name || '').trim();
+  return legacy || 'Unknown Area';
 }
 
 function escapeCsv(value: unknown): string {
@@ -357,40 +359,20 @@ export default function AdminSales() {
     [periodOrders],
   );
 
-  const paymentSplit = useMemo(() => {
+  const paymentStats = useMemo(() => {
     return countedOrders.reduce(
       (result, order) => {
-        const amount = orderGrossSales(order);
-        const isDelivery =
-          String(order.order_type || '').toLowerCase() === 'delivery';
-        const isCash = isCashPayment(order.payment_method);
-
-        if (isDelivery && isCash) {
-          result.deliveryCashSales += amount;
-          result.deliveryCashOrders += 1;
-        } else if (isDelivery) {
-          result.deliveryCardSales += amount;
-          result.deliveryCardOrders += 1;
-        } else if (isCash) {
-          result.pickupCashSales += amount;
-          result.pickupCashOrders += 1;
+        const amount = numeric(order.total_amount);
+        if (isCashPayment(order.payment_method)) {
+          result.cashAmount += amount;
+          result.cashOrders += 1;
         } else {
-          result.pickupCardSales += amount;
-          result.pickupCardOrders += 1;
+          result.cardAmount += amount;
+          result.cardOrders += 1;
         }
-
         return result;
       },
-      {
-        pickupCashSales: 0,
-        pickupCardSales: 0,
-        deliveryCashSales: 0,
-        deliveryCardSales: 0,
-        pickupCashOrders: 0,
-        pickupCardOrders: 0,
-        deliveryCashOrders: 0,
-        deliveryCardOrders: 0,
-      },
+      { cashAmount: 0, cardAmount: 0, cashOrders: 0, cardOrders: 0 },
     );
   }, [countedOrders]);
 
@@ -448,7 +430,7 @@ export default function AdminSales() {
         orders: 0,
       };
 
-      current.revenue += orderGrossSales(order);
+      current.revenue += numeric(order.total_amount);
       current.orders += 1;
       grouped.set(key, current);
     });
@@ -462,11 +444,28 @@ export default function AdminSales() {
     1,
     ...dailyTrend.map(point => point.revenue),
   );
+  const locationStats = useMemo(() => {
+    const grouped = new Map<string, { sales: number; orders: number; distanceTotal: number; distanceCount: number }>();
+    countedOrders.forEach(order => {
+      if (String(order.order_type || '').toLowerCase() !== 'delivery') return;
+      const area = orderAreaName(order);
+      const current = grouped.get(area) || { sales: 0, orders: 0, distanceTotal: 0, distanceCount: 0 };
+      current.sales += numeric(order.total_amount);
+      current.orders += 1;
+      const distance = Number(order.delivery_distance_km);
+      if (Number.isFinite(distance) && distance > 0) { current.distanceTotal += distance; current.distanceCount += 1; }
+      grouped.set(area, current);
+    });
+    return [...grouped.entries()].map(([area, value]) => ({
+      area, sales: value.sales, orders: value.orders,
+      averageDistance: value.distanceCount ? value.distanceTotal / value.distanceCount : null,
+    })).sort((a, b) => b.sales - a.sales);
+  }, [countedOrders]);
+
 
   const totals = summary?.totals || EMPTY_TOTALS;
-  const shopMustPayApp = numeric(totals.developer_fees);
-  const grossSales = numeric(totals.shop_food_sale) + shopMustPayApp;
-  const netShopSale = numeric(totals.shop_food_sale);
+  const averageOrder =
+    totals.orders > 0 ? totals.customer_total / totals.orders : 0;
 
   function exportCsv(): void {
     const headers = [
@@ -479,11 +478,14 @@ export default function AdminSales() {
       'Order Type',
       'Subtotal',
       'Discount',
-      'Shop Must Pay App',
+      'Service Fee',
+      'Small Order Fee',
       'Delivery Charge',
       'Tip',
       'Customer Total',
       'Rider',
+      'Delivery Area',
+      'Road Distance Km',
     ];
 
     const rows = visibleOrders.map(order => [
@@ -496,11 +498,14 @@ export default function AdminSales() {
       order.order_type,
       numeric(order.subtotal_amount),
       numeric(order.discount_amount),
-      numeric(order.service_fee) + numeric(order.small_order_fee),
+      numeric(order.service_fee),
+      numeric(order.small_order_fee),
       numeric(order.delivery_charge),
       numeric(order.tip_amount),
       numeric(order.total_amount),
       order.rider_name,
+      orderAreaName(order),
+      order.delivery_distance_km ?? '',
     ]);
 
     const csv = [headers, ...rows]
@@ -543,9 +548,9 @@ export default function AdminSales() {
           </Button>
 
           <div className="flex-1">
-            <h1 className="text-white text-2xl font-bold">Sales & Reports</h1>
+            <h1 className="text-white text-2xl font-bold">Sales & Reports <span className="text-[10px] text-emerald-400">FINAL V5</span></h1>
             <p className="text-gray-500 text-xs mt-1">
-              Clear shop sales, app payment and order report
+              Complete Fai Fai revenue, fees, payment and rider report
             </p>
           </div>
 
@@ -611,165 +616,173 @@ export default function AdminSales() {
         </Card>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-4">
+          <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase font-semibold">
-                Gross Sales
+              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
+                Customer Paid
               </p>
               <CircleDollarSign className="w-4 h-4 text-emerald-400" />
             </div>
             <p className="text-white text-2xl font-black mt-2">
-              AED {money(grossSales)}
+              AED {money(totals.customer_total)}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              Rider charges and rider tips excluded
-            </p>
-          </Card>
-
-          <Card className="bg-red-950/20 border-red-900/40 p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-red-300 text-[11px] uppercase font-semibold">
-                Shop Must Pay App
-              </p>
-              <Percent className="w-4 h-4 text-red-400" />
-            </div>
-            <p className="text-red-400 text-2xl font-black mt-2">
-              -AED {money(shopMustPayApp)}
-            </p>
-            <p className="text-red-300/60 text-[11px] mt-1">
-              Amount payable by shop
-            </p>
-          </Card>
-
-          <Card className="bg-emerald-950/25 border-emerald-900/40 p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
-                Net Shop Sale
-              </p>
-              <Wallet className="w-4 h-4 text-emerald-400" />
-            </div>
-            <p className="text-white text-2xl font-black mt-2">
-              AED {money(netShopSale)}
-            </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              Shop amount after app payment
+              {totals.orders} counted orders
             </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase font-semibold">
-                Completed Orders
-              </p>
-              <PackageCheck className="w-4 h-4 text-blue-400" />
+              <p className="text-gray-400 text-[11px] uppercase">Food Subtotal</p>
+              <ShoppingBag className="w-4 h-4 text-blue-400" />
             </div>
-            <p className="text-white text-2xl font-black mt-2">
-              {countedOrders.length}
+            <p className="text-white text-xl font-bold mt-2">
+              AED {money(totals.food_subtotal)}
+            </p>
+            <p className="text-red-400 text-[11px] mt-1">
+              - AED {money(totals.discount_amount)} discount
+            </p>
+          </Card>
+
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-[11px] uppercase">Shop Food Sale</p>
+              <PackageCheck className="w-4 h-4 text-green-400" />
+            </div>
+            <p className="text-white text-xl font-bold mt-2">
+              AED {money(totals.shop_food_sale)}
             </p>
             <p className="text-gray-500 text-[11px] mt-1">
-              Final sales only
+              Food after discount
+            </p>
+          </Card>
+
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-[11px] uppercase">Average Order</p>
+              <BarChart3 className="w-4 h-4 text-purple-400" />
+            </div>
+            <p className="text-white text-xl font-bold mt-2">
+              AED {money(averageOrder)}
+            </p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              {totals.delivered_orders} delivered
             </p>
           </Card>
         </div>
 
-        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-gray-500 text-xs uppercase font-semibold">
-                Simple Calculation
-              </p>
-              <p className="text-gray-300 text-sm mt-1">
-                Gross Sales AED {money(grossSales)} - Shop Must Pay App AED {money(shopMustPayApp)}
-              </p>
+        <div className="grid lg:grid-cols-2 gap-4 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Percent className="w-4 h-4 text-amber-400" />
+              <h2 className="text-white font-semibold">Fee Breakdown</h2>
             </div>
-            <div className="text-right shrink-0">
-              <p className="text-gray-500 text-[10px] uppercase">Shop Keeps</p>
-              <p className="text-emerald-400 font-black">
-                AED {money(netShopSale)}
-              </p>
-            </div>
-          </div>
-        </Card>
 
-        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
-          <div className="flex items-center gap-2 mb-4">
-            <Wallet className="w-4 h-4 text-emerald-400" />
-            <div>
-              <h2 className="text-white font-semibold">Payment Split</h2>
-              <p className="text-gray-500 text-[11px] mt-0.5">
-                Rider delivery charges and rider tips are not included.
-              </p>
-            </div>
-          </div>
-
-          <div className="mb-3">
-            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
-              Pickup Sales
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-emerald-300 text-xs font-semibold uppercase">Pickup Cash</p>
-                  <Banknote className="w-5 h-5 text-emerald-400" />
+            <div className="space-y-2">
+              {[
+                ['Service Fee', totals.service_fee, 'text-cyan-400'],
+                ['Small Order Fee', totals.small_order_fee, 'text-orange-400'],
+                ['Delivery Charges', totals.delivery_charges, 'text-blue-400'],
+                ['Shop Tips', totals.shop_tips, 'text-pink-400'],
+                ['Platform / Developer Fees', totals.developer_fees, 'text-purple-400'],
+              ].map(([label, value, color]) => (
+                <div
+                  key={String(label)}
+                  className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5"
+                >
+                  <span className="text-gray-300 text-sm">{label}</span>
+                  <span className={`font-bold text-sm ${color}`}>
+                    AED {money(value)}
+                  </span>
                 </div>
-                <p className="text-white text-xl font-black mt-3">
-                  AED {money(paymentSplit.pickupCashSales)}
-                </p>
-                <p className="text-emerald-300/60 text-[11px] mt-1">
-                  {paymentSplit.pickupCashOrders} completed orders
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-blue-300 text-xs font-semibold uppercase">Pickup Card</p>
-                  <CreditCard className="w-5 h-5 text-blue-400" />
-                </div>
-                <p className="text-white text-xl font-black mt-3">
-                  AED {money(paymentSplit.pickupCardSales)}
-                </p>
-                <p className="text-blue-300/60 text-[11px] mt-1">
-                  {paymentSplit.pickupCardOrders} completed orders
-                </p>
-              </div>
+              ))}
             </div>
-          </div>
+          </Card>
 
-          <div>
-            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
-              Delivery Sales
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-emerald-300 text-xs font-semibold uppercase">Delivery Cash</p>
-                  <Truck className="w-5 h-5 text-emerald-400" />
-                </div>
-                <p className="text-white text-xl font-black mt-3">
-                  AED {money(paymentSplit.deliveryCashSales)}
-                </p>
-                <p className="text-emerald-300/60 text-[11px] mt-1">
-                  {paymentSplit.deliveryCashOrders} completed orders
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-blue-300 text-xs font-semibold uppercase">Delivery Card</p>
-                  <CreditCard className="w-5 h-5 text-blue-400" />
-                </div>
-                <p className="text-white text-xl font-black mt-3">
-                  AED {money(paymentSplit.deliveryCardSales)}
-                </p>
-                <p className="text-blue-300/60 text-[11px] mt-1">
-                  {paymentSplit.deliveryCardOrders} completed orders
-                </p>
-              </div>
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Bike className="w-4 h-4 text-pink-400" />
+              <h2 className="text-white font-semibold">Rider Money</h2>
             </div>
-          </div>
-        </Card>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
+                <span className="text-gray-300 text-sm">Delivery Charges</span>
+                <span className="text-blue-400 font-bold text-sm">
+                  AED {money(totals.delivery_charges)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5">
+                <span className="text-gray-300 text-sm">Rider Tips</span>
+                <span className="text-pink-400 font-bold text-sm">
+                  AED {money(totals.rider_tips)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between bg-gray-950/70 rounded-xl px-3 py-2.5 border border-emerald-800/40">
+                <span className="text-white text-sm font-semibold">Rider Earnings</span>
+                <span className="text-emerald-400 font-black">
+                  AED {money(totals.rider_earnings)}
+                </span>
+              </div>
+              <button
+                onClick={() => navigate('/admin/finance')}
+                className="w-full flex items-center justify-between text-xs text-gray-400 hover:text-white bg-gray-800 rounded-xl px-3 py-3"
+              >
+                Open Rider Cash Settlement
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </Card>
+        </div>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Wallet className="w-4 h-4 text-green-400" />
+              <h2 className="text-white font-semibold">Payment Split</h2>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-green-950/30 border border-green-900/40 rounded-2xl p-4">
+                <Banknote className="w-5 h-5 text-green-400 mb-3" />
+                <p className="text-gray-400 text-[11px] uppercase">Cash</p>
+                <p className="text-white font-black text-xl mt-1">
+                  AED {money(paymentStats.cashAmount)}
+                </p>
+                <p className="text-green-400 text-xs mt-1">
+                  {paymentStats.cashOrders} orders
+                </p>
+              </div>
+
+              <div className="bg-blue-950/30 border border-blue-900/40 rounded-2xl p-4">
+                <CreditCard className="w-5 h-5 text-blue-400 mb-3" />
+                <p className="text-gray-400 text-[11px] uppercase">Card</p>
+                <p className="text-white font-black text-xl mt-1">
+                  AED {money(paymentStats.cardAmount)}
+                </p>
+                <p className="text-blue-400 text-xs mt-1">
+                  {paymentStats.cardOrders} orders
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3 bg-gray-950/70 rounded-xl px-3 py-3 flex items-center justify-between">
+              <span className="text-gray-400 text-sm">Cash Payable to Shop</span>
+              <span className="text-white font-bold">
+                AED {money(totals.cash_payable_to_shop)}
+              </span>
+            </div>
+
+            {summary?.current_balance && (
+              <div className="mt-2 bg-amber-950/20 border border-amber-900/30 rounded-xl px-3 py-3 flex items-center justify-between">
+                <span className="text-amber-200 text-sm">Rider Cash Still Due</span>
+                <span className="text-amber-400 font-bold">
+                  AED {money(summary.current_balance.remaining_to_submit)}
+                </span>
+              </div>
+            )}
+          </Card>
+
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
@@ -809,6 +822,31 @@ export default function AdminSales() {
             )}
           </Card>
         </div>
+
+        <Card className="bg-gray-900 border-gray-800 p-4 mb-4">
+          <div className="flex items-center gap-2 mb-4">
+            <MapPin className="w-4 h-4 text-orange-400" />
+            <div>
+              <h2 className="text-white font-semibold">Sales by Location</h2>
+              <p className="text-gray-500 text-xs">Delivery area saved from the customer's actual order pin</p>
+            </div>
+          </div>
+          {locationStats.length === 0 ? (
+            <p className="text-gray-600 text-sm">No delivery-location sales in this period</p>
+          ) : (
+            <div className="divide-y divide-gray-800 border border-gray-800 rounded-xl overflow-hidden">
+              {locationStats.map(item => (
+                <div key={item.area} className="flex items-center gap-3 px-4 py-3 bg-gray-950/50">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-medium truncate">{item.area}</p>
+                    <p className="text-gray-500 text-xs">{item.orders} orders{item.averageDistance !== null ? ` · avg road ${item.averageDistance.toFixed(1)} km` : ''}</p>
+                  </div>
+                  <p className="text-white font-bold">AED {money(item.sales)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
           <Card className="bg-gray-900 border-gray-800 p-4">
