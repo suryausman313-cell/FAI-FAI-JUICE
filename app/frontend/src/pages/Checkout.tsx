@@ -105,7 +105,8 @@ export default function Checkout() {
   const [nearCharge, setNearCharge] = useState(5);
   const [farCharge, setFarCharge] = useState(15);
   const [zoneName, setZoneName] = useState('');
-  const [deliveryZones, setDeliveryZones] = useState<{zone_name: string; min_distance_km: number; max_distance_km: number; charge: number}[]>([]);
+  const [roadDistanceKm, setRoadDistanceKm] = useState<number | null>(null);
+  const [deliveryZones, setDeliveryZones] = useState<{zone_name: string; min_distance_km: number; max_distance_km: number; charge: number; zone_type?: string}[]>([]);
 
   // Tip
   const [tipAmount, setTipAmount] = useState(0);
@@ -300,31 +301,31 @@ export default function Checkout() {
         },
       });
       const result = res?.data;
+      setRoadDistanceKm(
+        typeof result?.distance_km === 'number' ? result.distance_km : null,
+      );
       if (result?.available) {
         setDeliveryZoneError('');
-        setCalculatedDeliveryCharge(result.charge || 0);
+        setCalculatedDeliveryCharge(Number(result.charge) || 0);
         setZoneName(result.zone_name || '');
       } else {
-        setDeliveryZoneError(result?.message || `Delivery not available in your area (${result?.distance_km?.toFixed(1) || '?'} km away).`);
+        setDeliveryZoneError(
+          result?.message || 'Delivery is not available at this location.',
+        );
         setCalculatedDeliveryCharge(0);
         setZoneName('');
       }
-    } catch {
-      // Fallback to client-side near/far calculation if API fails
-      const distance = getDistanceKm(restaurantLat, restaurantLng, lat, lng);
-      if (distance <= nearRadius) {
-        setDeliveryZoneError('');
-        setCalculatedDeliveryCharge(nearCharge);
-        setZoneName('Near Zone');
-      } else if (distance <= farRadius) {
-        setDeliveryZoneError('');
-        setCalculatedDeliveryCharge(farCharge);
-        setZoneName('Far Zone');
-      } else {
-        setDeliveryZoneError(`Delivery not available in your area (${distance.toFixed(1)} km away). We deliver within ${farRadius} km.`);
-        setCalculatedDeliveryCharge(0);
-        setZoneName('');
-      }
+    } catch (error: any) {
+      // Do NOT fall back to straight-line distance. That can undercharge routes
+      // that require a long road detour or accidentally allow a blocked country/area.
+      setRoadDistanceKm(null);
+      setCalculatedDeliveryCharge(0);
+      setZoneName('');
+      setDeliveryZoneError(
+        error?.data?.detail ||
+          error?.message ||
+          'Could not calculate the road route. Please try your location again.',
+      );
     }
   }
 
@@ -423,7 +424,7 @@ export default function Checkout() {
       // Load delivery zones from backend for map legend
       try {
         const zonesRes = await client.apiCall.invoke({
-          url: '/api/v1/entities/delivery_zones?query={"is_active":true}&sort=min_distance_km&limit=50',
+          url: '/api/v1/entities/delivery_zones?query={"is_active":true,"zone_type":"distance"}&sort=min_distance_km&limit=50',
           method: 'GET',
         });
         const zones = zonesRes?.data?.items || [];
@@ -1138,7 +1139,7 @@ export default function Checkout() {
                   {locationShared && !deliveryZoneError && (
                     <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
                       <CheckCircle className="w-4 h-4" />
-                      <span>Location selected{zoneName ? ` (${zoneName})` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
+                      <span>Location selected{zoneName ? ` (${zoneName})` : ''}{roadDistanceKm !== null ? ` — Road: ${roadDistanceKm.toFixed(1)} km` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
                     </div>
                   )}
                   {deliveryZoneError && (
