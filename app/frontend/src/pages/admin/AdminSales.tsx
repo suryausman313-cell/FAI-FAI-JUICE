@@ -220,6 +220,37 @@ function isCashPayment(method: string | undefined): boolean {
   return String(method || '').toLowerCase().includes('cash');
 }
 
+function isDeliveryReportOrder(order: ReportOrder): boolean {
+  const explicit = String(order.order_type || '').toLowerCase().trim();
+  if (explicit === 'delivery') return true;
+  const notes = String(order.order_notes || '').toLowerCase();
+  const payment = String(order.payment_method || '').toLowerCase();
+  return (
+    notes.includes('order type: delivery') ||
+    notes.includes('delivery address:') ||
+    payment.includes('cash on delivery') ||
+    payment.includes('card on delivery')
+  );
+}
+
+function orderShopGross(order: ReportOrder): number {
+  const total = numeric(order.total_amount);
+  const delivery = numeric(order.delivery_charge);
+  const riderTip =
+    String(order.tip_type || '').toLowerCase() === 'rider'
+      ? numeric(order.tip_amount)
+      : 0;
+  return Math.max(total - delivery - riderTip, 0);
+}
+
+function orderCommission(order: ReportOrder): number {
+  const shopTip =
+    String(order.tip_type || '').toLowerCase() === 'shop'
+      ? numeric(order.tip_amount)
+      : 0;
+  return numeric(order.service_fee) + numeric(order.small_order_fee) + shopTip;
+}
+
 function formatDate(value: string | undefined): string {
   if (!value) return '-';
   try {
@@ -512,13 +543,7 @@ export default function AdminSales() {
         orders: 0,
       };
 
-      current.revenue +=
-        Math.max(numeric(order.subtotal_amount) - numeric(order.discount_amount), 0) +
-        numeric(order.service_fee) +
-        numeric(order.small_order_fee) +
-        (String(order.tip_type || '').toLowerCase() === 'shop'
-          ? numeric(order.tip_amount)
-          : 0);
+      current.revenue += orderShopGross(order);
       current.orders += 1;
       grouped.set(key, current);
     });
@@ -535,13 +560,10 @@ export default function AdminSales() {
   const locationStats = useMemo(() => {
     const grouped = new Map<string, { sales: number; orders: number; distanceTotal: number; distanceCount: number }>();
     countedOrders.forEach(order => {
-      if (String(order.order_type || '').toLowerCase() !== 'delivery') return;
+      if (!isDeliveryReportOrder(order)) return;
       const area = orderAreaName(order);
       const current = grouped.get(area) || { sales: 0, orders: 0, distanceTotal: 0, distanceCount: 0 };
-      current.sales += Math.max(
-        numeric(order.subtotal_amount) - numeric(order.discount_amount),
-        0,
-      );
+      current.sales += Math.max(orderShopGross(order) - orderCommission(order), 0);
       current.orders += 1;
       const distance = Number(order.delivery_distance_km);
       if (Number.isFinite(distance) && distance > 0) { current.distanceTotal += distance; current.distanceCount += 1; }
@@ -561,19 +583,17 @@ export default function AdminSales() {
   const averageOrder =
     totals.orders > 0 ? totals.customer_total / totals.orders : 0;
 
-  // Shop sales report:
-  // Delivery charges and rider tips are NOT shop sale.
-  // App commission = Service Fee + Small Order Fee + Staff/Shop Tip.
-  const appCommission =
-    numeric(totals.service_fee) +
-    numeric(totals.small_order_fee) +
-    numeric(totals.shop_tips);
+  const grossShopSale = useMemo(
+    () => countedOrders.reduce((sum, order) => sum + orderShopGross(order), 0),
+    [countedOrders],
+  );
 
-  const grossShopSale =
-    numeric(totals.shop_food_sale) + appCommission;
+  const appCommission = useMemo(
+    () => countedOrders.reduce((sum, order) => sum + orderCommission(order), 0),
+    [countedOrders],
+  );
 
-  const netShopSale =
-    Math.max(grossShopSale - appCommission, 0);
+  const netShopSale = Math.max(grossShopSale - appCommission, 0);
 
   function exportCsv(): void {
     const headers = [
@@ -747,9 +767,6 @@ export default function AdminSales() {
             <p className="text-amber-400 text-xl font-black mt-2">
               - AED {money(appCommission)}
             </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              Service + Small Order + Staff Tip
-            </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
@@ -780,37 +797,6 @@ export default function AdminSales() {
         </div>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Wallet className="w-4 h-4 text-green-400" />
-              <h2 className="text-white font-semibold">Payment Split</h2>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-green-950/30 border border-green-900/40 rounded-2xl p-4">
-                <Banknote className="w-5 h-5 text-green-400 mb-3" />
-                <p className="text-gray-400 text-[11px] uppercase">Cash</p>
-                <p className="text-white font-black text-xl mt-1">
-                  AED {money(paymentStats.cashAmount)}
-                </p>
-                <p className="text-green-400 text-xs mt-1">
-                  {paymentStats.cashOrders} orders
-                </p>
-              </div>
-
-              <div className="bg-blue-950/30 border border-blue-900/40 rounded-2xl p-4">
-                <CreditCard className="w-5 h-5 text-blue-400 mb-3" />
-                <p className="text-gray-400 text-[11px] uppercase">Card</p>
-                <p className="text-white font-black text-xl mt-1">
-                  AED {money(paymentStats.cardAmount)}
-                </p>
-                <p className="text-blue-400 text-xs mt-1">
-                  {paymentStats.cardOrders} orders
-                </p>
-              </div>
-            </div>
-          </Card>
-
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
