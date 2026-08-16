@@ -204,16 +204,28 @@ function formatUaeTime(value: string): string {
 }
 
 function signedReadyMinutes(order: KitchenOrder): number | null {
-  const deadline = order.promised_ready_at || (
+  const explicitDeadline = order.promised_ready_at || (
     typeof (order as any).pickup_time === 'string' && String((order as any).pickup_time).includes('|')
       ? String((order as any).pickup_time).split('|')[1]
-      : null
+      : typeof order.estimated_time === 'string' && order.estimated_time.includes('|')
+        ? order.estimated_time.split('|')[1]
+        : null
   );
-  if (!deadline) return null;
 
-  const deadlineMs = new Date(deadline).getTime();
+  let deadlineMs = explicitDeadline ? new Date(explicitDeadline).getTime() : Number.NaN;
+
+  // Backward-compatible: if backend stored only "10 min", use accepted/update time
+  // as the same countdown reference used by the customer ready-time display.
+  if (!Number.isFinite(deadlineMs)) {
+    const estimate = String(order.estimated_time || (order as any).pickup_time || '').trim();
+    const match = estimate.match(/(\d+)\s*min/i);
+    const minutes = match ? Number(match[1]) : 0;
+    const baseRaw = order.accepted_at || order.updated_at || order.created_at;
+    const baseMs = new Date(baseRaw).getTime();
+    if (minutes > 0 && Number.isFinite(baseMs)) deadlineMs = baseMs + minutes * 60_000;
+  }
+
   if (!Number.isFinite(deadlineMs)) return null;
-
   const differenceMs = deadlineMs - Date.now();
   if (differenceMs >= 0) return Math.ceil(differenceMs / 60_000);
   return -Math.max(1, Math.floor(Math.abs(differenceMs) / 60_000));
@@ -242,6 +254,7 @@ function TimerCircle({
 }: {
   order: KitchenOrder;
   onBecameLate?: (order: KitchenOrder) => void;
+  onReady?: (order: KitchenOrder) => void;
 }) {
   const [, setTick] = useState(0);
   const lateAnnouncedRef = useRef(false);
@@ -318,7 +331,7 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
   );
 }
 
-function BoardSection({ title, orders, emptyText, onOpen, onBecameLate }: {
+function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady }: {
   title: string;
   orders: KitchenOrder[];
   emptyText: string;
@@ -333,32 +346,36 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate }: {
       ) : (
         <div className="space-y-4">
           {orders.map((order) => (
-            <button
-              key={order.id}
-              type="button"
-              onClick={() => onOpen(order.id)}
-              className="block w-full rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-slate-300 hover:shadow-md"
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-5xl font-black tracking-tight text-slate-900">#{order.id}</h3>
-                    <Badge className={isDeliveryOrder(order)
-                      ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
-                      : 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'}>
-                      {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
-                    </Badge>
+            <div key={order.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-md">
+              <button type="button" onClick={() => onOpen(order.id)} className="block w-full p-5 text-left">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-5xl font-black tracking-tight text-slate-900">#{order.id}</h3>
+                      <Badge className={isDeliveryOrder(order)
+                        ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
+                        : 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'}>
+                        {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-lg text-slate-500">{order.customer_phone || order.customer_name} · {totalItems(order)} item{totalItems(order) === 1 ? '' : 's'}</p>
+                    <p className="mt-3 text-xl font-medium text-slate-700">
+                      {isDeliveryOrder(order)
+                        ? (order.status === 'ready' ? 'Waiting rider pickup' : 'Rider is on the way')
+                        : order.status === 'ready' ? 'Ready for pickup' : 'Kitchen in progress'}
+                    </p>
                   </div>
-                  <p className="mt-1 text-lg text-slate-500">{order.customer_phone || order.customer_name} · {totalItems(order)} item{totalItems(order) === 1 ? '' : 's'}</p>
-                  <p className="mt-3 text-xl font-medium text-slate-700">
-                    {isDeliveryOrder(order)
-                      ? (order.status === 'ready' ? 'Waiting rider pickup' : 'Rider is on the way')
-                      : order.status === 'ready' ? 'Ready for pickup' : 'Kitchen in progress'}
-                  </p>
+                  <TimerCircle order={order} onBecameLate={onBecameLate} />
                 </div>
-                <TimerCircle order={order} onBecameLate={onBecameLate} />
-              </div>
-            </button>
+              </button>
+              {onReady && ['accepted', 'preparing'].includes(order.status) && (
+                <div className="border-t border-slate-100 p-3">
+                  <Button type="button" onClick={() => onReady(order)} className="h-14 w-full rounded-2xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
+                    {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
+                  </Button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -885,9 +902,14 @@ export default function KitchenOrders() {
             )}
 
             {order.status === 'accepted' && (
-              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-2xl font-black hover:bg-orange-600">
-                Start preparing
-              </Button>
+              <div className="grid grid-cols-2 gap-3">
+                <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
+                  Start preparing
+                </Button>
+                <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 rounded-3xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
+                  {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
+                </Button>
+              </div>
             )}
 
             {order.status === 'preparing' && (
@@ -1044,7 +1066,7 @@ export default function KitchenOrders() {
         ) : (
           <div>
             <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
-            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
+            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onReady={(order) => void updateOrderStatus(order, 'ready')} />
             <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
           </div>
         )}
