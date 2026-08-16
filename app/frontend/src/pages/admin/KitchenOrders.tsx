@@ -13,7 +13,6 @@ import {
   History,
   LayoutGrid,
   ChevronRight,
-  ChevronLeft,
   Printer,
   RefreshCw,
   Store,
@@ -738,257 +737,366 @@ export default function KitchenOrders() {
     const assignment = assignments[order.id];
     const assignmentStatus = String(assignment?.status || '').toLowerCase();
     const activeAssignment = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
-    const items = parseItems(order.items_json);
-    const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
-
-    const itemSubtotal = items.reduce(
-      (sum, item) => sum + Number(item.totalPrice || (Number(item.price || 0) * item.quantity)),
-      0,
-    );
-    const subtotal = Number(order.subtotal_amount ?? itemSubtotal ?? 0);
-    const deliveryFee = Number(order.delivery_charge || 0);
-    const serviceFee = Number(order.service_fee || 0);
-    const smallOrderFee = Number(order.small_order_fee || 0);
-    const vatIncluded = Number(order.tax_amount || 0);
-    const itemDiscounts = Number(order.discount_amount || 0);
-    const tip = Number(order.tip_amount || 0);
 
     return (
-      <div className="pb-28">
-        <section className="border-b border-slate-200 bg-white px-1 pb-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold text-slate-400">
-                {receiptSettings.restaurant_name || 'Fai Fai Juice'}
-              </p>
-              <div className="mt-2 flex items-center gap-3">
-                <span className="text-4xl font-black tracking-tight text-slate-900">#{order.id}</span>
-                <Badge className={delivery
-                  ? 'border-blue-200 bg-blue-50 text-blue-700'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
-                  {delivery ? 'Delivery' : 'Pickup'}
-                </Badge>
-              </div>
-              <p className="mt-1 text-sm text-slate-500">
-                {formatUaeTime(order.created_at)} · {itemCount} item{itemCount === 1 ? '' : 's'}
-              </p>
-            </div>
-            <OrderTimer order={order} />
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-white text-3xl font-black">#{order.id}</span>
+            <Badge className={delivery
+              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
+              : 'bg-green-600/20 text-green-300 border-green-600/30'}>
+              {delivery ? 'Delivery' : 'Pickup'}
+            </Badge>
           </div>
-
-          <div className="mt-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
-                <span className="text-lg">👤</span>
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-400">Customer</p>
-                <p className="text-lg font-bold text-slate-900">{order.customer_name}</p>
-                {order.customer_phone && (
-                  <a href={`tel:${order.customer_phone}`} className="text-sm font-medium text-blue-600">
-                    {order.customer_phone}
-                  </a>
-                )}
-              </div>
-            </div>
-
-            {delivery && (
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
-                  <Bike className="h-5 w-5 text-slate-600" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-slate-400">Rider</p>
-                  {activeAssignment ? (
-                    <>
-                      <p className="text-lg font-bold text-slate-900">{assignment.rider_name}</p>
-                      <p className="text-sm text-slate-500">{assignmentStatus.replaceAll('_', ' ')}</p>
-                    </>
-                  ) : (
-                    <p className="text-lg font-bold text-slate-700">Waiting rider</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="bg-white py-5">
-          <div className="space-y-5">
-            {items.length === 0 ? (
-              <p className="px-1 text-slate-400">Items details unavailable</p>
-            ) : items.map((item, index) => {
-              const lineTotal = Number(item.totalPrice || (Number(item.price || 0) * item.quantity));
-              return (
-                <div key={`${order.id}-${index}`} className="px-1">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xl font-black text-slate-900">{item.quantity} x&nbsp; {item.name}</p>
-                      {item.size && (
-                        <p className="ml-10 mt-1 text-base text-slate-500">
-                          {item.quantity} x&nbsp;&nbsp; {item.size}
-                        </p>
-                      )}
-                      {item.extras.length > 0 && (
-                        <p className="ml-10 mt-1 text-sm text-slate-500">{item.extras.join(', ')}</p>
-                      )}
-                    </div>
-                    <p className="shrink-0 text-lg font-semibold text-slate-700">AED{money(lineTotal)}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {order.order_notes && (
-          <section className="border-y border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-xs font-black uppercase text-amber-700">Order notes</p>
-            <p className="mt-1 whitespace-pre-wrap text-base text-amber-900">{order.order_notes}</p>
-          </section>
-        )}
-
-        <section className="border-t border-slate-200 bg-white px-1 py-5">
-          <div className="space-y-3 text-lg">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-2xl font-black text-slate-900">Subtotal</span>
-              <span className="text-2xl font-black text-slate-900">AED{money(subtotal)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-slate-600">VAT (Incl.)</span>
-              <span className="font-medium text-slate-700">{vatIncluded > 0 ? `AED${money(vatIncluded)}` : '--'}</span>
-            </div>
-            {delivery && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-slate-600">Delivery Fee</span>
-                <span className="font-medium text-slate-700">AED{money(deliveryFee)}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-slate-600">Service Fee</span>
-              <span className="font-medium text-slate-700">AED{money(serviceFee)}</span>
-            </div>
-            {smallOrderFee > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-slate-600">Small Order Fee</span>
-                <span className="font-medium text-slate-700">AED{money(smallOrderFee)}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-slate-600">Item Discounts</span>
-              <span className={itemDiscounts > 0 ? 'font-medium text-red-600' : 'font-medium text-slate-700'}>
-                {itemDiscounts > 0 ? `-AED${money(itemDiscounts)}` : '--'}
-              </span>
-            </div>
-            {tip > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-slate-600">Tip</span>
-                <span className="font-medium text-slate-700">AED{money(tip)}</span>
-              </div>
-            )}
-            <div className="mt-2 flex items-center justify-between gap-4 border-t border-slate-200 pt-4">
-              <span className="text-3xl font-black text-slate-900">Total</span>
-              <span className="text-3xl font-black text-slate-900">AED{money(order.total_amount)}</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="mt-4 border-t border-slate-200 bg-white px-1 pt-4">
-          <div className="flex items-center justify-between text-base">
-            <span className="text-slate-500">Payment</span>
-            <span className="font-bold text-slate-900">{order.payment_method || 'Cash'}</span>
-          </div>
-        </section>
-
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="mx-auto max-w-4xl">
-            {order.status === 'new' && acceptingOrder !== order.id && (
-              <div className="grid grid-cols-2 gap-3">
-                <Button onClick={() => setAcceptingOrder(order.id)} className="h-14 rounded-xl bg-emerald-600 text-lg font-black hover:bg-emerald-700">
-                  Accept
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (window.confirm(`Cancel order #${order.id}?`)) void updateOrderStatus(order, 'cancelled');
-                  }}
-                  className="h-14 rounded-xl border-red-200 text-lg font-black text-red-600 hover:bg-red-50"
-                >
-                  Cancel
-                </Button>
-              </div>
-            )}
-
-            {order.status === 'new' && acceptingOrder === order.id && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-lg">
-                <p className="mb-2 text-sm font-black text-slate-900">Select ready time</p>
-                <div className="grid grid-cols-5 gap-2">
-                  {TIME_OPTIONS.map((minutes) => (
-                    <button
-                      key={minutes}
-                      type="button"
-                      onClick={() => {
-                        setSelectedTime(minutes);
-                        setCustomTime('');
-                      }}
-                      className={`rounded-xl py-2 text-sm font-black ${
-                        selectedTime === minutes && !customTime
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      {minutes}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    value={customTime}
-                    onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-                    inputMode="numeric"
-                    placeholder="Custom min"
-                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                  <Button
-                    onClick={() => {
-                      const minutes = Number(customTime || selectedTime);
-                      void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
-                    }}
-                    className="rounded-xl bg-emerald-600 font-black hover:bg-emerald-700"
-                  >
-                    Accept
-                  </Button>
-                  <Button variant="outline" onClick={() => setAcceptingOrder(null)} className="rounded-xl">Back</Button>
-                </div>
-              </div>
-            )}
-
-            {order.status === 'accepted' && (
-              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-14 w-full rounded-xl bg-amber-500 text-lg font-black hover:bg-amber-600">
-                Preparing
-              </Button>
-            )}
-
-            {order.status === 'preparing' && (
-              <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-14 w-full rounded-xl bg-emerald-600 text-lg font-black hover:bg-emerald-700">
-                {delivery ? 'Ready for delivery' : 'Ready for pickup'}
-              </Button>
-            )}
-
-            {order.status === 'ready' && delivery && (
-              <div className="rounded-xl bg-blue-50 px-4 py-3 text-center font-bold text-blue-700">
-                Waiting for rider pickup
-              </div>
-            )}
-
-            {order.status === 'ready' && !delivery && (
-              <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-14 w-full rounded-xl bg-slate-900 text-lg font-black hover:bg-slate-800">
-                Completed
-              </Button>
-            )}
+          <div className="text-right">
+            <OrderTimer createdAt={order.created_at} />
+            <p className="text-gray-500 text-xs">{formatUaeTime(order.created_at)}</p>
           </div>
         </div>
+
+        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
+          <p className="text-gray-500 text-xs uppercase mb-1">Customer</p>
+          <p className="text-white font-semibold">{order.customer_name}</p>
+          {order.customer_phone && (
+            <a href={`tel:${order.customer_phone}`} className="text-blue-400 text-sm">
+              {order.customer_phone}
+            </a>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
+          <p className="text-gray-500 text-xs uppercase mb-2">Items</p>
+          <div className="space-y-2">{renderItems(order)}</div>
+        </div>
+
+        {order.order_notes && (
+          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3">
+            <p className="text-yellow-300 text-xs font-semibold mb-1">Order Notes</p>
+            <p className="text-yellow-100 text-sm whitespace-pre-wrap">{order.order_notes}</p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
+            <p className="text-gray-500 text-xs uppercase">Payment</p>
+            <p className="text-white text-sm font-semibold mt-1">{order.payment_method || 'Cash'}</p>
+          </div>
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-right">
+            <p className="text-gray-500 text-xs uppercase">Total</p>
+            <p className="text-green-400 text-lg font-black mt-1">AED {money(order.total_amount)}</p>
+          </div>
+        </div>
+
+        {delivery && (
+          <div className={`rounded-xl border p-3 ${
+            activeAssignment
+              ? 'border-blue-700/40 bg-blue-950/40'
+              : 'border-amber-600/30 bg-amber-600/10'
+          }`}>
+            {activeAssignment ? (
+              <>
+                <p className="text-blue-300 font-semibold">Rider: {assignment.rider_name}</p>
+                {assignment.rider_phone && (
+                  <a href={`tel:${assignment.rider_phone}`} className="text-blue-200 text-sm">
+                    {assignment.rider_phone}
+                  </a>
+                )}
+                <p className="text-blue-400/80 text-xs mt-1">
+                  Status: {assignmentStatus.replaceAll('_', ' ')}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-amber-300 font-semibold">Waiting Rider</p>
+                <p className="text-amber-200/70 text-xs mt-1">Waiting for a rider to be assigned.</p>
+              </>
+            )}
+          </div>
+        )}
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => printReceipt(order, true)}
+          className="w-full border-gray-700"
+        >
+          <Printer className="w-4 h-4 mr-2" /> Reprint Order
+        </Button>
       </div>
+    );
+  }
+
+  function OrderCard({ order, section }: { order: KitchenOrder; section: 'new' | 'progress' | 'ready' }) {
+    const delivery = isDeliveryOrder(order);
+    const assignment = assignments[order.id];
+    const assignmentStatus = String(assignment?.status || '').toLowerCase();
+    const hasActiveRider = assignment && !['rejected', 'delivered'].includes(assignmentStatus);
+
+    return (
+      <Card className="bg-gray-900 border-gray-800 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => openOrder(order)}
+          className="w-full p-4 text-left hover:bg-gray-800/50 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-white font-black text-2xl">#{order.id}</span>
+              <Badge className={delivery
+                ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
+                : 'bg-green-600/20 text-green-300 border-green-600/30'}>
+                {delivery ? 'Delivery' : 'Pickup'}
+              </Badge>
+            </div>
+            <div className="text-right shrink-0">
+              <OrderTimer createdAt={order.created_at} />
+              <p className="text-gray-600 text-[10px]">{formatUaeTime(order.created_at)}</p>
+            </div>
+          </div>
+
+          {order.estimated_time && section !== 'new' && (
+            <div className="mt-3">
+              <ReadyTimeCountdown
+                estimatedTime={order.estimated_time}
+                referenceTime={order.updated_at || order.created_at}
+                status={order.status}
+                compact
+              />
+            </div>
+          )}
+
+          {delivery && (
+            <div className={`mt-3 rounded-lg border px-3 py-2 ${
+              hasActiveRider
+                ? 'border-blue-700/30 bg-blue-950/30'
+                : 'border-amber-600/30 bg-amber-600/10'
+            }`}>
+              <p className={`text-sm font-semibold ${hasActiveRider ? 'text-blue-300' : 'text-amber-300'}`}>
+                {hasActiveRider ? `Rider: ${assignment.rider_name}` : 'Waiting Rider'}
+              </p>
+            </div>
+          )}
+
+          <div className="mt-3 flex items-center justify-between text-xs">
+            <span className="text-gray-500">Tap order to view details</span>
+            <ChevronRight className="w-4 h-4 text-gray-600" />
+          </div>
+        </button>
+
+        <div className="border-t border-gray-800 p-3">
+          {section === 'new' && acceptingOrder !== order.id && (
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                onClick={() => setAcceptingOrder(order.id)}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                <Check className="w-4 h-4 mr-1" /> Accept
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (window.confirm(`Cancel order #${order.id}?`)) {
+                    void updateOrderStatus(order, 'cancelled');
+                  }
+                }}
+                className="border-red-700 text-red-400 hover:bg-red-950"
+              >
+                <X className="w-4 h-4 mr-1" /> Cancel
+              </Button>
+            </div>
+          )}
+
+          {section === 'new' && acceptingOrder === order.id && (
+            <div className="bg-gray-800 rounded-xl p-2.5">
+              <p className="text-green-400 text-xs font-semibold mb-2">Select ready time</p>
+              <div className="grid grid-cols-5 gap-1 mb-2">
+                {TIME_OPTIONS.map((minutes) => (
+                  <button
+                    key={minutes}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTime(minutes);
+                      setCustomTime('');
+                    }}
+                    className={`rounded-lg py-2 text-xs font-bold ${
+                      selectedTime === minutes && !customTime
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-700 text-gray-300'
+                    }`}
+                  >
+                    {minutes}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={customTime}
+                onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
+                inputMode="numeric"
+                placeholder="Custom minutes"
+                className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm mb-2"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  onClick={() => {
+                    const minutes = Number(customTime || selectedTime);
+                    void updateOrderStatus(
+                      order,
+                      'accepted',
+                      Number.isFinite(minutes) && minutes > 0 ? minutes : 20,
+                    );
+                  }}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  Accept
+                </Button>
+                <Button variant="outline" onClick={() => setAcceptingOrder(null)}>
+                  Back
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {section === 'progress' && order.status === 'accepted' && (
+            <Button
+              onClick={() => void updateOrderStatus(order, 'preparing')}
+              className="w-full bg-yellow-600 hover:bg-yellow-700"
+            >
+              Preparing
+            </Button>
+          )}
+
+          {section === 'progress' && order.status === 'preparing' && (
+            <Button
+              onClick={() => void updateOrderStatus(order, 'ready')}
+              className="w-full bg-purple-600 hover:bg-purple-700"
+            >
+              Ready
+            </Button>
+          )}
+
+          {section === 'ready' && !delivery && (
+            <Button
+              onClick={() => void updateOrderStatus(order, 'completed')}
+              className="w-full bg-gray-700 hover:bg-gray-600"
+            >
+              Completed
+            </Button>
+          )}
+
+          {section === 'ready' && delivery && (
+            <div className="rounded-lg border border-blue-700/30 bg-blue-950/30 px-3 py-2 text-center">
+              <p className="text-blue-300 text-sm font-semibold">
+                {hasActiveRider ? 'Waiting for Rider Pickup' : 'Waiting Rider Assignment'}
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    );
+  }
+
+  function HistoryOrdersList({ orders: historyOrders }: { orders: KitchenOrder[] }) {
+    const total = historyOrders
+      .filter((order) => order.status === 'completed')
+      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
+
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <p className="text-gray-500 text-xs uppercase">Orders</p>
+            <p className="text-white text-2xl font-black mt-1">{historyOrders.length}</p>
+          </Card>
+          <Card className="bg-gray-900 border-gray-800 p-4">
+            <p className="text-gray-500 text-xs uppercase">Completed Sale</p>
+            <p className="text-green-400 text-xl font-black mt-1">AED {money(total)}</p>
+          </Card>
+        </div>
+
+        {historyOrders.length === 0 ? (
+          <div className="min-h-56 rounded-xl border border-gray-800 bg-gray-900/50 flex items-center justify-center text-gray-600 text-sm">
+            There are no completed, pending delivery, or cancelled orders for this day.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {historyOrders.map((order) => (
+              <Card key={order.id} className="bg-gray-900 border-gray-800 p-3">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-lg font-black">#{order.id}</span>
+                      <Badge
+                        className={
+                          order.status === 'completed'
+                            ? 'bg-green-600/20 text-green-300 border-green-600/30'
+                            : DELIVERY_PENDING_STATUSES.has(order.status)
+                              ? 'bg-blue-600/20 text-blue-300 border-blue-600/30'
+                              : 'bg-red-600/20 text-red-300 border-red-600/30'
+                        }
+                      >
+                        {order.status === 'completed'
+                          ? 'Completed'
+                          : DELIVERY_PENDING_STATUSES.has(order.status)
+                            ? 'Delivery Pending'
+                            : 'Cancelled'}
+                      </Badge>
+                    </div>
+                    <p className="text-gray-500 text-xs mt-1">
+                      {formatUaeTime(order.updated_at || order.created_at)}
+                    </p>
+                  </div>
+                  <span className="text-green-400 font-black">AED {money(order.total_amount)}</span>
+                </div>
+                <p className="text-gray-300 text-sm font-medium mb-2">{order.customer_name}</p>
+                {DELIVERY_PENDING_STATUSES.has(order.status) && assignments[order.id] && (
+                  <div className="mb-2 rounded-lg border border-blue-700/30 bg-blue-950/30 px-2 py-1.5">
+                    <p className="text-blue-300 text-xs font-semibold">Rider: {assignments[order.id].rider_name}</p>
+                    {assignments[order.id].rider_phone && (
+                      <p className="text-blue-200/80 text-xs">{assignments[order.id].rider_phone}</p>
+                    )}
+                    <p className="text-blue-400/70 text-[11px]">Status: {String(assignments[order.id].status).replaceAll('_', ' ')}</p>
+                  </div>
+                )}
+                <div className="space-y-1">{renderItems(order)}</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => printReceipt(order, true)}
+                  className="w-full mt-3 border-gray-700"
+                >
+                  <Printer className="w-4 h-4 mr-2" /> Reprint Copy
+                </Button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function Column({
+    title,
+    count,
+    dotClass,
+    children,
+  }: {
+    title: string;
+    count: number;
+    dotClass: string;
+    emptyText?: string;
+    children: ReactNode;
+  }) {
+    if (count === 0) return null;
+
+    return (
+      <section className="space-y-2">
+        <div className="flex items-center gap-2 px-1">
+          <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
+          <h2 className="text-gray-300 font-bold text-xs tracking-wide">{title} ({count})</h2>
+        </div>
+        <div className="space-y-2">{children}</div>
+      </section>
     );
   }
 
