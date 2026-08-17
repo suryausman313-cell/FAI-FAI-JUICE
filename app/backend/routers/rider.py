@@ -2,7 +2,7 @@
 # @Desc: Rider panel API routes for delivery management
 import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_, or_
 from typing import Optional
@@ -593,8 +593,8 @@ async def update_auto_assign_setting(
 
 
 class UpdateLocationRequest(BaseModel):
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 
 @router.post("/location/{rider_id}")
@@ -1069,6 +1069,7 @@ async def get_admin_rider_reports(
                 "pending_orders": len(pending),
                 "total_earnings": round(total_earnings, 2),
                 "delivery_charges_earned": round(delivery_charges_earned, 2),
+                "delivery_charge_per_order": round(float(rider.delivery_charge or 0), 2),
                 "cash_collected": round(cash_collected, 2),
                 "approved_cash": round(approved_cash, 2),
                 "awaiting_approval": round(awaiting_approval, 2),
@@ -1319,6 +1320,8 @@ async def get_delivery_eta(
                 else None
             ),
         }
-    except Exception as e:
-        logging.error(f"Failed to get delivery ETA: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to get delivery ETA")
+        raise HTTPException(status_code=500, detail="Could not load delivery tracking. Please try again.") from exc
