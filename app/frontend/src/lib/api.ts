@@ -148,10 +148,152 @@ export const client = {
   },
 } as any;
 
+
+type LocalizedRecord = Record<string, any>;
+
+function readTranslationObject(value: LocalizedRecord | null | undefined): Record<string, any> {
+  if (!value || typeof value !== 'object') return {};
+
+  const direct =
+    value.translations ||
+    value.translation ||
+    value.i18n ||
+    value.localized ||
+    null;
+
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct;
+  }
+
+  const raw =
+    value.translations_json ||
+    value.translation_json ||
+    value.i18n_json ||
+    '';
+
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Ignore invalid optional translation JSON and fall back safely.
+    }
+  }
+
+  return {};
+}
+
+function localizedField(
+  value: LocalizedRecord | null | undefined,
+  language: string | null | undefined,
+  field: 'name' | 'description',
+): string {
+  if (!value) return '';
+
+  const lang = String(language || 'en').toLowerCase().trim();
+  const base = String(value[field] ?? '').trim();
+
+  if (!lang || lang === 'en') {
+    return (
+      String(value[`${field}_en`] ?? '').trim() ||
+      base
+    );
+  }
+
+  // Support common database shapes such as name_ar / description_ar.
+  const directCandidates = [
+    value[`${field}_${lang}`],
+    value[`${lang}_${field}`],
+  ];
+
+  for (const candidate of directCandidates) {
+    const text = String(candidate ?? '').trim();
+    if (text) return text;
+  }
+
+  // Support nested translation shapes:
+  // { translations: { ar: { name: '...', description: '...' } } }
+  // { translations: { name: { ar: '...' } } }
+  const translations = readTranslationObject(value);
+
+  const byLanguage = translations?.[lang];
+  if (byLanguage && typeof byLanguage === 'object') {
+    const text = String(byLanguage[field] ?? '').trim();
+    if (text) return text;
+  }
+
+  const byField = translations?.[field];
+  if (byField && typeof byField === 'object') {
+    const text = String(byField[lang] ?? '').trim();
+    if (text) return text;
+  }
+
+  // Support flat optional keys inside translation JSON.
+  const flatText = String(
+    translations?.[`${field}_${lang}`] ??
+    translations?.[`${lang}_${field}`] ??
+    '',
+  ).trim();
+
+  if (flatText) return flatText;
+
+  // Never show undefined/translation keys to customer.
+  return (
+    String(value[`${field}_en`] ?? '').trim() ||
+    base
+  );
+}
+
+/**
+ * Returns a menu/category/extra name in the customer's selected language.
+ * Falls back to English/original text if that translation is missing.
+ */
+export function localizedMenuText(
+  value: LocalizedRecord | null | undefined,
+  language: string | null | undefined,
+): string {
+  return localizedField(value, language, 'name');
+}
+
+/**
+ * Returns a menu-item description in the customer's selected language.
+ * Falls back to English/original description if that translation is missing.
+ */
+export function localizedMenuDescription(
+  value: LocalizedRecord | null | undefined,
+  language: string | null | undefined,
+): string {
+  return localizedField(value, language, 'description');
+}
+
+// Backward-compatible aliases. They do not change any existing behavior,
+// but prevent older/current pages from breaking if they use these names.
+export function localizedCategoryText(
+  value: LocalizedRecord | null | undefined,
+  language: string | null | undefined,
+): string {
+  return localizedMenuText(value, language);
+}
+
+export function localizedExtraText(
+  value: LocalizedRecord | null | undefined,
+  language: string | null | undefined,
+): string {
+  return localizedMenuText(value, language);
+}
+
+
 // Types
 export interface Category {
   id: number;
   name: string;
+  name_en?: string;
+  name_ar?: string;
+  name_ur?: string;
+  translations?: Record<string, any>;
+  translations_json?: string;
   sort_order: number;
   is_active: boolean;
 }
@@ -165,7 +307,15 @@ export interface MenuItem {
   id: number;
   category_id: number;
   name: string;
+  name_en?: string;
+  name_ar?: string;
+  name_ur?: string;
   description: string;
+  description_en?: string;
+  description_ar?: string;
+  description_ur?: string;
+  translations?: Record<string, any>;
+  translations_json?: string;
   price_medium: number;
   price_large: number;
   sizes_json: string;
@@ -200,6 +350,11 @@ export function getItemSizes(item: MenuItem): SizeOption[] {
 export interface Extra {
   id: number;
   name: string;
+  name_en?: string;
+  name_ar?: string;
+  name_ur?: string;
+  translations?: Record<string, any>;
+  translations_json?: string;
   price: number;
   is_active: boolean;
 }
