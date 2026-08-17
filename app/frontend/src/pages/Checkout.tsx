@@ -1190,7 +1190,7 @@ export default function Checkout() {
     submittingRef.current = true;
     try {
       const itemsData = cart.map(item => ({
-        menu_item_id: item.menuItem.id,
+        menu_item_id: item.isDeal ? null : item.menuItem.id,
         name: item.menuItem.name,
         size: item.size,
         quantity: item.quantity,
@@ -1199,6 +1199,9 @@ export default function Checkout() {
         original_price: Number(item.originalTotalPrice ?? item.totalPrice),
         item_discount_amount: Number(item.itemDiscountAmount || 0),
         item_discount_label: item.itemDiscountLabel || '',
+        is_deal: item.isDeal === true,
+        deal_id: item.isDeal ? item.dealId : null,
+        deal_selected_items: item.isDeal ? (item.dealSelectedItems || []) : [],
       }));
 
       // Combine notes with car info or delivery address
