@@ -393,13 +393,13 @@ export function getItemExtras(
           .filter((extra: Extra) => Boolean(extra.name));
       }
     } catch {
-      // Invalid old JSON can still fall back to the legacy global extras list.
+      // Invalid old JSON is treated as no extras for this item.
     }
   }
 
-  return (Array.isArray(availableExtras) ? availableExtras : []).filter(
-    (extra) => extra && extra.is_active !== false,
-  );
+  // Fai Fai uses per-item extras only. Never fall back to the old global
+  // Pizza/Jalapeno extras list for customer items.
+  return [];
 }
 
 export interface Order {
