@@ -46,12 +46,42 @@ interface RiderReport {
   approved_cash: number;
   awaiting_approval: number;
   cash_pending: number;
+  total_pending_cash: number;
+  cash_due_period: number;
+  rider_earnings_period: number;
   card_orders: number;
   current_lat: number | null;
   current_lng: number | null;
   location_updated_at: string | null;
   shift_start: string | null;
   shift_end: string | null;
+}
+
+interface RiderFinanceItem {
+  rider_id: number;
+  totals?: {
+    delivered_orders?: number;
+    customer_total?: number;
+    delivery_charges?: number;
+    rider_earnings?: number;
+    cash_payable_to_shop?: number;
+  };
+  settlements?: {
+    approved_cash?: number;
+    awaiting_approval?: number;
+    rejected_cash?: number;
+  };
+  current_balance?: {
+    cash_due_to_shop?: number;
+    approved_cash?: number;
+    awaiting_approval?: number;
+    remaining_to_submit?: number;
+    total_pending_cash?: number;
+  };
+}
+
+interface AdminFinanceSummary {
+  riders?: RiderFinanceItem[];
 }
 
 interface DeliveryAssignment {
@@ -109,23 +139,81 @@ export default function AdminRiders() {
 
   async function loadReports(selectedPeriod = reportPeriod) {
     try {
-      const params = new URLSearchParams({ period: selectedPeriod });
-      if (selectedPeriod === 'custom') {
-        if (!customFrom || !customTo) {
-          toast.error('Select both custom dates');
-          return;
-        }
-        params.set('date_from', customFrom);
-        params.set('date_to', customTo);
+      if (selectedPeriod === 'custom' && (!customFrom || !customTo)) {
+        toast.error('Select both custom dates');
+        return;
       }
 
-      const res = await riderAdminApi({
-        url: `/api/v1/rider/admin/reports?${params.toString()}`,
-        method: 'GET',
-      });
-      setReports(res?.data?.items || []);
+      // Rider/Admin endpoint is used for live status, active jobs and rider profile.
+      // Finance endpoint is the source of truth for period totals and cash settlement.
+      let financePeriod: string = selectedPeriod;
+      let financeFrom = customFrom;
+      let financeTo = customTo;
+
+      if (selectedPeriod === 'week' || selectedPeriod === 'thirty_days') {
+        const end = new Date();
+        const start = new Date(end);
+        start.setDate(start.getDate() - (selectedPeriod === 'week' ? 6 : 29));
+        const localDate = (value: Date) =>
+          [
+            value.getFullYear(),
+            String(value.getMonth() + 1).padStart(2, '0'),
+            String(value.getDate()).padStart(2, '0'),
+          ].join('-');
+        financePeriod = 'custom';
+        financeFrom = localDate(start);
+        financeTo = localDate(end);
+      }
+
+      const financeParams = new URLSearchParams({ period: financePeriod });
+      if (financePeriod === 'custom') {
+        financeParams.set('date_from', financeFrom);
+        financeParams.set('date_to', financeTo);
+      }
+
+      const [riderRes, financeRes] = await Promise.all([
+        riderAdminApi({
+          url: '/api/v1/rider/admin/reports',
+          method: 'GET',
+        }),
+        riderAdminApi({
+          url: `/api/v1/finance/admin/summary?${financeParams.toString()}`,
+          method: 'GET',
+        }),
+      ]);
+
+      const riderItems: RiderReport[] = riderRes?.data?.items || [];
+      const financeData = (financeRes?.data || {}) as AdminFinanceSummary;
+      const financeByRider = new Map<number, RiderFinanceItem>(
+        (financeData.riders || []).map(item => [item.rider_id, item]),
+      );
+
+      setReports(
+        riderItems.map(rider => {
+          const finance = financeByRider.get(rider.id);
+          const totals = finance?.totals || {};
+          const settlements = finance?.settlements || {};
+          const balance = finance?.current_balance || {};
+          const periodDeliveries = Number(totals.delivered_orders || 0);
+
+          return {
+            ...rider,
+            total_orders: periodDeliveries,
+            today_orders: periodDeliveries,
+            today_order_value: Number(totals.customer_total || 0),
+            delivery_charges_earned: Number(totals.delivery_charges || 0),
+            rider_earnings_period: Number(totals.rider_earnings || 0),
+            cash_due_period: Number(totals.cash_payable_to_shop || 0),
+            approved_cash: Number(settlements.approved_cash || 0),
+            awaiting_approval: Number(balance.awaiting_approval || 0),
+            cash_pending: Number(balance.remaining_to_submit || 0),
+            total_pending_cash: Number(balance.total_pending_cash || 0),
+          };
+        }),
+      );
     } catch (e) {
       console.error('Failed to load rider reports:', e);
+      toast.error('Could not load rider cash/report data');
     } finally {
       setLoading(false);
     }
@@ -205,7 +293,7 @@ export default function AdminRiders() {
   }
 
   const totalOrders = reports.reduce((s, r) => s + r.total_orders, 0);
-  const totalEarnings = reports.reduce((s, r) => s + r.delivery_charges_earned, 0);
+  const totalEarnings = reports.reduce((s, r) => s + (r.rider_earnings_period || 0), 0);
   const onlineCount = reports.filter(r => r.is_online).length;
 
   if (loading) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Loading...</div></div>;
@@ -474,7 +562,7 @@ export default function AdminRiders() {
                   </div>
 
                   {/* Compact Rider Overview */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-white">{rider.today_orders}</p>
                       <p className="text-gray-500 text-[10px]">Period Orders</p>
@@ -486,8 +574,16 @@ export default function AdminRiders() {
                       <p className="text-gray-500 text-[10px]">Delivery Charges</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-orange-400">{rider.pending_orders}</p>
-                      <p className="text-gray-500 text-[10px]">Active / Pending</p>
+                      <p className="text-lg font-bold text-orange-400">
+                        AED {(rider.cash_pending || 0).toFixed(2)}
+                      </p>
+                      <p className="text-gray-500 text-[10px]">Still With Rider</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-yellow-300">
+                        AED {(rider.awaiting_approval || 0).toFixed(2)}
+                      </p>
+                      <p className="text-gray-500 text-[10px]">Awaiting Approval</p>
                     </div>
                   </div>
 
@@ -505,29 +601,55 @@ export default function AdminRiders() {
 
                       <div className="grid grid-cols-2 gap-2">
                         <div className="rounded-lg bg-gray-800 p-3">
-                          <p className="text-gray-500 text-[10px] uppercase">Customer Order Value</p>
+                          <p className="text-gray-500 text-[10px] uppercase">Customer Order Value (Period)</p>
                           <p className="text-green-400 font-bold mt-1">
                             AED {(rider.today_order_value || 0).toFixed(2)}
                           </p>
                         </div>
                         <div className="rounded-lg bg-gray-800 p-3">
-                          <p className="text-gray-500 text-[10px] uppercase">Delivery Charges</p>
+                          <p className="text-gray-500 text-[10px] uppercase">Delivery Charges (Period)</p>
                           <p className="text-purple-400 font-bold mt-1">
                             AED {(rider.delivery_charges_earned || 0).toFixed(2)}
                           </p>
                         </div>
                         <div className="rounded-lg bg-gray-800 p-3">
-                          <p className="text-gray-500 text-[10px] uppercase">Completed Deliveries</p>
-                          <p className="text-blue-300 font-bold mt-1">{rider.total_orders}</p>
+                          <p className="text-gray-500 text-[10px] uppercase">Cash Due To Shop (Period)</p>
+                          <p className="text-orange-300 font-bold mt-1">
+                            AED {(rider.cash_due_period || 0).toFixed(2)}
+                          </p>
                         </div>
                         <div className="rounded-lg bg-gray-800 p-3">
-                          <p className="text-gray-500 text-[10px] uppercase">Active / Pending</p>
-                          <p className="text-orange-400 font-bold mt-1">{rider.pending_orders}</p>
+                          <p className="text-gray-500 text-[10px] uppercase">Approved Cash (Period)</p>
+                          <p className="text-green-300 font-bold mt-1">
+                            AED {(rider.approved_cash || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Still With Rider (Current)</p>
+                          <p className="text-red-300 font-bold mt-1">
+                            AED {(rider.cash_pending || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Submitted / Awaiting (Current)</p>
+                          <p className="text-yellow-300 font-bold mt-1">
+                            AED {(rider.awaiting_approval || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Total Pending Cash (Current)</p>
+                          <p className="text-red-400 font-bold mt-1">
+                            AED {(rider.total_pending_cash || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Active / Pending Orders</p>
+                          <p className="text-blue-300 font-bold mt-1">{rider.pending_orders}</p>
                         </div>
                       </div>
 
                       <p className="text-gray-600 text-[10px] mt-3">
-                        Cash approval and settlement are kept only in Finance & Rider Cash.
+                        Period values follow Today / Yesterday / 7 Days / 30 Days / All Time / Custom. Current pending cash always shows what the rider still owes now.
                       </p>
                     </div>
                   )}

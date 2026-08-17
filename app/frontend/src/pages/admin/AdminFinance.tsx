@@ -36,6 +36,16 @@ type Period =
   | 'all'
   | 'custom';
 
+interface RiderFinanceItem {
+  rider_id: number;
+  rider_name: string;
+  rider_phone: string;
+  is_active: boolean;
+  totals: Record<string, number>;
+  settlements: Record<string, number>;
+  current_balance: Record<string, number>;
+}
+
 interface Summary {
   period: {
     key: Period;
@@ -46,6 +56,7 @@ interface Summary {
   totals: Record<string, number>;
   current_balance: Record<string, number>;
   settlements?: Record<string, number>;
+  riders?: RiderFinanceItem[];
 }
 
 interface Submission {
@@ -354,8 +365,9 @@ export default function AdminFinance() {
   const cards = [
     ['Cash Due (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
     ['Approved (Period)', settlements.approved_cash, 'text-green-300'],
-    ['Awaiting Approval', settlements.awaiting_approval, 'text-yellow-300'],
-    ['Still To Submit (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
+    ['Awaiting Approval (Current)', currentBalance.awaiting_approval, 'text-yellow-300'],
+    ['Still With Riders (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
+    ['Total Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],
   ] as const;
 
   return (
@@ -527,6 +539,83 @@ export default function AdminFinance() {
                 </Card>
               ))}
             </div>
+
+            <Card className="bg-gray-900 border-gray-800 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-white font-semibold">Cash Status by Rider</h2>
+                  <p className="text-gray-500 text-xs mt-1">
+                    See who still has shop cash, who submitted it, and how much was approved.
+                  </p>
+                </div>
+              </div>
+
+              {(summary?.riders || []).length === 0 ? (
+                <p className="text-gray-500 text-sm py-4">No riders found.</p>
+              ) : (
+                <div className="space-y-3">
+                  {(summary?.riders || []).map(rider => {
+                    const riderTotals = rider.totals || {};
+                    const riderSettlements = rider.settlements || {};
+                    const riderBalance = rider.current_balance || {};
+                    const totalPending = Number(riderBalance.total_pending_cash || 0);
+
+                    return (
+                      <Card key={rider.rider_id} className="bg-gray-950 border-gray-800 p-4">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div>
+                            <p className="text-white font-semibold">{rider.rider_name}</p>
+                            <p className="text-gray-500 text-xs">{rider.rider_phone}</p>
+                          </div>
+                          <span
+                            className={`text-[11px] font-semibold rounded-full px-2 py-1 ${
+                              totalPending > 0.009
+                                ? 'bg-red-950/50 text-red-300 border border-red-900'
+                                : 'bg-green-950/40 text-green-300 border border-green-900'
+                            }`}
+                          >
+                            {totalPending > 0.009 ? `PENDING AED ${money(totalPending)}` : 'CASH CLEAR'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                          <div className="rounded-lg bg-gray-900 p-3">
+                            <p className="text-gray-500 text-[10px]">CASH DUE (PERIOD)</p>
+                            <p className="text-orange-300 font-bold mt-1">
+                              AED {money(riderTotals.cash_payable_to_shop)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-gray-900 p-3">
+                            <p className="text-gray-500 text-[10px]">APPROVED (PERIOD)</p>
+                            <p className="text-green-300 font-bold mt-1">
+                              AED {money(riderSettlements.approved_cash)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-gray-900 p-3">
+                            <p className="text-gray-500 text-[10px]">SUBMITTED / WAITING</p>
+                            <p className="text-yellow-300 font-bold mt-1">
+                              AED {money(riderBalance.awaiting_approval)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-gray-900 p-3">
+                            <p className="text-gray-500 text-[10px]">STILL WITH RIDER</p>
+                            <p className="text-blue-300 font-bold mt-1">
+                              AED {money(riderBalance.remaining_to_submit)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-gray-900 p-3 col-span-2 md:col-span-1">
+                            <p className="text-gray-500 text-[10px]">TOTAL PENDING NOW</p>
+                            <p className="text-red-300 font-bold mt-1">
+                              AED {money(riderBalance.total_pending_cash)}
+                            </p>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
 
             <Card className="bg-gray-900 border-gray-800 p-5">
               <div className="flex items-center justify-between mb-4">
