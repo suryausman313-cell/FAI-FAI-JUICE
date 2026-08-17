@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff, ChevronDown } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -345,61 +345,88 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
   );
 }
 
+function getCancellationInfo(order: OrderWithDelivery): { by: string; reason: string } | null {
+  const notes = String(order.order_notes || '');
+  const match = notes.match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  if (!match) return null;
+  const actor = match[1].toLowerCase();
+  return {
+    by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen',
+    reason: match[2].trim(),
+  };
+}
+
 /** Cancel order confirmation dialog */
 function CancelOrderDialog({ orderId, orderStatus, onCancel, onClose }: {
   orderId: number;
   orderStatus: string;
-  onCancel: (orderId: number, reason: string) => void;
+  onCancel: (orderId: number, reason: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const [reason, setReason] = useState('');
+  const { language } = useTranslation();
+  const ar = language === 'ar';
+  const reasons = ar
+    ? ['غيّرت رأيي', 'تم الطلب بالخطأ', 'الطلب يستغرق وقتاً طويلاً', 'تفاصيل الطلب غير صحيحة', 'أخرى']
+    : ['Changed my mind', 'Ordered by mistake', 'Taking too long', 'Wrong order details', 'Other'];
+  const otherLabel = ar ? 'أخرى' : 'Other';
+  const [preset, setPreset] = useState('');
+  const [otherReason, setOtherReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const finalReason = preset === otherLabel ? otherReason.trim() : preset.trim();
 
   async function handleCancel() {
+    if (!finalReason) return;
     setCancelling(true);
-    await onCancel(orderId, reason);
-    setCancelling(false);
-    onClose();
+    try {
+      await onCancel(orderId, finalReason);
+      onClose();
+    } finally {
+      setCancelling(false);
+    }
   }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-white font-bold text-lg">Cancel Order #{orderId}?</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white cursor-pointer">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-5 max-w-sm w-full">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-white font-bold text-lg">
+            {ar ? `إلغاء الطلب #${orderId}` : `Cancel Order #${orderId}`}
+          </h3>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
         <p className="text-gray-400 text-sm mb-4">
-          {orderStatus === 'new'
-            ? 'Your order has not been accepted yet. Are you sure you want to cancel?'
-            : `Your order is currently "${orderStatus}". Are you sure you want to cancel?`}
+          {ar ? 'اختر سبب الإلغاء. السبب مطلوب.' : 'Select why you are cancelling. A reason is required.'}
         </p>
-        <div className="mb-4">
-          <label className="text-gray-300 text-sm block mb-1">Reason (optional)</label>
+        <div className="grid grid-cols-1 gap-2 mb-3">
+          {reasons.map(reason => (
+            <button
+              type="button"
+              key={reason}
+              onClick={() => { setPreset(reason); if (reason !== otherLabel) setOtherReason(''); }}
+              className={`rounded-xl border px-3 py-2.5 text-sm text-left ${preset === reason ? 'border-red-500 bg-red-600/15 text-red-300' : 'border-gray-700 bg-gray-800 text-gray-300'}`}
+            >
+              {reason}
+            </button>
+          ))}
+        </div>
+        {preset === otherLabel && (
           <textarea
-            value={reason}
-            onChange={e => setReason(e.target.value)}
-            placeholder="e.g. Changed my mind, taking too long..."
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm resize-none"
+            value={otherReason}
+            onChange={e => setOtherReason(e.target.value)}
+            maxLength={300}
+            placeholder={ar ? 'اكتب سبب الإلغاء...' : 'Write the cancellation reason...'}
+            className="w-full bg-gray-800 border border-gray-700 rounded-xl p-3 text-white text-sm resize-none mb-3"
             rows={2}
           />
-        </div>
+        )}
         <div className="flex gap-3">
-          <Button
-            onClick={onClose}
-            variant="outline"
-            className="flex-1 border-gray-600 text-gray-300 cursor-pointer"
-          >
-            Keep Order
+          <Button onClick={onClose} variant="outline" className="flex-1 border-gray-600 text-gray-300 cursor-pointer">
+            {ar ? 'الاحتفاظ بالطلب' : 'Keep Order'}
           </Button>
-          <Button
-            onClick={handleCancel}
-            disabled={cancelling}
-            className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-          >
-            {cancelling ? 'Cancelling...' : 'Yes, Cancel'}
+          <Button onClick={() => void handleCancel()} disabled={cancelling || !finalReason} className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer disabled:opacity-50">
+            {cancelling ? (ar ? 'جارٍ الإلغاء...' : 'Cancelling...') : (ar ? 'تأكيد الإلغاء' : 'Cancel Order')}
           </Button>
         </div>
       </div>
@@ -419,13 +446,12 @@ interface OrderWithDelivery extends Order {
 
 export default function MyOrders() {
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const [orders, setOrders] = useState<OrderWithDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
-  const [expandedPastOrderId, setExpandedPastOrderId] = useState<number | null>(null);
   const [notificationStatus, setNotificationStatus] = useState<
     'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
   >('checking');
@@ -541,7 +567,7 @@ export default function MyOrders() {
 
           try {
             const etaRes = await client.apiCall.invoke({
-              url: `/api/v1/rider/delivery-eta/${order.id}`,
+              url: `/api/v1/rider/delivery-eta/${order.id}?session_id=${encodeURIComponent(getGuestSessionId())}`,
               method: 'GET',
             });
             const eta = etaRes?.data || {};
@@ -595,8 +621,9 @@ export default function MyOrders() {
       });
       await loadOrders();
     } catch (e: any) {
-      const msg = e?.data?.detail || 'Failed to cancel order';
+      const msg = e?.response?.data?.detail || e?.data?.detail || 'Failed to cancel order';
       alert(msg);
+      throw e;
     }
   }
 
@@ -866,267 +893,75 @@ export default function MyOrders() {
             {/* Past Orders */}
             {pastOrders.length > 0 && (
               <div>
-                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">
-                  Past Orders
-                </h2>
+                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">Past Orders</h2>
                 <div className="space-y-3">
                   {pastOrders.map(order => {
                     let items: any[] = [];
-                    try {
-                      const parsed = JSON.parse(order.items_json);
-                      items = Array.isArray(parsed) ? parsed : [];
-                    } catch {
-                      items = [];
-                    }
-
+                    try { items = JSON.parse(order.items_json); } catch { /* */ }
                     const hasReviewed = reviewedOrders.has(order.id);
-                    const isExpanded = expandedPastOrderId === order.id;
-                    const completed =
-                      order.status === 'completed' ||
-                      order.delivery_status === 'delivered';
-                    const delivery = isDeliveryOrder(order);
 
                     return (
-                      <Card
-                        key={order.id}
-                        className={`bg-gray-900/50 border-gray-800 p-4 transition-colors ${
-                          isExpanded ? 'border-green-600/40 bg-gray-900' : ''
-                        }`}
-                      >
-                        {/* Tap this area to see what was ordered */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedPastOrderId(current =>
-                              current === order.id ? null : order.id
-                            )
-                          }
-                          className="w-full text-left cursor-pointer"
-                          aria-expanded={isExpanded}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-gray-300 font-medium">
-                                #{order.id}
-                              </span>
-                              <Badge
-                                className={`${
-                                  completed
-                                    ? 'bg-gray-700'
-                                    : 'bg-red-600/20 text-red-400 border border-red-600/30'
-                                } text-xs`}
-                              >
-                                {completed ? (
-                                  <>
-                                    <CheckCircle className="w-3 h-3 mr-1" />
-                                    Completed
-                                  </>
-                                ) : (
-                                  <>
-                                    <XCircle className="w-3 h-3 mr-1" />
-                                    Cancelled
-                                  </>
-                                )}
-                              </Badge>
-                            </div>
-
-                            <div className="flex items-center gap-3 pl-3">
-                              <div className="flex flex-col items-end">
-                                {order.delivery_charge > 0 && (
-                                  <span className="text-[10px] text-gray-500">
-                                    Delivery: AED {order.delivery_charge?.toFixed(2)}
-                                  </span>
-                                )}
-                                {order.tip_amount > 0 && (
-                                  <span className="text-[10px] text-green-500">
-                                    Tip: AED {order.tip_amount?.toFixed(2)}
-                                  </span>
-                                )}
-                                <span className="text-gray-300 font-semibold">
-                                  AED {order.total_amount?.toFixed(2)}
-                                </span>
-                              </div>
-
-                              <ChevronDown
-                                className={`w-5 h-5 text-gray-500 shrink-0 transition-transform ${
-                                  isExpanded ? 'rotate-180 text-green-400' : ''
-                                }`}
-                              />
-                            </div>
+                      <Card key={order.id} className="bg-gray-900/50 border-gray-800 p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-300 font-medium">#{order.id}</span>
+                            <Badge className={`${order.status === 'completed' || order.delivery_status === 'delivered' ? 'bg-gray-700' : 'bg-red-600/20 text-red-400 border border-red-600/30'} text-xs`}>
+                              {order.status === 'completed' || order.delivery_status === 'delivered' ? (
+                                <><CheckCircle className="w-3 h-3 mr-1" /> Completed</>
+                              ) : (
+                                <><XCircle className="w-3 h-3 mr-1" /> Cancelled</>
+                              )}
+                            </Badge>
                           </div>
-
-                          <div className="flex items-center justify-between mt-1 gap-3">
-                            <p className="text-gray-600 text-xs">
-                              {formatDateShort(order.created_at)} • {items.length} item
-                              {items.length > 1 ? 's' : ''}
-                            </p>
-                            <span className="text-green-500 text-xs shrink-0">
-                              {isExpanded ? t('orders.hide_details') : t('orders.view_order')}
-                            </span>
-                          </div>
-                        </button>
-
-                        {/* Easy-to-read order details */}
-                        {isExpanded && (
-                          <div className="mt-4 pt-4 border-t border-gray-800">
-                            <div className="flex items-center justify-between mb-3">
-                              <div>
-                                <p className="text-white font-semibold">{t('orders.order_details')}</p>
-                                <p className="text-gray-500 text-xs mt-0.5">
-                                  {delivery ? t('orders.delivery_order') : t('orders.pickup_order')}
-                                </p>
-                              </div>
-                              <span className="text-gray-500 text-xs">
-                                {items.length} item{items.length !== 1 ? 's' : ''}
-                              </span>
-                            </div>
-
-                            {items.length > 0 ? (
-                              <div className="space-y-2">
-                                {items.map((item: any, index: number) => {
-                                  const quantity = Number(item.quantity || 1);
-                                  const itemPrice = Number(item.price || 0);
-                                  const extras = Array.isArray(item.extras)
-                                    ? item.extras
-                                        .map((extra: any) =>
-                                          typeof extra === 'string'
-                                            ? extra
-                                            : extra?.name || ''
-                                        )
-                                        .filter(Boolean)
-                                    : [];
-
-                                  return (
-                                    <div
-                                      key={`${order.id}-item-${index}`}
-                                      className="rounded-xl bg-black/40 border border-gray-800 px-3 py-3"
-                                    >
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                          <div className="flex items-start gap-2">
-                                            <span className="inline-flex min-w-7 h-7 items-center justify-center rounded-lg bg-green-600/15 text-green-400 text-xs font-bold px-2">
-                                              {quantity}×
-                                            </span>
-                                            <div>
-                                              <p className="text-white font-medium leading-6">
-                                                {item.name || 'Item'}
-                                              </p>
-                                              {item.size && (
-                                                <p className="text-gray-500 text-xs">
-                                                  Size: {item.size}
-                                                </p>
-                                              )}
-                                              {extras.length > 0 && (
-                                                <p className="text-gray-500 text-xs mt-1">
-                                                  Extras: {extras.join(', ')}
-                                                </p>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                        <span className="text-gray-300 font-medium shrink-0">
-                                          AED {itemPrice.toFixed(2)}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="rounded-xl bg-black/40 border border-gray-800 p-3 text-gray-500 text-sm">
-                                {t('orders.item_details_unavailable')}
-                              </div>
+                          <div className="flex flex-col items-end">
+                            {order.delivery_charge > 0 && (
+                              <span className="text-[10px] text-gray-500">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
                             )}
-
-                            <div className="mt-3 rounded-xl bg-black/30 border border-gray-800 px-3 py-3 space-y-2 text-sm">
-                              {Number(order.service_fee || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">{t('orders.service_fee')}</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.service_fee || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.small_order_fee || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">{t('orders.small_order_fee')}</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.small_order_fee || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.delivery_charge || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Delivery</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.delivery_charge || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.tip_amount || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">
-                                    {String(order.tip_type || '').toLowerCase() === 'rider'
-                                      ? 'Rider tip'
-                                      : 'Tip'}
-                                  </span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.tip_amount || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {'payment_method' in order && order.payment_method && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">{t('orders.payment')}</span>
-                                  <span className="text-gray-300 text-right">
-                                    {String(order.payment_method).replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                              )}
-
-                              <div className="flex justify-between gap-3 pt-2 border-t border-gray-800">
-                                <span className="text-white font-semibold">{t('orders.total')}</span>
-                                <span className="text-green-400 font-bold">
-                                  AED {Number(order.total_amount || 0).toFixed(2)}
-                                </span>
-                              </div>
-                            </div>
+                            {order.tip_amount > 0 && (
+                              <span className="text-[10px] text-green-500">Tip: AED {order.tip_amount?.toFixed(2)}</span>
+                            )}
+                            <span className="text-gray-400 font-medium">AED {order.total_amount?.toFixed(2)}</span>
                           </div>
-                        )}
-
-                        {/* Feedback is separate from opening/closing the card */}
-                        {completed && (
-                          <div className="mt-3 flex justify-end">
-                            {hasReviewed ? (
+                        </div>
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-gray-600 text-xs">
+                            {formatDateShort(order.created_at)} • {items.length} item{items.length > 1 ? 's' : ''}
+                          </p>
+                          {(order.status === 'completed' || order.delivery_status === 'delivered') && (
+                            hasReviewed ? (
                               <span className="text-green-500 text-xs flex items-center gap-1">
                                 <CheckCircle className="w-3 h-3" /> Reviewed
                               </span>
                             ) : (
                               <button
-                                type="button"
                                 onClick={() => navigate(`/feedback?order=${order.id}`)}
                                 className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
                               >
                                 <MessageSquare className="w-3 h-3" /> Give Feedback
                               </button>
-                            )}
+                            )
+                          )}
+                        </div>
+                        {order.status === 'cancelled' && getCancellationInfo(order) && (
+                          <div className="mt-3 rounded-xl border border-red-600/25 bg-red-600/10 px-3 py-2">
+                            <p className="text-red-300 text-xs font-semibold">
+                              {language === 'ar' ? 'تم الإلغاء بواسطة' : 'Cancelled by'}: {getCancellationInfo(order)!.by}
+                            </p>
+                            <p className="text-gray-300 text-sm mt-1">
+                              {language === 'ar' ? 'السبب' : 'Reason'}: {getCancellationInfo(order)!.reason}
+                            </p>
                           </div>
                         )}
 
-                        {/* Reorder stays obvious and separate */}
-                        {completed && (
+                        {/* Order Again button for completed orders */}
+                        {(order.status === 'completed' || order.delivery_status === 'delivered') && (
                           <div className="mt-3 pt-3 border-t border-gray-800">
                             <Button
                               onClick={() => handleOrderAgain(order)}
                               size="sm"
-                              className="w-full bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                              className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer"
                             >
-                              <ShoppingCart className="w-4 h-4 mr-2" />
-                              Order Again
+                              <ShoppingCart className="w-4 h-4 mr-2" /> Order Again
                             </Button>
                           </div>
                         )}

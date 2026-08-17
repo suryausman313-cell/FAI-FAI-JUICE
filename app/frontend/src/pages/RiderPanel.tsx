@@ -20,10 +20,12 @@ type RiderApiOptions = {
 };
 
 function riderApi(options: RiderApiOptions) {
+  const token = localStorage.getItem('rider_access_token') || '';
   return axios.request({
     url: `${getAPIBaseURL().replace(/\/$/, '')}${options.url}`,
     method: options.method,
     data: options.data,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     timeout: 25000,
   });
 }
@@ -194,10 +196,16 @@ export default function RiderPanel() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const prevDeliveryIdsRef = useRef<number[]>([]);
+  const ringTimerRef = useRef<number | null>(null);
+  const ringSuppressedRef = useRef<Set<number>>(new Set());
+  const [rejectDelivery, setRejectDelivery] = useState<Delivery | null>(null);
+  const [rejectPreset, setRejectPreset] = useState('');
+  const [rejectOtherReason, setRejectOtherReason] = useState('');
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
-    if (savedRider) {
+    const savedToken = localStorage.getItem('rider_access_token');
+    if (savedRider && savedToken) {
       try {
         const parsed = JSON.parse(savedRider);
         setRider(parsed);
@@ -206,6 +214,10 @@ export default function RiderPanel() {
         loadFinance(parsed.id, 'today');
         loadCashSubmissions(parsed.id);
       } catch { /* ignore */ }
+    } else if (savedRider && !savedToken) {
+      // One-time re-login after secure rider sessions are introduced.
+      localStorage.removeItem('rider_auth');
+      localStorage.removeItem('rider_access_token');
     }
     if (browserNotificationsSupported) {
       setNotificationPermission(Notification.permission);
@@ -328,21 +340,38 @@ export default function RiderPanel() {
     } catch { /* ignore */ }
   }
 
-  // Keep an assigned order noticeable until rider Accepts or Rejects.
+  function stopRiderRingNow(assignmentId?: number) {
+    if (assignmentId != null) ringSuppressedRef.current.add(assignmentId);
+    if (ringTimerRef.current !== null) {
+      window.clearInterval(ringTimerRef.current);
+      ringTimerRef.current = null;
+    }
+  }
+
+  // Ring only after the assigned order is already present in RiderPanel state.
   useEffect(() => {
-    const waitingForDecision = Boolean(
-      rider &&
-      notificationsEnabled &&
-      deliveries.some(
-        delivery => String(delivery.status || '').toLowerCase() === 'assigned'
-      )
+    const waiting = deliveries.filter(
+      delivery =>
+        String(delivery.status || '').toLowerCase() === 'assigned' &&
+        !ringSuppressedRef.current.has(delivery.id)
     );
 
-    if (!waitingForDecision) return;
+    if (!rider || !notificationsEnabled || waiting.length === 0) {
+      stopRiderRingNow();
+      return;
+    }
 
-    playNotificationSound();
-    const ringTimer = window.setInterval(playNotificationSound, 5000);
-    return () => window.clearInterval(ringTimer);
+    // State has rendered/updated first; sound follows on the next animation frame.
+    window.requestAnimationFrame(() => playNotificationSound());
+    if (ringTimerRef.current !== null) window.clearInterval(ringTimerRef.current);
+    ringTimerRef.current = window.setInterval(playNotificationSound, 5000);
+
+    return () => {
+      if (ringTimerRef.current !== null) {
+        window.clearInterval(ringTimerRef.current);
+        ringTimerRef.current = null;
+      }
+    };
   }, [deliveries, rider, notificationsEnabled]);
 
   async function registerServiceWorker() {
@@ -360,7 +389,7 @@ export default function RiderPanel() {
       }
       if (registration.active && rider) {
         const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())).map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
+        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL(), token: localStorage.getItem('rider_access_token') || '' } });
       }
     } catch (error) { console.error('SW registration failed:', error); }
   }
@@ -430,6 +459,7 @@ export default function RiderPanel() {
             riderId: rider.id,
             currentDeliveryIds: activeIds,
             apiBaseUrl: getAPIBaseURL(),
+            token: localStorage.getItem('rider_access_token') || '',
           },
         });
       }
@@ -482,6 +512,7 @@ export default function RiderPanel() {
         const riderData = res.data.rider;
         setRider(riderData);
         localStorage.setItem('rider_auth', JSON.stringify(riderData));
+        localStorage.setItem('rider_access_token', String(res.data.access_token || ''));
         toast.success(`Welcome, ${riderData.name}!`);
         loadDeliveries(riderData.id);
         loadStats(riderData.id);
@@ -505,6 +536,9 @@ export default function RiderPanel() {
     setCashAmount('');
     setCashNote('');
     localStorage.removeItem('rider_auth');
+    localStorage.removeItem('rider_access_token');
+    stopRiderRingNow();
+    ringSuppressedRef.current.clear();
     prevDeliveryIdsRef.current = [];
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   }
@@ -517,6 +551,13 @@ export default function RiderPanel() {
       setLastRefresh(new Date());
     } catch (e: any) {
       console.error('Failed to load deliveries:', e);
+      if (e?.response?.status === 401 || e?.response?.status === 403) {
+        localStorage.removeItem('rider_auth');
+        localStorage.removeItem('rider_access_token');
+        setRider(null);
+        toast.error('Rider session expired. Please login again.');
+        return;
+      }
       if (loading) { toast.error('Could not load deliveries.'); }
     } finally { setLoading(false); }
   }
@@ -615,12 +656,33 @@ export default function RiderPanel() {
     }
   }
 
-  async function updateStatus(assignmentId: number, newStatus: string) {
+  async function updateStatus(assignmentId: number, newStatus: string, reason?: string) {
+    const previous = deliveries;
+    if (newStatus === 'accepted' || newStatus === 'rejected') {
+      stopRiderRingNow(assignmentId);
+      setDeliveries(current => current.map(item => item.id === assignmentId ? { ...item, status: newStatus } : item));
+    }
+
     try {
-      await riderApi({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
-      toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
-      if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
-    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to update status'); }
+      await riderApi({
+        url: `/api/v1/rider/deliveries/${assignmentId}/status`,
+        method: 'PUT',
+        data: { status: newStatus, reason: reason || undefined },
+      });
+      toast.success(newStatus === 'rejected' ? `Delivery rejected — ${reason}` : `Status updated to ${newStatus.replace(/_/g, ' ')}`);
+      if (rider) {
+        await Promise.all([
+          loadDeliveries(rider.id),
+          loadStats(rider.id),
+          loadFinance(rider.id, financePeriod),
+          loadCashSubmissions(rider.id),
+        ]);
+      }
+    } catch (e: any) {
+      setDeliveries(previous);
+      ringSuppressedRef.current.delete(assignmentId);
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to update status');
+    }
   }
 
   function openInMaps(lat: number, lng: number) {
@@ -699,6 +761,35 @@ export default function RiderPanel() {
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
+      {rejectDelivery && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-gray-700 bg-gray-900 p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">Reject Order #{rejectDelivery.order_id}</h3>
+              <button type="button" onClick={() => { ringSuppressedRef.current.delete(rejectDelivery.id); setRejectDelivery(null); setDeliveries(current => [...current]); }} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <p className="mb-3 text-sm text-gray-400">Select why you cannot take this delivery. A reason is required.</p>
+            <div className="grid grid-cols-1 gap-2">
+              {['Too far', 'Vehicle issue', 'Busy with another delivery', 'Unable to complete delivery', 'Other'].map(reason => (
+                <button key={reason} type="button" onClick={() => { setRejectPreset(reason); if (reason !== 'Other') setRejectOtherReason(''); }} className={`rounded-xl border px-3 py-2.5 text-left text-sm ${rejectPreset === reason ? 'border-red-500 bg-red-600/15 text-red-300' : 'border-gray-700 bg-gray-800 text-gray-300'}`}>{reason}</button>
+              ))}
+            </div>
+            {rejectPreset === 'Other' && (
+              <textarea value={rejectOtherReason} onChange={e => setRejectOtherReason(e.target.value)} maxLength={300} placeholder="Write rejection reason..." className="mt-3 w-full rounded-xl border border-gray-700 bg-gray-800 p-3 text-sm text-white" rows={2} />
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => { ringSuppressedRef.current.delete(rejectDelivery.id); setRejectDelivery(null); setRejectPreset(''); setRejectOtherReason(''); setDeliveries(current => [...current]); }} className="border-gray-700 text-gray-300">Back</Button>
+              <Button disabled={!rejectPreset || (rejectPreset === 'Other' && !rejectOtherReason.trim())} onClick={() => {
+                const target = rejectDelivery;
+                const reason = rejectPreset === 'Other' ? rejectOtherReason.trim() : rejectPreset;
+                if (!reason) return;
+                setRejectDelivery(null); setRejectPreset(''); setRejectOtherReason('');
+                void updateStatus(target.id, 'rejected', reason);
+              }} className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm Reject</Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="w-full max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
@@ -1066,7 +1157,7 @@ export default function RiderPanel() {
                                   ✅ Accept
                                 </Button>
                                 <Button
-                                  onClick={() => updateStatus(delivery.id, 'rejected')}
+                                  onClick={() => { stopRiderRingNow(delivery.id); setRejectPreset(''); setRejectOtherReason(''); setRejectDelivery(delivery); }}
                                   className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
                                   size="sm"
                                 >
