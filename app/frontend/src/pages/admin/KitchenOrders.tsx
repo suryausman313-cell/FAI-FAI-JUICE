@@ -259,14 +259,17 @@ function TimerCircle({
   const [, setTick] = useState(0);
   const lateAnnouncedRef = useRef(false);
 
+  const timerActive = ['new', 'accepted', 'preparing'].includes(String(order.status || '').toLowerCase());
+
   useEffect(() => {
+    if (!timerActive) return;
     const timer = setInterval(() => setTick((value) => value + 1), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [timerActive]);
 
-  const signed = signedReadyMinutes(order);
-  const elapsed = getElapsedMinutes(order.created_at);
-  const isLate = signed !== null && signed < 0;
+  const signed = timerActive ? signedReadyMinutes(order) : null;
+  const elapsed = timerActive ? getElapsedMinutes(order.created_at) : 0;
+  const isLate = timerActive && signed !== null && signed < 0;
   const value = signed !== null ? signed : elapsed;
 
   useEffect(() => {
@@ -276,6 +279,10 @@ function TimerCircle({
     }
     if (!isLate) lateAnnouncedRef.current = false;
   }, [isLate, onBecameLate, order]);
+
+  // Talabat-style: once an order is Ready/Completed/Cancelled/with rider,
+  // kitchen countdown disappears completely. Completed orders never keep ticking.
+  if (!timerActive) return null;
 
   if (isLate) {
     const lateBy = Math.abs(value);
@@ -919,7 +926,13 @@ export default function KitchenOrders() {
             )}
 
             {order.status === 'ready' && !isDeliveryOrder(order) && (
-              <Button onClick={() => void updateOrderStatus(order, 'completed')} className="h-16 w-full rounded-3xl bg-slate-900 text-2xl font-black hover:bg-slate-800">
+              <Button
+                onClick={() => {
+                  setSelectedOrderId(null);
+                  void updateOrderStatus(order, 'completed');
+                }}
+                className="h-16 w-full rounded-3xl bg-slate-900 text-2xl font-black hover:bg-slate-800"
+              >
                 Complete pickup
               </Button>
             )}
@@ -942,6 +955,10 @@ export default function KitchenOrders() {
 
     return (
       <div className="space-y-4">
+        <div className="pt-1">
+          <h2 className="text-4xl font-black text-slate-900">Recent orders</h2>
+          <p className="mt-1 text-base text-slate-500">Tap any completed order to view full details and reprint.</p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">Orders</p>
