@@ -351,7 +351,7 @@ async def validate_and_price_order_items(
         if requested_extras and not bool(menu_item.has_extras):
             raise HTTPException(status_code=400, detail=f"Extras are not available for {menu_item.name}.")
 
-        allowed_extras = _item_specific_extras(menu_item) or global_extras
+        allowed_extras = _item_specific_extras(menu_item)
         by_id = {int(extra["id"]): extra for extra in allowed_extras}
         by_name = {str(extra["name"]).strip().casefold(): extra for extra in allowed_extras}
         chosen_extras: list[dict[str, Any]] = []
