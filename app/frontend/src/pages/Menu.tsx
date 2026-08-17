@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes } from '@/lib/api';
+import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes, getItemExtras } from '@/lib/api';
 import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
@@ -234,6 +234,7 @@ export default function Menu() {
 
           {selectedItem && (() => {
             const sizes = getItemSizes(selectedItem);
+            const availableExtras = getItemExtras(selectedItem, extras);
             return (
               <div className="space-y-6">
                 {selectedItem.image_url && (
@@ -297,12 +298,12 @@ export default function Menu() {
                   </div>
                 )}
 
-                {/* Extras */}
-                {extras.length > 0 && selectedItem.has_extras !== false && (
+                {/* Per-item Extras (legacy items fall back to global extras) */}
+                {availableExtras.length > 0 && selectedItem.has_extras !== false && (
                   <div>
                     <h4 className="font-semibold mb-3">{t('menu.extras')}</h4>
                     <div className="space-y-2">
-                      {extras.map(extra => (
+                      {availableExtras.map(extra => (
                         <label
                           key={extra.id}
                           className="flex items-center justify-between p-3 rounded-xl border border-gray-700 hover:border-gray-500 cursor-pointer transition-all"
@@ -314,7 +315,9 @@ export default function Menu() {
                             />
                             <span>{extra.name}</span>
                           </div>
-                          <span className="text-red-400 font-medium">+AED {extra.price}</span>
+                          <span className="text-red-400 font-medium">
+                            +AED {Number(extra.price || 0).toFixed(2)}
+                          </span>
                         </label>
                       ))}
                     </div>
