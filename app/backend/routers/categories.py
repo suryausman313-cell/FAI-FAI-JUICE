@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.categories import CategoriesService
+from services.auto_translation import backfill_categories, prepare_category_payload
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/api/v1/entities/categories", tags=["categories"])
 class CategoriesData(BaseModel):
     """Entity data schema (for create/update)"""
     name: str
+    name_ar: str = None
     sort_order: int = None
     is_active: bool = None
 
@@ -28,6 +30,7 @@ class CategoriesData(BaseModel):
 class CategoriesUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     name: Optional[str] = None
+    name_ar: Optional[str] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
 
@@ -36,6 +39,7 @@ class CategoriesResponse(BaseModel):
     """Entity response schema"""
     id: int
     name: str
+    name_ar: Optional[str] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
     created_at: Optional[datetime] = None
@@ -103,7 +107,9 @@ async def query_categoriess(
             query_dict=query_dict,
             sort=sort,
         )
+        await backfill_categories(result.get("items", []), db)
         logger.debug(f"Found {result['total']} categoriess")
+        await backfill_categories([result], db)
         return result
     except HTTPException:
         raise
@@ -143,6 +149,7 @@ async def query_categoriess_all(
             query_dict=query_dict,
             sort=sort
         )
+        await backfill_categories(result.get("items", []), db)
         logger.debug(f"Found {result['total']} categoriess")
         return result
     except HTTPException:
@@ -189,7 +196,8 @@ async def create_categories(
     
     service = CategoriesService(db)
     try:
-        result = await service.create(data.model_dump())
+        create_data = await prepare_category_payload(data.model_dump())
+        result = await service.create(create_data)
         if not result:
             raise HTTPException(status_code=400, detail="Failed to create categories")
         
@@ -216,7 +224,8 @@ async def create_categoriess_batch(
     
     try:
         for item_data in request.items:
-            result = await service.create(item_data.model_dump())
+            create_data = await prepare_category_payload(item_data.model_dump())
+            result = await service.create(create_data)
             if result:
                 results.append(result)
         
@@ -243,6 +252,7 @@ async def update_categoriess_batch(
         for item in request.items:
             # Only include non-None values for partial updates
             update_dict = {k: v for k, v in item.updates.model_dump().items() if v is not None}
+            update_dict = await prepare_category_payload(update_dict)
             result = await service.update(item.id, update_dict)
             if result:
                 results.append(result)
@@ -268,6 +278,7 @@ async def update_categories(
     try:
         # Only include non-None values for partial updates
         update_dict = {k: v for k, v in data.model_dump().items() if v is not None}
+        update_dict = await prepare_category_payload(update_dict)
         result = await service.update(id, update_dict)
         if not result:
             logger.warning(f"Categories with id {id} not found for update")

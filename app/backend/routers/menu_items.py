@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.menu_items import Menu_itemsService
+from services.auto_translation import backfill_menu_items, prepare_menu_payload
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -22,7 +23,9 @@ class Menu_itemsData(BaseModel):
     """Entity data schema (for create/update)"""
     category_id: int
     name: str
+    name_ar: str = None
     description: str = None
+    description_ar: str = None
     price_medium: float = None
     price_large: float = None
     sizes_json: str = None
@@ -43,7 +46,9 @@ class Menu_itemsUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     category_id: Optional[int] = None
     name: Optional[str] = None
+    name_ar: Optional[str] = None
     description: Optional[str] = None
+    description_ar: Optional[str] = None
     price_medium: Optional[float] = None
     price_large: Optional[float] = None
     sizes_json: Optional[str] = None
@@ -65,7 +70,9 @@ class Menu_itemsResponse(BaseModel):
     id: int
     category_id: int
     name: str
+    name_ar: Optional[str] = None
     description: Optional[str] = None
+    description_ar: Optional[str] = None
     price_medium: Optional[float] = None
     price_large: Optional[float] = None
     sizes_json: Optional[str] = None
@@ -145,7 +152,9 @@ async def query_menu_itemss(
             query_dict=query_dict,
             sort=sort,
         )
+        await backfill_menu_items(result.get("items", []), db)
         logger.debug(f"Found {result['total']} menu_itemss")
+        await backfill_menu_items([result], db)
         return result
     except HTTPException:
         raise
@@ -185,6 +194,7 @@ async def query_menu_itemss_all(
             query_dict=query_dict,
             sort=sort
         )
+        await backfill_menu_items(result.get("items", []), db)
         logger.debug(f"Found {result['total']} menu_itemss")
         return result
     except HTTPException:
@@ -231,7 +241,8 @@ async def create_menu_items(
     
     service = Menu_itemsService(db)
     try:
-        result = await service.create(data.model_dump())
+        create_data = await prepare_menu_payload(data.model_dump())
+        result = await service.create(create_data)
         if not result:
             raise HTTPException(status_code=400, detail="Failed to create menu_items")
         
@@ -258,7 +269,8 @@ async def create_menu_itemss_batch(
     
     try:
         for item_data in request.items:
-            result = await service.create(item_data.model_dump())
+            create_data = await prepare_menu_payload(item_data.model_dump())
+            result = await service.create(create_data)
             if result:
                 results.append(result)
         
@@ -285,6 +297,7 @@ async def update_menu_itemss_batch(
         for item in request.items:
             # Only include non-None values for partial updates
             update_dict = {k: v for k, v in item.updates.model_dump().items() if v is not None}
+            update_dict = await prepare_menu_payload(update_dict)
             result = await service.update(item.id, update_dict)
             if result:
                 results.append(result)
@@ -310,6 +323,7 @@ async def update_menu_items(
     try:
         # Only include non-None values for partial updates
         update_dict = {k: v for k, v in data.model_dump().items() if v is not None}
+        update_dict = await prepare_menu_payload(update_dict)
         result = await service.update(id, update_dict)
         if not result:
             logger.warning(f"Menu_items with id {id} not found for update")
