@@ -159,6 +159,89 @@ function readSavedDeliveryLocations(): SavedDeliveryLocation[] {
 }
 
 const CHECKOUT_EN: Record<string, string> = {
+  'checkout.login_signup': 'Login / Sign Up',
+  'checkout.login_required': 'Please login to place your order',
+  'checkout.restaurant_closed': 'Restaurant Closed',
+  'checkout.collect_store': 'Collect from store',
+  'checkout.to_your_location': 'To your location',
+  'checkout.opens': 'Opens',
+  'checkout.delivery_hours': 'Delivery hours',
+  'checkout.delivery_closed_pickup_available': 'Delivery is closed now. Pickup is available.',
+  'checkout.valid_number_delivery': 'Valid phone number required',
+  'checkout.select_delivery_location': 'Delivery Location',
+  'checkout.tap_drag_pin': 'Choose your location on the map',
+  'checkout.getting': 'Getting...',
+  'checkout.my_location': 'My Location',
+  'checkout.drag_pin_popup': 'Drag me to your location',
+  'checkout.pin_moved': 'Location selected',
+  'checkout.location_failed': 'Could not get your location. Select it on the map.',
+  'checkout.location_access_unavailable': 'Location access unavailable',
+  'checkout.location_access_help': 'Select your delivery location on the map.',
+  'checkout.try_again': 'Try Again',
+  'checkout.still_no_access': 'Select your location manually on the map.',
+  'checkout.getting_your_location': 'Getting your location...',
+  'checkout.delivery_fee': 'Delivery Fee',
+  'checkout.delivery_notes_label': 'Delivery Notes (optional)',
+  'checkout.delivery_notes_placeholder': 'Building, floor, apartment number...',
+  'checkout.estimated_delivery': 'Estimated delivery',
+  'checkout.car_optional': 'Car Number & Color (optional)',
+  'checkout.car_help': 'Helps us identify you for pickup',
+  'checkout.applied': 'applied',
+  'checkout.saving': 'saving',
+  'checkout.remove': 'Remove',
+  'checkout.add_tip': 'Add a Tip',
+  'checkout.tip_goes_rider_note': '(goes to rider)',
+  'checkout.tip_goes_shop_note': '(goes to shop staff)',
+  'checkout.custom': 'Custom',
+  'checkout.no_tip': 'No Tip',
+  'checkout.enter_amount': 'Enter amount',
+  'checkout.will_go_rider': 'will go to your delivery rider',
+  'checkout.will_go_shop': 'will go to shop staff',
+  'checkout.contact_restaurant': 'Please contact the restaurant.',
+  'checkout.order_summary': 'Order Summary',
+  'checkout.original_subtotal': 'Original Subtotal',
+  'checkout.item_discounts': 'Item Discounts',
+  'checkout.subtotal': 'Subtotal',
+  'checkout.service_fee': 'Service Fee',
+  'checkout.small_order_fee': 'Small Order Fee',
+  'checkout.vat_included': 'VAT (Incl.)',
+  'checkout.vat_tax': 'VAT / Tax',
+  'checkout.rider': 'Rider',
+  'checkout.shop': 'Shop',
+  'checkout.discount': 'Discount',
+  'checkout.tip': 'Tip',
+  'checkout.please_fix_following': 'Please fix the following:',
+  'checkout.phone_required': 'Please enter your phone number',
+  'checkout.valid_phone_allowed': 'Please enter a valid phone number',
+  'checkout.phone_too_short': 'Phone number is too short',
+  'checkout.valid_phone_min': 'Please enter a valid phone number',
+  'checkout.enter_name': 'Please enter your name',
+  'checkout.select_location': 'Please select your delivery location',
+  'checkout.unable_delivery_charge': 'Unable to calculate delivery charge. Re-select your location.',
+  'checkout.no_payment_for_type': 'No payment methods available for this order type',
+  'checkout.cart_add_items': 'Your cart is empty',
+  'checkout.delivery_available_from': 'Delivery is available from',
+  'checkout.to': 'to',
+  'checkout.select_pickup': 'Please select Pickup',
+  'checkout.fix_before_order': 'Please fix',
+  'checkout.issue': 'issue',
+  'checkout.issues': 'issues',
+  'checkout.order_number': 'Order',
+  'checkout.order_success': 'placed successfully',
+  'checkout.failed_place_order': 'Failed to place order. Please try again.',
+  'checkout.enter_promo': 'Please enter a promo code',
+  'checkout.first_order_only': 'This offer is valid for first orders only',
+  'checkout.offer_usage_limit': 'Offer usage limit reached',
+  'checkout.minimum_promo_order': 'Minimum order for this promo is',
+  'checkout.discount_applied': 'discount applied',
+  'checkout.promo_applied': 'Promo code applied',
+  'checkout.invalid_promo': 'Invalid or expired promo code',
+  'checkout.promo_validate_failed': 'Failed to validate promo code',
+  'checkout.delivery_not_available_area': 'Delivery is not available in your area',
+  'checkout.delivery_within': 'We deliver within',
+  'checkout.madha_province': 'Madha Province',
+  'checkout.shop_closed_message': 'The restaurant is currently closed.',
+  'checkout.shop_busy_message': 'We are currently busy. Orders may take longer.',
   'checkout.saved_locations': 'Saved locations',
   'checkout.save_location_optional': 'Save this location (optional)',
   'checkout.location_name': 'Location name',
@@ -174,6 +257,20 @@ const CHECKOUT_EN: Record<string, string> = {
   'checkout.saved_limit_reached': 'Maximum 10 saved locations. Delete one to save another.',
   'checkout.enter_location_name': 'Enter a name for this location.',
   'checkout.delete_saved_location': 'Delete saved location',
+  'checkout.saved_location_success': 'Delivery location saved.',
+  'checkout.saved_location_loaded': 'Saved delivery location loaded.',
+  'checkout.no_saved_location': 'No saved delivery location found.',
+  'checkout.select_location_first': 'Select a delivery location first.',
+  'checkout.location_unsupported': 'Location is not supported. Select it on the map.',
+  'checkout.location_denied': 'Location permission denied. Select it on the map.',
+  'checkout.name_placeholder': 'Your full name',
+  'checkout.notes_placeholder': 'Any special instructions...',
+  'checkout.promo_placeholder': 'Enter promo code',
+  'checkout.car_placeholder': 'e.g. White Toyota ABC 1234',
+  'menu.small': 'Small',
+  'menu.medium': 'Medium',
+  'menu.large': 'Large',
+  'deals.off': 'OFF',
 };
 
 const CHECKOUT_AR: Record<string, string> = {
@@ -296,7 +393,14 @@ const CHECKOUT_AR: Record<string, string> = {
 export default function Checkout() {
   const navigate = useNavigate();
   const { t: baseT, language } = useTranslation();
-  const t = (key: string) => language === 'ar' ? (CHECKOUT_AR[key] || baseT(key)) : (CHECKOUT_EN[key] || baseT(key));
+  const humanizeKey = (key: string) =>
+    key.split('.').pop()?.replaceAll('_', ' ').replace(/\w/g, (c) => c.toUpperCase()) || '';
+  const t = (key: string) => {
+    const local = language === 'ar' ? CHECKOUT_AR[key] : CHECKOUT_EN[key];
+    if (local) return local;
+    const global = baseT(key);
+    return global && global !== key ? global : humanizeKey(key);
+  };
   const { isLoggedIn } = useCustomerAuth();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -472,13 +576,13 @@ export default function Checkout() {
     toast.success(`${localizedSavedLocationName(saved.name)} — ${t('checkout.saved_location_loaded')}`);
   }
 
-  function saveCurrentDeliveryLocation() {
+  function saveCurrentDeliveryLocation(nameOverride?: string) {
     if (!locationShared || customerLat === null || customerLng === null) {
       toast.error(t('checkout.select_location_first'));
       return;
     }
 
-    const name = cleanSavedLocationName(saveLocationName);
+    const name = cleanSavedLocationName(nameOverride || saveLocationName);
     if (!name) {
       toast.error(t('checkout.enter_location_name'));
       return;
@@ -1305,57 +1409,41 @@ export default function Checkout() {
                 className={`bg-gray-900 border-gray-700 text-white mt-1 ${showErrors && errors.phone ? 'border-red-500' : ''}`}
                 required
               />
-              {orderType === 'delivery' && (
-                <p className="text-gray-500 text-xs mt-1">
-                  {t('checkout.valid_number_delivery')} ({allowedCountryCodes.join(', ')})
-                </p>
-              )}
               {showErrors && errors.phone && <p className="text-red-400 text-xs mt-1">⚠️ {errors.phone}</p>}
             </div>
 
             {/* Delivery Map Location */}
             {orderType === 'delivery' && (
               <>
-                <div id="delivery-map">
-                  <Label className="text-gray-300 mb-2 block">{t('checkout.select_delivery_location')} *</Label>
-                  <div className="flex items-center gap-2 mb-2">
-                    <p className="text-gray-500 text-xs flex-1">
-                      {t('checkout.tap_drag_pin')}
-                    </p>
-                    {savedDeliveryLocations.length > 0 && (
-                      <div className="w-full">
-                        <p className="text-gray-500 text-xs mb-2">
-                          {t('checkout.saved_locations')}
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {savedDeliveryLocations.map((saved) => (
-                            <div
-                              key={saved.id}
-                              className="inline-flex items-center rounded-lg bg-gray-800 border border-gray-700 overflow-hidden"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => void useSavedDeliveryLocation(saved)}
-                                className="px-3 py-2 text-xs text-white hover:bg-gray-700 flex items-center gap-1"
-                              >
-                                <MapPin className="w-3 h-3" />
-                                {localizedSavedLocationName(saved.name)}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteSavedDeliveryLocation(saved.id)}
-                                className="px-2 py-2 text-gray-500 hover:text-red-400 hover:bg-gray-700"
-                                aria-label={t('checkout.delete_saved_location')}
-                                title={t('checkout.delete_saved_location')}
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
+                <div id="delivery-map" className="space-y-3">
+                  {/* Saved locations + current GPS: compact actions only */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {savedDeliveryLocations.map((saved) => (
+                      <div
+                        key={saved.id}
+                        className="inline-flex items-center overflow-hidden rounded-xl border border-gray-700 bg-gray-900"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void useSavedDeliveryLocation(saved)}
+                          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-100 hover:bg-gray-800"
+                        >
+                          <MapPin className="h-4 w-4 text-green-400" />
+                          {localizedSavedLocationName(saved.name)}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSavedDeliveryLocation(saved.id)}
+                          className="border-l border-gray-700 px-2 py-2 text-gray-500 hover:bg-gray-800 hover:text-red-400"
+                          aria-label={t('checkout.delete_saved_location')}
+                          title={t('checkout.delete_saved_location')}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
                       </div>
-                    )}
-<Button
+                    ))}
+
+                    <Button
                       type="button"
                       size="sm"
                       disabled={gettingLocation}
@@ -1368,14 +1456,12 @@ export default function Checkout() {
                         navigator.geolocation.getCurrentPosition(
                           (pos) => {
                             const { latitude, longitude } = pos.coords;
-                            // Always move pin back to GPS coordinates
                             if (markerRef.current) {
                               markerRef.current.setLatLng([latitude, longitude]);
                             }
                             if (mapInstanceRef.current) {
                               mapInstanceRef.current.setView([latitude, longitude], 15);
                             }
-                            // Force recalculate delivery charge immediately
                             handleLocationSelected(latitude, longitude);
                             setLocationPermissionDenied(false);
                             setGettingLocation(false);
@@ -1386,85 +1472,97 @@ export default function Checkout() {
                             if (err.code === err.PERMISSION_DENIED) {
                               setLocationPermissionDenied(true);
                               toast.warning(t('checkout.location_denied'));
-                            } else if (err.code === err.TIMEOUT) {
-                              toast.warning(t('checkout.location_failed'));
                             } else {
                               toast.warning(t('checkout.location_failed'));
                             }
                           },
-                          { enableHighAccuracy: true, timeout: 15000 }
+                          { enableHighAccuracy: true, timeout: 15000 },
                         );
                       }}
-                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs cursor-pointer disabled:opacity-50"
+                      className="ml-auto rounded-xl bg-blue-600 px-4 text-white hover:bg-blue-700 disabled:opacity-50"
                     >
-                      <Navigation className="w-3 h-3 mr-1" /> {gettingLocation ? t('checkout.getting') : t('checkout.my_location')}
+                      <Navigation className="mr-1.5 h-4 w-4" />
+                      {gettingLocation ? t('checkout.getting') : t('checkout.my_location')}
                     </Button>
                   </div>
+
+                  {/* Map */}
                   <div
                     ref={mapRef}
-                    className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700"
+                    className="h-[250px] w-full overflow-hidden rounded-2xl border border-gray-700 bg-gray-900"
                     style={{ zIndex: 1 }}
                   />
-                  {/* Location permission denied - friendly guidance */}
+
+                  {/* GPS permission fallback: only shown when actually needed */}
                   {locationPermissionDenied && !locationShared && (
-                    <div className="mt-2 p-3 rounded-lg bg-yellow-600/10 border border-yellow-600/30">
-                      <p className="text-yellow-300 text-sm font-medium mb-1">📍 {t('checkout.location_access_unavailable')}</p>
-                      <p className="text-yellow-200/70 text-xs mb-2">
-                        {t('checkout.location_access_help')}
-                      </p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => {
-                          if (!navigator.geolocation) return;
-                          setGettingLocation(true);
-                          navigator.geolocation.getCurrentPosition(
-                            (pos) => {
-                              const { latitude, longitude } = pos.coords;
-                              if (markerRef.current) {
-                                markerRef.current.setLatLng([latitude, longitude]);
-                              }
-                              if (mapInstanceRef.current) {
-                                mapInstanceRef.current.setView([latitude, longitude], 15);
-                              }
-                              handleLocationSelected(latitude, longitude);
-                              setLocationPermissionDenied(false);
-                              setGettingLocation(false);
-                              toast.success(t('checkout.pin_moved'));
-                            },
-                            () => {
-                              setGettingLocation(false);
-                              toast.warning(t('checkout.still_no_access'));
-                            },
-                            { enableHighAccuracy: true, timeout: 10000 }
-                          );
-                        }}
-                        className="bg-yellow-600 hover:bg-yellow-700 text-white text-xs cursor-pointer"
-                      >
-                        <Navigation className="w-3 h-3 mr-1" /> {t('checkout.try_again')}
-                      </Button>
-                    </div>
-                  )}
-                  {/* Getting location indicator */}
-                  {gettingLocation && !locationShared && (
-                    <div className="mt-2 flex items-center gap-2 text-blue-400 text-sm">
-                      <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                      <span>{t('checkout.getting_your_location')}</span>
-                    </div>
-                  )}
-                  {locationShared && !deliveryZoneError && (
-                    <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
-                      <CheckCircle className="w-4 h-4" />
-                      <span>{t('checkout.delivery_fee')}: AED {calculatedDeliveryCharge}</span>
-                    </div>
-                  )}
-                  {locationShared && !deliveryZoneError && (
-                    <div className="mt-3">
-                      {!showSaveLocationPanel ? (
+                    <div className="rounded-xl border border-yellow-700/40 bg-yellow-900/10 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm text-yellow-200">
+                          {t('checkout.location_access_help')}
+                        </p>
                         <Button
                           type="button"
                           size="sm"
-                          variant="outline"
+                          onClick={() => {
+                            if (!navigator.geolocation) return;
+                            setGettingLocation(true);
+                            navigator.geolocation.getCurrentPosition(
+                              (pos) => {
+                                const { latitude, longitude } = pos.coords;
+                                if (markerRef.current) {
+                                  markerRef.current.setLatLng([latitude, longitude]);
+                                }
+                                if (mapInstanceRef.current) {
+                                  mapInstanceRef.current.setView([latitude, longitude], 15);
+                                }
+                                handleLocationSelected(latitude, longitude);
+                                setLocationPermissionDenied(false);
+                                setGettingLocation(false);
+                                toast.success(t('checkout.pin_moved'));
+                              },
+                              () => {
+                                setGettingLocation(false);
+                                toast.warning(t('checkout.still_no_access'));
+                              },
+                              { enableHighAccuracy: true, timeout: 10000 },
+                            );
+                          }}
+                          className="shrink-0 bg-yellow-600 text-white hover:bg-yellow-700"
+                        >
+                          {t('checkout.try_again')}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {gettingLocation && !locationShared && (
+                    <div className="flex items-center justify-center gap-2 py-1 text-sm text-blue-400">
+                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+                      <span>{t('checkout.getting_your_location')}</span>
+                    </div>
+                  )}
+
+                  {/* Clean delivery price card — no zones, no km slabs, no technical text */}
+                  {locationShared && !deliveryZoneError && (
+                    <div className="flex items-center justify-between rounded-2xl border border-green-900/60 bg-green-950/20 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="h-5 w-5 text-green-400" />
+                        <span className="font-medium text-gray-200">
+                          {language === 'ar' ? 'رسوم التوصيل' : 'Delivery Fee'}
+                        </span>
+                      </div>
+                      <span className="text-lg font-bold text-green-400">
+                        AED {Number(calculatedDeliveryCharge || 0).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Optional save: understated until customer chooses it */}
+                  {locationShared && !deliveryZoneError && (
+                    <div>
+                      {!showSaveLocationPanel ? (
+                        <button
+                          type="button"
                           onClick={() => {
                             if (savedDeliveryLocations.length >= MAX_SAVED_DELIVERY_LOCATIONS) {
                               toast.error(t('checkout.saved_limit_reached'));
@@ -1472,92 +1570,103 @@ export default function Checkout() {
                             }
                             setShowSaveLocationPanel(true);
                           }}
-                          className="border-green-700 text-green-400 hover:bg-green-950/30"
+                          className="inline-flex items-center gap-2 rounded-xl px-1 py-1 text-sm font-medium text-green-400 hover:text-green-300"
                         >
-                          <MapPin className="w-3 h-3 mr-1" />
-                          {t('checkout.save_location_optional')}
-                        </Button>
+                          <MapPin className="h-4 w-4" />
+                          {language === 'ar' ? 'حفظ الموقع للطلب القادم' : 'Save location for next time'}
+                        </button>
                       ) : (
-                        <div className="rounded-xl border border-green-900/60 bg-green-950/10 p-3">
-                          <p className="text-green-400 text-sm font-medium">
-                            {t('checkout.save_location_optional')}
-                          </p>
-                          <p className="text-gray-500 text-xs mt-1 mb-3">
-                            {t('checkout.saved_limit')} {savedDeliveryLocations.length}/10
-                          </p>
-
-                          <div className="flex flex-wrap gap-2 mb-2">
-                            {[t('checkout.home'), t('checkout.work'), t('checkout.other')].map((label) => (
-                              <button
-                                key={label}
-                                type="button"
-                                onClick={() => setSaveLocationName(label)}
-                                className="px-3 py-1.5 rounded-lg border border-gray-700 text-xs text-gray-300 hover:border-green-700 hover:text-green-400"
-                              >
-                                {label}
-                              </button>
-                            ))}
+                        <div className="rounded-2xl border border-gray-700 bg-gray-900/70 p-4">
+                          <div className="mb-3 flex items-center justify-between">
+                            <p className="font-semibold text-white">
+                              {language === 'ar' ? 'حفظ هذا الموقع' : 'Save this location'}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowSaveLocationPanel(false);
+                                setSaveLocationName('');
+                              }}
+                              className="rounded-lg p-1 text-gray-500 hover:bg-gray-800 hover:text-white"
+                              aria-label={t('checkout.cancel')}
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
 
-                          <Label className="text-gray-300 text-xs">
-                            {t('checkout.location_name')}
-                          </Label>
-                          <Input
-                            value={saveLocationName}
-                            onChange={(event) => setSaveLocationName(event.target.value)}
-                            maxLength={30}
-                            placeholder={t('checkout.location_name_placeholder')}
-                            className="bg-gray-900 border-gray-700 text-white mt-1"
-                          />
-
-                          <div className="flex gap-2 mt-3">
+                          <div className="grid grid-cols-3 gap-2">
                             <Button
                               type="button"
                               size="sm"
-                              onClick={saveCurrentDeliveryLocation}
-                              className="bg-green-600 hover:bg-green-700 text-white"
+                              variant="outline"
+                              onClick={() => saveCurrentDeliveryLocation('Home')}
+                              className="rounded-xl border-gray-700 bg-gray-950 text-gray-200 hover:border-green-600 hover:text-green-400"
                             >
-                              {t('checkout.save')}
+                              {t('checkout.home')}
                             </Button>
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
-                              onClick={() => {
-                                setShowSaveLocationPanel(false);
-                                setSaveLocationName('');
-                              }}
-                              className="border-gray-700 text-gray-300"
+                              onClick={() => saveCurrentDeliveryLocation('Work')}
+                              className="rounded-xl border-gray-700 bg-gray-950 text-gray-200 hover:border-green-600 hover:text-green-400"
                             >
-                              {t('checkout.cancel')}
+                              {t('checkout.work')}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setSaveLocationName(t('checkout.other'))}
+                              className="rounded-xl border-gray-700 bg-gray-950 text-gray-200 hover:border-green-600 hover:text-green-400"
+                            >
+                              {t('checkout.other')}
                             </Button>
                           </div>
+
+                          {saveLocationName && (
+                            <div className="mt-3 flex gap-2">
+                              <Input
+                                value={saveLocationName}
+                                onChange={(event) => setSaveLocationName(event.target.value)}
+                                maxLength={30}
+                                placeholder={t('checkout.location_name_placeholder')}
+                                className="rounded-xl border-gray-700 bg-gray-950 text-white"
+                              />
+                              <Button
+                                type="button"
+                                onClick={() => saveCurrentDeliveryLocation()}
+                                className="rounded-xl bg-green-600 text-white hover:bg-green-700"
+                              >
+                                {t('checkout.save')}
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
                   )}
-{deliveryZoneError && (
-                    <div className="mt-2 p-3 rounded-lg bg-red-600/10 border border-red-600/30">
-                      <p className="text-red-400 text-sm">❌ {deliveryZoneError}</p>
+
+                  {deliveryZoneError && (
+                    <div className="rounded-xl border border-red-700/40 bg-red-900/10 p-3">
+                      <p className="text-sm text-red-400">{deliveryZoneError}</p>
                     </div>
                   )}
+
                   {showErrors && errors.location && !deliveryZoneError && (
-                    <p className="text-red-400 text-xs mt-2">⚠️ {errors.location}</p>
+                    <p className="text-xs text-red-400">⚠️ {errors.location}</p>
                   )}
                 </div>
                 <div>
-                  <Label htmlFor="address" className="text-gray-300">{t('checkout.delivery_notes_label')}</Label>
+                  <Label htmlFor="address" className="text-gray-300">{language === 'ar' ? 'ملاحظات التوصيل (اختياري)' : 'Delivery Notes (optional)'}</Label>
                   <Textarea
                     id="address"
                     value={deliveryAddress}
                     onChange={e => setDeliveryAddress(e.target.value)}
-                    placeholder={t('checkout.delivery_notes_placeholder')}
-                    className="bg-gray-900 border-gray-700 text-white mt-1"
+                    placeholder={language === 'ar' ? 'اسم المبنى، الطابق، رقم الشقة...' : 'Building, floor, apartment number...'}
+                    className="bg-gray-900 border-gray-700 text-white mt-1 rounded-xl"
                   />
-                  <p className="text-gray-500 text-xs mt-1 flex items-center gap-1">
-                    <MapPin className="w-3 h-3" /> {t('checkout.estimated_delivery')}: {estimatedDeliveryTime}
-                  </p>
-                </div>
+</div>
               </>
             )}
 
