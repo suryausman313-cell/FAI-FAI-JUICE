@@ -168,6 +168,7 @@ export interface MenuItem {
   price_medium: number;
   price_large: number;
   sizes_json: string;
+  extras_json?: string | null;
   image_url: string;
   is_active: boolean;
   is_popular: boolean;
@@ -201,6 +202,37 @@ export interface Extra {
   name: string;
   price: number;
   is_active: boolean;
+}
+
+
+/**
+ * Per-item extras:
+ * - extras_json present (including "[]") => use only that item's extras.
+ * - extras_json missing/null => legacy fallback to the old global extras list.
+ */
+export function getItemExtras(item: MenuItem, legacyExtras: Extra[] = []): Extra[] {
+  if (item.has_extras === false) return [];
+
+  const raw = item.extras_json;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((entry: any, index: number) => ({
+            id: -((Number(item.id || 0) * 10000) + index + 1),
+            name: String(entry?.name || '').trim(),
+            price: Math.max(0, Number(entry?.price || 0)),
+            is_active: entry?.is_active !== false,
+          }))
+          .filter((entry: Extra) => entry.name && entry.is_active !== false);
+      }
+    } catch {
+      // If malformed, safely fall through to legacy global extras.
+    }
+  }
+
+  return (legacyExtras || []).filter(extra => extra.is_active !== false);
 }
 
 export interface Order {
