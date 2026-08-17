@@ -82,6 +82,7 @@ export async function backendRequest(
     path.startsWith('/api/v1/orders/') ||
     path.startsWith('/api/v1/customer-push/') ||
     path.startsWith('/api/v1/customer-auth/') ||
+    path.startsWith('/api/v1/rider/delivery-eta/') ||
     path === '/api/v1/admin/customer-heartbeat';
   const bearerToken = isCustomerEndpoint
     ? customerToken
@@ -151,7 +152,6 @@ export const client = {
 export interface Category {
   id: number;
   name: string;
-  name_ar?: string | null;
   sort_order: number;
   is_active: boolean;
 }
@@ -165,13 +165,10 @@ export interface MenuItem {
   id: number;
   category_id: number;
   name: string;
-  name_ar?: string | null;
   description: string;
-  description_ar?: string | null;
   price_medium: number;
   price_large: number;
   sizes_json: string;
-  extras_json?: string | null;
   image_url: string;
   is_active: boolean;
   is_popular: boolean;
@@ -203,41 +200,8 @@ export function getItemSizes(item: MenuItem): SizeOption[] {
 export interface Extra {
   id: number;
   name: string;
-  name_ar?: string | null;
   price: number;
   is_active: boolean;
-}
-
-
-/**
- * Per-item extras:
- * - extras_json present (including "[]") => use only that item's extras.
- * - extras_json missing/null => legacy fallback to the old global extras list.
- */
-export function getItemExtras(item: MenuItem, legacyExtras: Extra[] = []): Extra[] {
-  if (item.has_extras === false) return [];
-
-  const raw = item.extras_json;
-  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
-    try {
-      const parsed = JSON.parse(String(raw));
-      if (Array.isArray(parsed)) {
-        return parsed
-          .map((entry: any, index: number) => ({
-            id: -((Number(item.id || 0) * 10000) + index + 1),
-            name: String(entry?.name || '').trim(),
-            name_ar: String(entry?.name_ar || '').trim() || null,
-            price: Math.max(0, Number(entry?.price || 0)),
-            is_active: entry?.is_active !== false,
-          }))
-          .filter((entry: Extra) => entry.name && entry.is_active !== false);
-      }
-    } catch {
-      // If malformed, safely fall through to legacy global extras.
-    }
-  }
-
-  return (legacyExtras || []).filter(extra => extra.is_active !== false);
 }
 
 export interface Order {
@@ -415,26 +379,4 @@ export interface Feedback {
   comment: string;
   is_visible: boolean;
   created_at: string;
-}
-
-
-/** Customer-facing localized text for menu/category/extra records. */
-export function localizedMenuText(
-  item: { name?: string | null; name_ar?: string | null },
-  language: string,
-): string {
-  if (language === 'ar' && String(item?.name_ar || '').trim()) {
-    return String(item.name_ar).trim();
-  }
-  return String(item?.name || '').trim();
-}
-
-export function localizedMenuDescription(
-  item: { description?: string | null; description_ar?: string | null },
-  language: string,
-): string {
-  if (language === 'ar' && String(item?.description_ar || '').trim()) {
-    return String(item.description_ar).trim();
-  }
-  return String(item?.description || '').trim();
 }

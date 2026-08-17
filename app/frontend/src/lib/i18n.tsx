@@ -13,6 +13,7 @@ export interface LanguageInfo {
 export const LANGUAGES: LanguageInfo[] = [
   { code: 'en', name: 'English', nativeName: 'English', dir: 'ltr', flag: '🇬🇧' },
   { code: 'ar', name: 'Arabic', nativeName: 'العربية', dir: 'rtl', flag: '🇦🇪' },
+  { code: 'ur', name: 'Urdu', nativeName: 'اردو', dir: 'rtl', flag: '🇵🇰' },
 ];
 
 // Translation keys
@@ -28,7 +29,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'Reviews',
 
     // Homepage
-    'home.tagline': 'Fresh Juices, Desserts & Beverages',
+    'home.tagline': 'Authentic Italian Pizza',
     'home.special_offers': 'Special Offers',
     'home.popular_items': 'Popular Items',
     'home.view_all': 'View All',
@@ -38,7 +39,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'Open Now',
     'home.busy': 'Busy',
     'home.closed': 'Closed',
-    'home.closed_message': 'Sorry, Fai Fai Juice is currently closed.',
+    'home.closed_message': 'Sorry, Vita Napoli Pizza is currently closed.',
     'home.closed_subtitle': 'You can browse the menu but cannot place orders.',
     'home.from_aed': 'From AED',
     'home.out_of_stock': 'Out of Stock',
@@ -185,16 +186,32 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.login_signup': 'Login / Sign Up',
     'orders.date_unavailable': 'Date unavailable',
     'orders.failed_cancel': 'Failed to cancel order',
-    'orders.eta_waiting_gps': 'Waiting for rider GPS to show the exact time',
-    'orders.eta_live_location': "Live ETA updates from the rider's location",
-    'orders.whatsapp_pending_message': 'Hello, I placed Order #{orderId}. It has not been accepted yet. Could you please check it?',
-    'orders.elapsed_auto_cancel': '{elapsed} min elapsed • Auto-cancel in {remaining} min',
-    'orders.ready_confirmed_title': 'Order is ready',
-    'orders.ready_confirmed_subtitle': 'The shop confirmed that your order is ready.',
-    'orders.estimated_time_passed': 'Estimated time passed',
-    'orders.ready_waiting_update': 'Ready status is not confirmed yet. Waiting for a kitchen update.',
-    'orders.ready_in': 'Ready in {time}',
-    'orders.expected_around': 'Expected around {time}',
+    'orders.status.placed': 'Order Placed',
+    'orders.status.confirmed': 'Confirmed',
+    'orders.rider_on_the_way': 'Rider on the way',
+    'orders.your_rider': 'Your Rider',
+    'orders.whatsapp_rider': 'WhatsApp Rider',
+    'orders.open_rider_tracking': 'Open Rider Tracking',
+    'orders.track_rider_live': 'Track Rider Live on Map',
+    'orders.reviewed': 'Reviewed',
+    'orders.give_feedback': 'Give Feedback',
+    'orders.notifications_ready_enabled': 'Ready notifications enabled',
+    'orders.notifications_blocked': 'Notifications are blocked',
+    'orders.notifications_unsupported': 'Notifications are not supported',
+    'orders.notifications_get_ready': 'Get notified when your order is ready',
+    'orders.notifications_enabled_desc': 'You will receive a phone alert when Kitchen marks your order Ready.',
+    'orders.notifications_blocked_desc': 'Open browser settings and allow notifications for Fai Fai Juice.',
+    'orders.notifications_enable_desc': 'Enable once to receive Ready alerts even when the app is in background.',
+    'orders.notifications_login': 'Login to Enable',
+    'orders.notifications_enabling': 'Enabling...',
+    'orders.notifications_enable': 'Enable Notifications',
+    'orders.rider_arriving_in': 'Rider arriving in',
+    'orders.rider_arriving_soon': 'Rider arriving soon',
+    'orders.waiting_restaurant': 'Waiting for restaurant to accept',
+    'orders.minute_elapsed': 'min elapsed',
+    'orders.usually_within': 'Usually accepted within',
+    'orders.item_singular': 'item',
+    'orders.item_plural': 'items',
 
     // Feedback
     'feedback.title': 'Leave Feedback',
@@ -203,7 +220,6 @@ const translations: Record<Language, Record<string, string>> = {
     'feedback.submit': 'Submit Feedback',
     'feedback.thank_you': 'Thank you for your feedback!',
     'feedback.select_order': 'Select an order',
-    'feedback.completed_hint': 'You can give feedback on your completed orders. Go to My Orders and tap Give Feedback on any completed order.',
 
     // Reviews
     'reviews.title': 'Customer Reviews',
@@ -222,51 +238,6 @@ const translations: Record<Language, Record<string, string>> = {
     'lang.subtitle': 'Select your preferred language',
     'lang.change': 'Language',
 
-    // Customer-wide language completion
-    'nav.account': 'Account',
-    'home.unknown': 'Unknown',
-    'home.estimated_wait': 'Estimated wait',
-    'home.deals': 'Deals',
-    'contact.pickup_delivery': 'We offer both pickup and delivery orders.',
-    'contact.open_maps': 'Open in Google Maps',
-    'reviews.loading': 'Loading reviews...',
-    'reviews.first': 'Be the first to leave a review!',
-    'reviews.review': 'review',
-    'reviews.reviews': 'reviews',
-    'deals.title': 'Deals & Combos',
-    'deals.none': 'No deals available right now',
-    'deals.choose': 'Choose',
-    'deals.done': 'Done',
-    'deals.more': 'more',
-    'deals.select_required': 'Select all required items',
-    'deals.added': 'added to cart!',
-    'deals.off': 'OFF',
-    'confirmation.title': 'Order Confirmed!',
-    'confirmation.message': 'Thank you! Your order has been received.',
-    'confirmation.view_orders': 'View My Orders',
-    'confirmation.back_home': 'Back to Home',
-    'orders.give_feedback': 'Give Feedback',
-    'orders.reviewed': 'Reviewed',
-    'orders.view_order': 'View order',
-    'orders.hide_details': 'Hide details',
-    'orders.order_details': 'Order details',
-    'orders.delivery_order': 'Delivery order',
-    'orders.pickup_order': 'Pickup order',
-    'orders.service_fee': 'Service fee',
-    'orders.small_order_fee': 'Small order fee',
-    'orders.payment': 'Payment',
-    'orders.total': 'Total',
-    'orders.item_details_unavailable': 'Item details are not available for this older order.',
-    'account.customer_account': 'Customer Account',
-    'account.logged_in': 'Account logged in',
-    'account.login': 'Login',
-    'account.signup': 'Sign Up',
-    'account.logout': 'Logout',
-    'account.create': 'Create Customer Account',
-    'account.create_button': 'Create Account',
-    'account.back_login': 'Back to Login',
-    'account.logging_in': 'Logging in…',
-    'account.creating': 'Creating account…',
     // Common
     'common.loading': 'Loading...',
     'common.error': 'Something went wrong',
@@ -288,7 +259,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'المراجعات',
 
     // Homepage
-    'home.tagline': 'عصائر طازجة وحلويات ومشروبات',
+    'home.tagline': 'بيتزا إيطالية أصلية',
     'home.special_offers': 'عروض خاصة',
     'home.popular_items': 'الأصناف المميزة',
     'home.view_all': 'عرض الكل',
@@ -298,7 +269,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'مفتوح الآن',
     'home.busy': 'مشغول',
     'home.closed': 'مغلق',
-    'home.closed_message': 'عذراً، فاي فاي جوس مغلق حالياً.',
+    'home.closed_message': 'عذراً، فيتا نابولي بيتزا مغلق حالياً.',
     'home.closed_subtitle': 'يمكنك تصفح القائمة لكن لا يمكنك تقديم طلبات.',
     'home.from_aed': 'من د.إ',
     'home.out_of_stock': 'غير متوفر',
@@ -445,16 +416,32 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.login_signup': 'تسجيل الدخول / إنشاء حساب',
     'orders.date_unavailable': 'التاريخ غير متوفر',
     'orders.failed_cancel': 'فشل إلغاء الطلب',
-    'orders.eta_waiting_gps': 'سيظهر الوقت الدقيق عند توفر موقع السائق',
-    'orders.eta_live_location': 'يتم تحديث وقت الوصول مباشرةً من موقع السائق',
-    'orders.whatsapp_pending_message': 'مرحباً، قدمت الطلب رقم #{orderId}. لم يتم قبوله بعد. هل يمكنكم التحقق منه؟',
-    'orders.elapsed_auto_cancel': 'مرّت {elapsed} دقيقة • الإلغاء التلقائي خلال {remaining} دقيقة',
-    'orders.ready_confirmed_title': 'الطلب جاهز',
-    'orders.ready_confirmed_subtitle': 'أكد المتجر أن طلبك جاهز.',
-    'orders.estimated_time_passed': 'انتهى الوقت المتوقع',
-    'orders.ready_waiting_update': 'لم يتم تأكيد الجاهزية بعد. بانتظار تحديث المطبخ.',
-    'orders.ready_in': 'جاهز خلال {time}',
-    'orders.expected_around': 'متوقع حوالي {time}',
+    'orders.status.placed': 'تم تقديم الطلب',
+    'orders.status.confirmed': 'تم التأكيد',
+    'orders.rider_on_the_way': 'السائق في الطريق',
+    'orders.your_rider': 'سائقك',
+    'orders.whatsapp_rider': 'واتساب السائق',
+    'orders.open_rider_tracking': 'فتح تتبع السائق',
+    'orders.track_rider_live': 'تتبع السائق مباشرة على الخريطة',
+    'orders.reviewed': 'تم التقييم',
+    'orders.give_feedback': 'إرسال تقييم',
+    'orders.notifications_ready_enabled': 'تم تفعيل إشعارات الجاهزية',
+    'orders.notifications_blocked': 'الإشعارات محظورة',
+    'orders.notifications_unsupported': 'الإشعارات غير مدعومة',
+    'orders.notifications_get_ready': 'احصل على إشعار عندما يصبح طلبك جاهزاً',
+    'orders.notifications_enabled_desc': 'سيصلك إشعار على الهاتف عندما يحدد المطبخ طلبك كجاهز.',
+    'orders.notifications_blocked_desc': 'افتح إعدادات المتصفح واسمح بإشعارات Fai Fai Juice.',
+    'orders.notifications_enable_desc': 'فعّلها مرة واحدة لتصلك إشعارات الجاهزية حتى عند عمل التطبيق في الخلفية.',
+    'orders.notifications_login': 'سجّل الدخول للتفعيل',
+    'orders.notifications_enabling': 'جارٍ التفعيل...',
+    'orders.notifications_enable': 'تفعيل الإشعارات',
+    'orders.rider_arriving_in': 'وصول السائق خلال',
+    'orders.rider_arriving_soon': 'سيصل السائق قريباً',
+    'orders.waiting_restaurant': 'بانتظار قبول المطعم',
+    'orders.minute_elapsed': 'دقيقة مضت',
+    'orders.usually_within': 'عادةً يتم القبول خلال',
+    'orders.item_singular': 'صنف',
+    'orders.item_plural': 'أصناف',
 
     // Feedback
     'feedback.title': 'اترك تقييمك',
@@ -463,7 +450,6 @@ const translations: Record<Language, Record<string, string>> = {
     'feedback.submit': 'إرسال التقييم',
     'feedback.thank_you': 'شكراً لتقييمك!',
     'feedback.select_order': 'اختر طلباً',
-    'feedback.completed_hint': 'يمكنك تقييم طلباتك المكتملة. افتح طلباتي واضغط إضافة تقييم على أي طلب مكتمل.',
 
     // Reviews
     'reviews.title': 'تقييمات العملاء',
@@ -482,51 +468,6 @@ const translations: Record<Language, Record<string, string>> = {
     'lang.subtitle': 'اختر لغتك المفضلة',
     'lang.change': 'اللغة',
 
-    // Customer-wide language completion
-    'nav.account': 'الحساب',
-    'home.unknown': 'غير معروف',
-    'home.estimated_wait': 'وقت الانتظار المتوقع',
-    'home.deals': 'العروض',
-    'contact.pickup_delivery': 'نوفر طلبات الاستلام والتوصيل.',
-    'contact.open_maps': 'فتح في خرائط Google',
-    'reviews.loading': 'جارٍ تحميل التقييمات...',
-    'reviews.first': 'كن أول من يترك تقييماً!',
-    'reviews.review': 'تقييم',
-    'reviews.reviews': 'تقييمات',
-    'deals.title': 'العروض والباقات',
-    'deals.none': 'لا توجد عروض متاحة حالياً',
-    'deals.choose': 'اختر',
-    'deals.done': 'تم',
-    'deals.more': 'متبقي',
-    'deals.select_required': 'اختر جميع الأصناف المطلوبة',
-    'deals.added': 'تمت إضافته إلى السلة!',
-    'deals.off': 'خصم',
-    'confirmation.title': 'تم تأكيد الطلب!',
-    'confirmation.message': 'شكراً لك! تم استلام طلبك.',
-    'confirmation.view_orders': 'عرض طلباتي',
-    'confirmation.back_home': 'العودة للرئيسية',
-    'orders.give_feedback': 'إضافة تقييم',
-    'orders.reviewed': 'تم التقييم',
-    'orders.view_order': 'عرض الطلب',
-    'orders.hide_details': 'إخفاء التفاصيل',
-    'orders.order_details': 'تفاصيل الطلب',
-    'orders.delivery_order': 'طلب توصيل',
-    'orders.pickup_order': 'طلب استلام',
-    'orders.service_fee': 'رسوم الخدمة',
-    'orders.small_order_fee': 'رسوم الطلب الصغير',
-    'orders.payment': 'الدفع',
-    'orders.total': 'الإجمالي',
-    'orders.item_details_unavailable': 'تفاصيل الأصناف غير متاحة لهذا الطلب القديم.',
-    'account.customer_account': 'حساب العميل',
-    'account.logged_in': 'تم تسجيل الدخول',
-    'account.login': 'تسجيل الدخول',
-    'account.signup': 'إنشاء حساب',
-    'account.logout': 'تسجيل الخروج',
-    'account.create': 'إنشاء حساب عميل',
-    'account.create_button': 'إنشاء الحساب',
-    'account.back_login': 'العودة لتسجيل الدخول',
-    'account.logging_in': 'جارٍ تسجيل الدخول…',
-    'account.creating': 'جارٍ إنشاء الحساب…',
     // Common
     'common.loading': 'جاري التحميل...',
     'common.error': 'حدث خطأ ما',
@@ -705,16 +646,32 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.login_signup': 'لاگ اِن / سائن اپ',
     'orders.date_unavailable': 'تاریخ دستیاب نہیں',
     'orders.failed_cancel': 'آرڈر منسوخ نہیں ہو سکا',
-    'orders.eta_waiting_gps': 'رائیڈر کا GPS ملتے ہی درست وقت دکھایا جائے گا',
-    'orders.eta_live_location': 'لائیو ETA رائیڈر کی لوکیشن سے اپ ڈیٹ ہوتا ہے',
-    'orders.whatsapp_pending_message': 'سلام، میں نے آرڈر #{orderId} دیا ہے۔ ابھی تک قبول نہیں ہوا۔ براہ کرم چیک کریں۔',
-    'orders.elapsed_auto_cancel': '{elapsed} منٹ گزر گئے • {remaining} منٹ میں خودکار منسوخی',
-    'orders.ready_confirmed_title': 'آرڈر تیار ہے',
-    'orders.ready_confirmed_subtitle': 'شاپ نے تصدیق کر دی ہے کہ آپ کا آرڈر تیار ہے۔',
-    'orders.estimated_time_passed': 'متوقع وقت گزر گیا',
-    'orders.ready_waiting_update': 'ابھی تک تیاری کی تصدیق نہیں ہوئی۔ کچن کی اپ ڈیٹ کا انتظار ہے۔',
-    'orders.ready_in': '{time} میں تیار',
-    'orders.expected_around': 'تقریباً {time} پر متوقع',
+    'orders.status.placed': 'آرڈر دے دیا گیا',
+    'orders.status.confirmed': 'تصدیق ہو گئی',
+    'orders.rider_on_the_way': 'رائیڈر راستے میں ہے',
+    'orders.your_rider': 'آپ کا رائیڈر',
+    'orders.whatsapp_rider': 'رائیڈر کو واٹس ایپ',
+    'orders.open_rider_tracking': 'رائیڈر ٹریکنگ کھولیں',
+    'orders.track_rider_live': 'نقشے پر رائیڈر لائیو ٹریک کریں',
+    'orders.reviewed': 'جائزہ دیا گیا',
+    'orders.give_feedback': 'رائے دیں',
+    'orders.notifications_ready_enabled': 'تیاری کی اطلاعات فعال ہیں',
+    'orders.notifications_blocked': 'اطلاعات بلاک ہیں',
+    'orders.notifications_unsupported': 'اطلاعات دستیاب نہیں',
+    'orders.notifications_get_ready': 'آرڈر تیار ہونے پر اطلاع حاصل کریں',
+    'orders.notifications_enabled_desc': 'کچن آرڈر تیار کرے گا تو فون پر اطلاع ملے گی۔',
+    'orders.notifications_blocked_desc': 'براؤزر سیٹنگز میں Fai Fai Juice کی اطلاعات کی اجازت دیں۔',
+    'orders.notifications_enable_desc': 'ایک بار فعال کریں تاکہ بیک گراؤنڈ میں بھی اطلاع ملے۔',
+    'orders.notifications_login': 'فعال کرنے کے لیے لاگ اِن کریں',
+    'orders.notifications_enabling': 'فعال ہو رہا ہے...',
+    'orders.notifications_enable': 'اطلاعات فعال کریں',
+    'orders.rider_arriving_in': 'رائیڈر پہنچنے میں',
+    'orders.rider_arriving_soon': 'رائیڈر جلد پہنچ رہا ہے',
+    'orders.waiting_restaurant': 'ریستوراں کے قبول کرنے کا انتظار ہے',
+    'orders.minute_elapsed': 'منٹ گزر گئے',
+    'orders.usually_within': 'عام طور پر اتنے وقت میں قبول ہوتا ہے',
+    'orders.item_singular': 'آئٹم',
+    'orders.item_plural': 'آئٹمز',
 
     // Feedback
     'feedback.title': 'اپنی رائے دیں',
@@ -776,33 +733,77 @@ const I18nContext = createContext<I18nContextType>({
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     const saved = localStorage.getItem('app_language');
-    return saved === 'en' || saved === 'ar' ? saved : 'en';
+    return saved === 'en' || saved === 'ar' || saved === 'ur' ? saved : 'en';
   });
   const [hasChosenLanguage, setHasChosenLanguage] = useState(() => {
     return localStorage.getItem('language_chosen') === 'true';
   });
-
-  const langInfo = LANGUAGES.find(l => l.code === language) || LANGUAGES[0];
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
 
   useEffect(() => {
-    document.documentElement.dir = langInfo.dir;
-    document.documentElement.lang = language;
-    document.body.dir = langInfo.dir;
-    document.body.setAttribute('data-language', language);
-  }, [language, langInfo.dir]);
+    const syncPath = () => setCurrentPath(window.location.pathname);
+
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    window.history.pushState = function (...args) {
+      originalPushState.apply(window.history, args as any);
+      syncPath();
+    } as typeof window.history.pushState;
+
+    window.history.replaceState = function (...args) {
+      originalReplaceState.apply(window.history, args as any);
+      syncPath();
+    } as typeof window.history.replaceState;
+
+    window.addEventListener('popstate', syncPath);
+
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+      window.removeEventListener('popstate', syncPath);
+    };
+  }, []);
+
+  const langInfo = LANGUAGES.find(l => l.code === language) || LANGUAGES[0];
+  const isStaffRoute =
+    currentPath === '/admin' ||
+    currentPath.startsWith('/admin/') ||
+    currentPath === '/kitchen' ||
+    currentPath.startsWith('/kitchen/') ||
+    currentPath === '/rider' ||
+    currentPath.startsWith('/rider/');
+
+  const effectiveDir: 'ltr' | 'rtl' = isStaffRoute ? 'ltr' : langInfo.dir;
+  const effectiveLanguage: Language = isStaffRoute ? 'en' : language;
+
+  useEffect(() => {
+    document.documentElement.dir = effectiveDir;
+    document.documentElement.lang = effectiveLanguage;
+    document.body.dir = effectiveDir;
+    document.body.setAttribute('data-language', effectiveLanguage);
+    document.body.setAttribute('data-app-area', isStaffRoute ? 'staff' : 'customer');
+  }, [effectiveDir, effectiveLanguage, isStaffRoute, currentPath]);
 
   function setLanguage(lang: Language) {
     setLanguageState(lang);
     localStorage.setItem('app_language', lang);
     localStorage.setItem('language_chosen', 'true');
     setHasChosenLanguage(true);
+
     const info = LANGUAGES.find(l => l.code === lang) || LANGUAGES[0];
-    document.documentElement.dir = info.dir;
-    document.documentElement.lang = lang;
+    const nextDir = isStaffRoute ? 'ltr' : info.dir;
+    const nextLang = isStaffRoute ? 'en' : lang;
+
+    document.documentElement.dir = nextDir;
+    document.documentElement.lang = nextLang;
+    document.body.dir = nextDir;
+    document.body.setAttribute('data-language', nextLang);
   }
 
   function t(key: string): string {
-    return translations[language]?.[key] || translations.en[key] || key;
+    const activeLanguage = isStaffRoute ? 'en' : language;
+    return translations[activeLanguage]?.[key] || translations.en[key] || key;
   }
 
   return (
@@ -811,8 +812,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         language,
         setLanguage,
         t,
-        dir: langInfo.dir,
-        isRTL: langInfo.dir === 'rtl',
+        dir: effectiveDir,
+        isRTL: effectiveDir === 'rtl',
         hasChosenLanguage,
         setHasChosenLanguage,
       }}
