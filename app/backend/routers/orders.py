@@ -176,8 +176,9 @@ async def place_order(
                 )
             if not (-90 <= float(data.customer_lat) <= 90 and -180 <= float(data.customer_lng) <= 180):
                 raise HTTPException(status_code=400, detail="Invalid delivery location")
-            if not str(data.customer_address or "").strip():
-                raise HTTPException(status_code=400, detail="Delivery address is required")
+            # A map/GPS pin is the authoritative delivery location.
+            # The free-text address/notes field is optional because reverse-geocoding
+            # may be unavailable or the customer may only share a map pin.
 
         # ===== PAYMENT METHOD RULES =====
         payment_text = str(data.payment_method or "").lower().strip()
@@ -461,7 +462,10 @@ async def place_order(
             order_type=normalized_order_type,
             customer_lat=float(data.customer_lat) if normalized_order_type == "delivery" else None,
             customer_lng=float(data.customer_lng) if normalized_order_type == "delivery" else None,
-            customer_address=str(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
+            customer_address=(
+                str(data.customer_address or "").strip()
+                or (f"GPS: {float(data.customer_lat):.6f},{float(data.customer_lng):.6f}" if normalized_order_type == "delivery" else "")
+            ) if normalized_order_type == "delivery" else "",
             delivery_distance_km=delivery_distance_km if normalized_order_type == "delivery" else None,
             delivery_zone_name=delivery_zone_name if normalized_order_type == "delivery" else "",
             status="new",
