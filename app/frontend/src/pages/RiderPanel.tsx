@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
+import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -141,6 +141,30 @@ interface CashSubmission {
   reviewed_by: string;
   submitted_at: string | null;
   reviewed_at: string | null;
+}
+
+const RIDER_FINANCE_PERIODS: Array<{ key: FinancePeriod; label: string; short: string }> = [
+  { key: 'today', label: 'Today', short: 'Today' },
+  { key: 'yesterday', label: 'Yesterday', short: 'Yesterday' },
+  { key: 'week', label: 'Last 7 Days', short: '7 Days' },
+  { key: 'month', label: 'Last 30 Days', short: '30 Days' },
+  { key: 'year', label: 'This Year', short: 'Year' },
+  { key: 'all', label: 'All Time', short: 'All Time' },
+  { key: 'custom', label: 'Custom Date', short: 'Custom' },
+];
+
+function formatFinanceDate(value?: string | null): string {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('en-AE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'Asia/Dubai',
+    }).format(new Date(value));
+  } catch {
+    return value.slice(0, 10);
+  }
 }
 
 export default function RiderPanel() {
@@ -738,45 +762,77 @@ export default function RiderPanel() {
         {activeTab === 'stats' && (
           <div className="space-y-4">
             <Card className="bg-gray-900 border-gray-800 p-4">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div>
-                  <h3 className="text-white font-semibold flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4 text-red-400" /> Finance Period
-                  </h3>
-                  <p className="text-gray-500 text-xs mt-1">View orders, delivery earning, shop cash and pending settlement</p>
+              <div>
+                <h3 className="text-white font-semibold flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-red-400" /> Report Period
+                </h3>
+                <p className="text-gray-500 text-xs mt-1">
+                  Choose the exact period for your delivery earnings and cash settlement.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-4">
+                {RIDER_FINANCE_PERIODS.map(option => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setFinancePeriod(option.key)}
+                    className={`rounded-xl px-3 py-3 text-sm font-semibold border transition ${
+                      financePeriod === option.key
+                        ? 'bg-green-600 border-green-500 text-white shadow-lg shadow-green-950/30'
+                        : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-750 hover:border-gray-600'
+                    }`}
+                  >
+                    {option.short}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-3 rounded-xl border border-gray-800 bg-gray-950/60 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-gray-500 text-xs">Showing</span>
+                  <span className="text-white text-sm font-semibold">
+                    {financeSummary?.period?.label ||
+                      RIDER_FINANCE_PERIODS.find(option => option.key === financePeriod)?.label}
+                  </span>
                 </div>
-                <select
-                  value={financePeriod}
-                  onChange={(e) => setFinancePeriod(e.target.value as FinancePeriod)}
-                  className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="today">Today</option>
-                  <option value="yesterday">Yesterday</option>
-                  <option value="week">This Week</option>
-                  <option value="month">This Month</option>
-                  <option value="year">This Year</option>
-                  <option value="all">All Time</option>
-                  <option value="custom">Custom Date</option>
-                </select>
+                {financeSummary?.period?.date_from && financeSummary?.period?.date_to && (
+                  <div className="mt-1 text-right text-gray-500 text-xs">
+                    {formatFinanceDate(financeSummary.period.date_from)} — {formatFinanceDate(financeSummary.period.date_to)}
+                  </div>
+                )}
               </div>
 
               {financePeriod === 'custom' && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
-                  <div>
-                    <Label className="text-gray-400 text-xs">From</Label>
-                    <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="bg-gray-800 border-gray-700 text-white mt-1" />
+                <div className="rounded-2xl border border-gray-800 bg-gray-950/50 p-3 mt-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-gray-400 text-xs">From Date</Label>
+                      <Input
+                        type="date"
+                        value={customFrom}
+                        onChange={(e) => setCustomFrom(e.target.value)}
+                        className="bg-gray-800 border-gray-700 text-white mt-1 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-gray-400 text-xs">To Date</Label>
+                      <Input
+                        type="date"
+                        value={customTo}
+                        onChange={(e) => setCustomTo(e.target.value)}
+                        className="bg-gray-800 border-gray-700 text-white mt-1 rounded-xl"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <Label className="text-gray-400 text-xs">To</Label>
-                    <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="bg-gray-800 border-gray-700 text-white mt-1" />
-                  </div>
+
                   <Button
                     onClick={() => rider && loadFinance(rider.id, 'custom')}
                     disabled={financeLoading || !customFrom || !customTo}
-                    className="self-end bg-red-600 hover:bg-red-700 text-white"
+                    className="w-full mt-3 bg-green-600 hover:bg-green-700 text-white rounded-xl"
                   >
                     {financeLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                    Apply
+                    Apply Custom Dates
                   </Button>
                 </div>
               )}
@@ -816,19 +872,22 @@ export default function RiderPanel() {
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-blue-400" /> Order Money Breakdown
+                    <Banknote className="w-4 h-4 text-yellow-400" /> Cash Summary
                   </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Customer Total</span><span className="text-white font-medium">AED {financeSummary.totals.customer_total.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Shop Food Sale</span><span className="text-green-400 font-medium">AED {financeSummary.totals.shop_food_sale.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Menu Discount</span><span className="text-red-400 font-medium">- AED {financeSummary.totals.discount_amount.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Developer Fees</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.developer_fees.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Collected</span><span className="text-yellow-400 font-medium">AED {financeSummary.totals.cash_collected.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Payable to Shop</span><span className="text-orange-400 font-medium">AED {financeSummary.totals.cash_payable_to_shop.toFixed(2)}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Cash Orders</span><span className="text-white font-medium">{financeSummary.totals.cash_orders}</span></div>
-                    <div className="flex justify-between bg-gray-800 rounded-lg px-3 py-2"><span className="text-gray-400">Card Orders</span><span className="text-white font-medium">{financeSummary.totals.card_orders}</span></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-gray-800 rounded-xl p-3">
+                      <p className="text-gray-500 text-xs">Cash Collected</p>
+                      <p className="text-white font-bold mt-1">
+                        AED {financeSummary.totals.cash_collected.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="bg-orange-600/10 border border-orange-600/30 rounded-xl p-3">
+                      <p className="text-orange-400/70 text-xs">Payable to Shop</p>
+                      <p className="text-orange-400 font-bold mt-1">
+                        AED {financeSummary.totals.cash_payable_to_shop.toFixed(2)}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-gray-600 text-xs mt-3">Discount is calculated on menu items only. Delivery charge, service fee, small-order fee and tip are not discounted.</p>
                 </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
