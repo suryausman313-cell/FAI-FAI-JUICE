@@ -387,7 +387,7 @@ export default function AdminSales() {
         // The detailed orders endpoint is independent. If finance summary fails,
         // the screen will calculate the visible sales totals from those orders
         // instead of incorrectly showing AED 0.00 everywhere.
-        toast.error('Finance summary unavailable — showing totals from orders');
+        // Sales totals are calculated from detailed orders; no user-facing error needed.
       }
 
       if (ordersResult.status === 'fulfilled') {

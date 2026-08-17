@@ -215,7 +215,10 @@ export default function AdminFinance() {
       );
       setSummary(data);
     } catch (error: any) {
-      if (!silent) toast.error(error?.message || 'Could not load finance report');
+      console.error('Admin finance summary failed:', error);
+      if (!silent) {
+        toast.error(error?.message || 'Could not load finance report');
+      }
     } finally {
       if (!silent) setFinanceLoading(false);
     }

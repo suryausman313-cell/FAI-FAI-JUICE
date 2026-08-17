@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike, CalendarDays } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike, CalendarDays, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -86,6 +86,7 @@ export default function AdminRiders() {
   const [reportPeriod, setReportPeriod] = useState<'today' | 'yesterday' | 'week' | 'thirty_days' | 'all' | 'custom'>('today');
   const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [expandedRiderId, setExpandedRiderId] = useState<number | null>(null);
 
   useEffect(() => {
     const auth = localStorage.getItem('admin_auth');
@@ -436,16 +437,31 @@ export default function AdminRiders() {
                 <>
                   {/* Rider Header */}
                   <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedRiderId(current =>
+                          current === rider.id ? null : rider.id
+                        )
+                      }
+                      className="flex items-center gap-3 text-left cursor-pointer"
+                    >
                       <div className={`w-3 h-3 rounded-full ${rider.is_online ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-white font-semibold">{rider.name}</span>
+                          <span className="text-white font-semibold underline-offset-4 hover:underline">
+                            {rider.name}
+                          </span>
                           {!rider.is_active && <span className="text-xs bg-red-600/20 text-red-400 px-2 py-0.5 rounded">Blocked</span>}
+                          <ChevronDown
+                            className={`w-4 h-4 text-gray-500 transition-transform ${
+                              expandedRiderId === rider.id ? 'rotate-180' : ''
+                            }`}
+                          />
                         </div>
                         <span className="text-gray-500 text-xs">{rider.phone}</span>
                       </div>
-                    </div>
+                    </button>
                     <div className="flex items-center gap-1">
                       <Switch checked={rider.is_active} onCheckedChange={() => toggleActive(rider.id, rider.is_active)} />
                       <Button onClick={() => startEdit(rider)} size="sm" variant="ghost" className="text-blue-400 cursor-pointer p-1 h-auto">
@@ -457,29 +473,64 @@ export default function AdminRiders() {
                     </div>
                   </div>
 
-                  {/* Stats Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+                  {/* Compact Rider Overview */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-white">{rider.today_orders}</p>
                       <p className="text-gray-500 text-[10px]">Period Orders</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-green-400">AED {(rider.today_order_value || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Period Sale</p>
+                      <p className="text-lg font-bold text-green-400">
+                        AED {(rider.delivery_charges_earned || 0).toFixed(2)}
+                      </p>
+                      <p className="text-gray-500 text-[10px]">Delivery Charges</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-orange-400">{rider.pending_orders}</p>
                       <p className="text-gray-500 text-[10px]">Active / Pending</p>
                     </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-purple-400">AED {(rider.delivery_charges_earned || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Period Del. Earnings</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-blue-300">{rider.total_orders}</p>
-                      <p className="text-gray-500 text-[10px]">Period Deliveries</p>
-                    </div>
                   </div>
+
+                  {expandedRiderId === rider.id && (
+                    <div className="mt-3 rounded-xl border border-gray-700 bg-gray-950/70 p-3">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <p className="text-white font-semibold">{rider.name} — Rider Report</p>
+                          <p className="text-gray-500 text-xs">Selected Rider Report Period</p>
+                        </div>
+                        <span className="text-xs rounded-full bg-green-600/10 text-green-400 px-2 py-1">
+                          {rider.today_orders} deliveries
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Customer Order Value</p>
+                          <p className="text-green-400 font-bold mt-1">
+                            AED {(rider.today_order_value || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Delivery Charges</p>
+                          <p className="text-purple-400 font-bold mt-1">
+                            AED {(rider.delivery_charges_earned || 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Completed Deliveries</p>
+                          <p className="text-blue-300 font-bold mt-1">{rider.total_orders}</p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Active / Pending</p>
+                          <p className="text-orange-400 font-bold mt-1">{rider.pending_orders}</p>
+                        </div>
+                      </div>
+
+                      <p className="text-gray-600 text-[10px] mt-3">
+                        Cash approval and settlement are kept only in Finance & Rider Cash.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Status Row */}
                   <div className="flex items-center gap-3 text-xs flex-wrap">
