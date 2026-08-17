@@ -59,6 +59,11 @@ type EntityList<T> = {
 
 type DiscountType = 'percentage' | 'fixed';
 
+type ItemExtraOption = {
+  name: string;
+  price: number;
+};
+
 type ItemForm = {
   name: string;
   description: string;
@@ -128,6 +133,41 @@ function emptyItemForm(categoryId = 0): ItemForm {
   };
 }
 
+function parseItemExtras(
+  item: MenuItem,
+  legacyExtras: Extra[],
+): ItemExtraOption[] {
+  const raw = item.extras_json;
+
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((extra: any) => ({
+            name: String(extra?.name || '').trim(),
+            price: Math.max(0, Number(extra?.price || 0)),
+          }))
+          .filter((extra: ItemExtraOption) => extra.name);
+      }
+    } catch {
+      // Malformed old data: use legacy extras below.
+    }
+  }
+
+  if (item.has_extras === false) return [];
+
+  // Old items used one global extras list. When Admin edits one of those items,
+  // preload the current global extras so they can immediately customize them.
+  return (legacyExtras || [])
+    .filter(extra => extra.is_active !== false)
+    .map(extra => ({
+      name: String(extra.name || '').trim(),
+      price: Math.max(0, Number(extra.price || 0)),
+    }))
+    .filter(extra => extra.name);
+}
+
 function dateInputValue(value: unknown): string {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -174,6 +214,7 @@ export default function AdminMenu() {
     { name: 'Medium', price: 0 },
     { name: 'Large', price: 0 },
   ]);
+  const [itemExtraOptions, setItemExtraOptions] = useState<ItemExtraOption[]>([]);
   const [categoryForm, setCategoryForm] = useState({
     name: '',
     sort_order: 0,
@@ -346,6 +387,7 @@ export default function AdminMenu() {
         discount_end_at: dateInputValue(item.discount_end_at),
       });
       setSizeOptions(getItemSizes(item));
+      setItemExtraOptions(parseItemExtras(item, extras));
     } else {
       setEditingItem(null);
       setItemForm(emptyItemForm(categories[0]?.id || 0));
@@ -354,6 +396,7 @@ export default function AdminMenu() {
         { name: 'Medium', price: 0 },
         { name: 'Large', price: 0 },
       ]);
+      setItemExtraOptions([]);
     }
 
     setItemDialogOpen(true);
@@ -390,6 +433,36 @@ export default function AdminMenu() {
               [field]: value,
             }
           : size,
+      ),
+    );
+  }
+
+  function addItemExtraOption() {
+    setItemExtraOptions(current => [
+      ...current,
+      { name: '', price: 0 },
+    ]);
+  }
+
+  function removeItemExtraOption(index: number) {
+    setItemExtraOptions(current =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
+  }
+
+  function updateItemExtraOption(
+    index: number,
+    field: 'name' | 'price',
+    value: string | number,
+  ) {
+    setItemExtraOptions(current =>
+      current.map((extra, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...extra,
+              [field]: value,
+            }
+          : extra,
       ),
     );
   }
@@ -458,6 +531,21 @@ export default function AdminMenu() {
 
     if (!validateItem(validSizes)) return;
 
+    const invalidExtraPrice = itemExtraOptions.some(
+      extra => Number(extra.price || 0) < 0,
+    );
+    if (invalidExtraPrice) {
+      toast.error('Extra price 0 se kam nahi ho sakti');
+      return;
+    }
+
+    const validItemExtras = itemExtraOptions
+      .map(extra => ({
+        name: String(extra.name || '').trim(),
+        price: Math.max(0, Number(extra.price || 0)),
+      }))
+      .filter(extra => extra.name);
+
     const priceMedium = validSizes[0]?.price || 0;
     const priceLarge =
       validSizes.length > 1
@@ -471,6 +559,7 @@ export default function AdminMenu() {
       price_medium: priceMedium,
       price_large: priceLarge,
       sizes_json: JSON.stringify(validSizes),
+      extras_json: itemForm.has_extras ? JSON.stringify(validItemExtras) : '[]',
       image_url: itemForm.image_url.trim(),
       has_extras: itemForm.has_extras,
       is_popular: itemForm.is_popular,
@@ -1060,28 +1149,112 @@ export default function AdminMenu() {
               </Select>
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-xl border border-gray-700">
-              <div>
-                <Label>Allow Extras</Label>
-                <p className="text-gray-500 text-xs">
-                  Customer toppings/extras select kar sake.
-                </p>
+            <div className="rounded-xl border border-gray-700 overflow-hidden">
+              <div className="flex items-center justify-between p-3">
+                <div>
+                  <Label>Allow Extras</Label>
+                  <p className="text-gray-500 text-xs">
+                    Is item ke liye apne extras aur unki price set karein.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setItemForm((current) => ({
+                      ...current,
+                      has_extras: !current.has_extras,
+                    }))
+                  }
+                >
+                  {itemForm.has_extras ? (
+                    <ToggleRight className="w-7 h-7 text-green-500" />
+                  ) : (
+                    <ToggleLeft className="w-7 h-7 text-gray-500" />
+                  )}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setItemForm((current) => ({
-                    ...current,
-                    has_extras: !current.has_extras,
-                  }))
-                }
-              >
-                {itemForm.has_extras ? (
-                  <ToggleRight className="w-7 h-7 text-green-500" />
-                ) : (
-                  <ToggleLeft className="w-7 h-7 text-gray-500" />
-                )}
-              </button>
+
+              {itemForm.has_extras && (
+                <div className="border-t border-gray-700 p-3 bg-gray-950/40 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        Extras for this item
+                      </p>
+                      <p className="text-gray-500 text-xs mt-0.5">
+                        Sirf isi item par customer ko ye options dikhengi.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addItemExtraOption}
+                      className="border-green-700 text-green-400 hover:bg-green-950/40 shrink-0"
+                    >
+                      <Plus className="w-4 h-4 mr-1" />
+                      Add Extra
+                    </Button>
+                  </div>
+
+                  {itemExtraOptions.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-700 px-3 py-4 text-center">
+                      <p className="text-gray-500 text-xs">
+                        Abhi koi extra nahi. “Add Extra” dabakar name aur price add karein.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {itemExtraOptions.map((extra, index) => (
+                        <div
+                          key={`item-extra-${index}`}
+                          className="grid grid-cols-[1fr_110px_42px] gap-2 items-center"
+                        >
+                          <Input
+                            value={extra.name}
+                            onChange={(event) =>
+                              updateItemExtraOption(
+                                index,
+                                'name',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Extra name"
+                            className="bg-gray-800 border-gray-700"
+                          />
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={extra.price === 0 ? '' : extra.price}
+                            onChange={(event) =>
+                              updateItemExtraOption(
+                                index,
+                                'price',
+                                Number(event.target.value || 0),
+                              )
+                            }
+                            placeholder="AED"
+                            className="bg-gray-800 border-gray-700"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeItemExtraOption(index)}
+                            className="w-10 h-10 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-950/30"
+                            aria-label="Remove extra"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-gray-600 text-[11px]">
+                    Example: Mango → Ice Cream AED 2, Avocado AED 3. Dusre item ke extras alag ho sakte hain.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-xl border border-gray-700">
