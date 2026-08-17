@@ -204,8 +204,7 @@ export default function AdminRiders() {
   }
 
   const totalOrders = reports.reduce((s, r) => s + r.total_orders, 0);
-  const totalEarnings = reports.reduce((s, r) => s + r.total_earnings, 0);
-  const totalCash = reports.reduce((s, r) => s + r.cash_collected, 0);
+  const totalEarnings = reports.reduce((s, r) => s + r.delivery_charges_earned, 0);
   const onlineCount = reports.filter(r => r.is_online).length;
 
   if (loading) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Loading...</div></div>;
@@ -247,7 +246,7 @@ export default function AdminRiders() {
           </Card>
           <Card className="bg-gray-900 border-gray-800 p-4 text-center">
             <p className="text-2xl font-bold text-yellow-400">AED {totalEarnings.toFixed(0)}</p>
-            <p className="text-gray-500 text-xs">Period Earnings</p>
+            <p className="text-gray-500 text-xs">Rider Earnings</p>
           </Card>
         </div>
 
@@ -473,18 +472,6 @@ export default function AdminRiders() {
                       <p className="text-gray-500 text-[10px]">Active / Pending</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-yellow-400">AED {(rider.cash_pending || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Cash Pending</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-emerald-400">AED {(rider.approved_cash || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Cash Approved</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-amber-300">AED {(rider.awaiting_approval || 0).toFixed(2)}</p>
-                      <p className="text-gray-500 text-[10px]">Awaiting Approval</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-purple-400">AED {(rider.delivery_charges_earned || 0).toFixed(2)}</p>
                       <p className="text-gray-500 text-[10px]">Period Del. Earnings</p>
                     </div>
@@ -537,22 +524,6 @@ export default function AdminRiders() {
           )}
         </div>
 
-        {/* Cash Summary */}
-        {reports.length > 0 && (
-          <Card className="bg-gray-900 border-gray-800 p-4 mt-6">
-            <h3 className="text-white font-semibold mb-3">💰 Cash Collection Summary</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-yellow-600/10 border border-yellow-600/30 rounded-lg p-3 text-center">
-                <p className="text-xl font-bold text-yellow-400">AED {totalCash.toFixed(2)}</p>
-                <p className="text-yellow-400/70 text-xs mt-1">Total Cash Collected</p>
-              </div>
-              <div className="bg-blue-600/10 border border-blue-600/30 rounded-lg p-3 text-center">
-                <p className="text-xl font-bold text-blue-400">{reports.reduce((s, r) => s + r.card_orders, 0)}</p>
-                <p className="text-blue-400/70 text-xs mt-1">Total Card Orders</p>
-              </div>
-            </div>
-          </Card>
-        )}
       </div>
     </div>
   );

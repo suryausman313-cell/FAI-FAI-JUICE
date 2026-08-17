@@ -32,8 +32,7 @@ type Period =
   | 'today'
   | 'yesterday'
   | 'week'
-  | 'month'
-  | 'year'
+  | 'thirty_days'
   | 'all'
   | 'custom';
 
@@ -64,9 +63,8 @@ interface Submission {
 const periods: Array<{ key: Period; label: string }> = [
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
-  { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' },
-  { key: 'year', label: 'Year' },
+  { key: 'week', label: '7 Days' },
+  { key: 'thirty_days', label: '30 Days' },
   { key: 'all', label: 'All Time' },
   { key: 'custom', label: 'Custom' },
 ];
@@ -183,10 +181,32 @@ export default function AdminFinance() {
     }
 
     if (!silent) setFinanceLoading(true);
-    const params = new URLSearchParams({ period: selected });
-    if (selected === 'custom') {
-      params.set('date_from', dateFrom);
-      params.set('date_to', dateTo);
+
+    let apiPeriod: string = selected;
+    let apiFrom = dateFrom;
+    let apiTo = dateTo;
+
+    if (selected === 'week' || selected === 'thirty_days') {
+      const end = new Date();
+      const start = new Date(end);
+      start.setDate(start.getDate() - (selected === 'week' ? 6 : 29));
+
+      const localDate = (value: Date) =>
+        [
+          value.getFullYear(),
+          String(value.getMonth() + 1).padStart(2, '0'),
+          String(value.getDate()).padStart(2, '0'),
+        ].join('-');
+
+      apiPeriod = 'custom';
+      apiFrom = localDate(start);
+      apiTo = localDate(end);
+    }
+
+    const params = new URLSearchParams({ period: apiPeriod });
+    if (apiPeriod === 'custom') {
+      params.set('date_from', apiFrom);
+      params.set('date_to', apiTo);
     }
 
     try {
@@ -325,13 +345,14 @@ export default function AdminFinance() {
   }
 
   const totals = summary?.totals || {};
-  const balance = summary?.current_balance || {};
+  const settlements = summary?.settlements || {};
+  const currentBalance = summary?.current_balance || {};
 
   const cards = [
-    ['Rider Cash Pending', balance.total_pending_cash, 'text-orange-300'],
-    ['Awaiting Approval', balance.awaiting_approval, 'text-yellow-300'],
-    ['Admin Approved', balance.approved_cash, 'text-green-300'],
-    ['Still To Submit', balance.remaining_to_submit, 'text-blue-300'],
+    ['Cash Due (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
+    ['Approved (Period)', settlements.approved_cash, 'text-green-300'],
+    ['Awaiting Approval', settlements.awaiting_approval, 'text-yellow-300'],
+    ['Still To Submit (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
   ] as const;
 
   return (
@@ -358,7 +379,7 @@ export default function AdminFinance() {
               </p>
               <p className="text-xs mt-2">
                 <span className={pushState.subscribed ? 'text-green-400' : 'text-orange-400'}>
-                  {pushEverEnabled || pushState.subscribed ? 'Enabled on this device' : 'Not enabled on this device'}
+                  {pushEverEnabled || pushState.subscribed ? 'Notifications enabled' : 'Not enabled on this device'}
                 </span>
                 {' · '}
                 <span className="text-gray-500">Permission: {pushState.permission}</span>
@@ -477,7 +498,7 @@ export default function AdminFinance() {
 
           <div className="flex items-center justify-between mt-4 border-t border-gray-800 pt-3">
             <p className="text-gray-500 text-xs">
-              {summary?.period?.label || 'Finance period'}
+              {period === 'week' ? 'Last 7 Days' : period === 'thirty_days' ? 'Last 30 Days' : (summary?.period?.label || 'Finance period')}
             </p>
             <Button
               size="sm"
