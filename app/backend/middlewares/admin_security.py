@@ -60,6 +60,11 @@ def _entity_permission(path: str, method: str) -> Optional[str]:
     if entity == "feedbacks" and method == "POST" and path.rstrip("/") == f"{prefix}feedbacks":
         return None
 
+    # Checkout uses this POST as a read-like delivery-fee calculation.
+    # Creating/updating/deleting delivery zones stays Admin-only.
+    if entity == "delivery_zones" and method == "POST" and path.rstrip("/") == f"{prefix}delivery_zones/calculate":
+        return None
+
     return ENTITY_PERMISSIONS.get(entity)
 
 
