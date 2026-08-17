@@ -9,6 +9,7 @@ class Categories(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True, nullable=False)
     name = Column(String(100), nullable=False)
+    name_ar = Column(String(100), nullable=True)
     sort_order = Column(Integer, nullable=True, default=0, server_default='0')
     is_active = Column(Boolean, nullable=True, default=True, server_default='true')
     created_at = Column(DateTime(timezone=True), default=datetime.now)
