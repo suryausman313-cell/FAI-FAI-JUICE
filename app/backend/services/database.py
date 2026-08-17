@@ -187,6 +187,9 @@ async def ensure_menu_discount_columns() -> None:
         raise RuntimeError("Database session is not initialized")
     statements = [
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS extras_json TEXT",
+        "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS name_ar VARCHAR(200)",
+        "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS description_ar TEXT",
+        "ALTER TABLE categories ADD COLUMN IF NOT EXISTS name_ar VARCHAR(100)",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS is_popular BOOLEAN DEFAULT FALSE",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS discount_enabled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20) DEFAULT 'percentage'",
