@@ -115,6 +115,12 @@ const TIME_OPTIONS = [
   { value: 60, label: '1 hour' },
 ];
 
+function displayEstimatedTime(value?: string | null): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.split('|')[0].trim();
+}
+
 export default function AdminOrders() {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<AdminOrder[]>([]);
@@ -296,9 +302,15 @@ export default function AdminOrders() {
       return;
     }
     const selected = riders.find(rider => String(rider.id) === selectedRider);
-    if (!selected?.eligible_for_assignment) {
-      toast.error('Rider offline hai ya uski GPS location fresh nahi hai');
+    if (!selected || selected.is_active === false) {
+      toast.error('Selected rider inactive hai');
       return;
+    }
+    if (!selected.eligible_for_assignment) {
+      const proceed = window.confirm(
+        `${selected.name} abhi live/fresh GPS par nahi hai. Phir bhi manually assign karna hai?`
+      );
+      if (!proceed) return;
     }
     // Parse GPS from order notes
     let lat: number | null = null;
@@ -493,7 +505,7 @@ export default function AdminOrders() {
       <p><strong>Order #${order.id}</strong><br>
       Customer: ${order.customer_name}<br>
       Phone: ${order.customer_phone}<br>
-      ${order.estimated_time ? `Ready in: ${order.estimated_time}<br>` : ''}
+      ${order.estimated_time ? `Ready in: ${displayEstimatedTime(order.estimated_time)}<br>` : ''}
       Payment: ${order.payment_method}</p>
       <div class="line"></div>
       ${items.map(i => `<div class="item"><span>${i.quantity}x ${i.name} (${i.size})</span><span>AED ${i.price?.toFixed(2)}</span></div>${i.extras?.length ? `<div style="font-size:0.8em;color:#666;margin-left:10px">+ ${i.extras.join(', ')}</div>` : ''}`).join('')}
@@ -726,7 +738,7 @@ export default function AdminOrders() {
                       {order.estimated_time && order.status !== 'completed' && order.status !== 'cancelled' && (
                         <Badge className="bg-orange-600/20 text-orange-400 border border-orange-600/30">
                           <Clock className="w-3 h-3 mr-1" />
-                          {order.estimated_time}
+                          {displayEstimatedTime(order.estimated_time)}
                         </Badge>
                       )}
                     </div>
@@ -792,14 +804,16 @@ export default function AdminOrders() {
                             <button
                               type="button"
                               key={rider.id}
-                              disabled={!eligible}
+                              disabled={rider.is_active === false}
                               onClick={() => setSelectedRider(String(rider.id))}
                               className={`w-full text-left p-2.5 rounded-lg border transition-colors ${
-                                !eligible
+                                rider.is_active === false
                                   ? 'border-gray-800 bg-gray-900/60 opacity-60 cursor-not-allowed'
                                   : isSelected
                                     ? 'border-blue-500 bg-blue-600/10 cursor-pointer'
-                                    : 'border-gray-700 bg-gray-700/50 hover:border-green-600 cursor-pointer'
+                                    : eligible
+                                      ? 'border-gray-700 bg-gray-700/50 hover:border-green-600 cursor-pointer'
+                                      : 'border-amber-700/40 bg-amber-950/10 hover:border-amber-600 cursor-pointer'
                               }`}
                             >
                               <div className="flex items-center justify-between gap-2">
@@ -834,10 +848,10 @@ export default function AdminOrders() {
                         <Button
                           size="sm"
                           onClick={() => assignToRider(order)}
-                          disabled={!selectedRider || !riders.find(rider => String(rider.id) === selectedRider)?.eligible_for_assignment}
+                          disabled={!selectedRider}
                           className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1 disabled:opacity-50"
                         >
-                          Assign Selected Live Rider
+                          Assign Selected Rider
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
                           ✕
@@ -845,7 +859,7 @@ export default function AdminOrders() {
                       </div>
                       {riders.filter(rider => rider.eligible_for_assignment).length === 0 && (
                         <p className="text-amber-400 text-xs mt-2">
-                          No live rider available. Order Waiting Rider mein rahega.
+                          No live rider right now. Active rider ko manually select karke assign kar sakte hain.
                         </p>
                       )}
                     </div>
