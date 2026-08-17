@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { MapPin, Car, Tag, Navigation, CheckCircle } from 'lucide-react';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, CartItem, Offer } from '@/lib/api';
+import { client, CartItem, Offer, localizedMenuText } from '@/lib/api';
 import { getCart, getCartTotal, getCartOriginalTotal, getCartItemDiscountTotal, clearCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 import { isPromoOfferCurrentlyActive } from '@/lib/discounts';
@@ -43,17 +43,147 @@ function isWithinDailySchedule(start: string, end: string, now: Date): boolean {
     : currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
 
-function formatScheduleTime(value: string): string {
+function formatScheduleTime(value: string, language: string): string {
   const [hours, minutes] = value.split(':').map(Number);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
-  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const suffix = language === 'ar'
+    ? (hours >= 12 ? 'م' : 'ص')
+    : (hours >= 12 ? 'PM' : 'AM');
   const displayHours = hours % 12 || 12;
   return `${displayHours}:${String(minutes).padStart(2, '0')} ${suffix}`;
 }
 
+type SavedDeliveryLocation = {
+  lat: number;
+  lng: number;
+  address: string;
+};
+
+const SAVED_DELIVERY_LOCATION_KEY = 'vita_saved_delivery_location';
+
+function readSavedDeliveryLocation(): SavedDeliveryLocation | null {
+  try {
+    const raw = localStorage.getItem(SAVED_DELIVERY_LOCATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const lat = Number(parsed?.lat);
+    const lng = Number(parsed?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+      lat,
+      lng,
+      address: String(parsed?.address || ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const CHECKOUT_AR: Record<string, string> = {
+  'checkout.login_signup': 'تسجيل الدخول / إنشاء حساب',
+  'checkout.login_required': 'يرجى تسجيل الدخول لتقديم طلبك',
+  'checkout.restaurant_closed': 'المطعم مغلق',
+  'checkout.collect_store': 'الاستلام من المتجر',
+  'checkout.to_your_location': 'إلى موقعك',
+  'checkout.opens': 'يفتح',
+  'checkout.delivery_hours': 'ساعات التوصيل',
+  'checkout.delivery_closed_pickup_available': 'التوصيل مغلق الآن. الاستلام متاح أثناء ساعات عمل المتجر.',
+  'checkout.valid_number_delivery': 'يلزم رقم هاتف صالح للتوصيل',
+  'checkout.select_delivery_location': 'حدد موقع التوصيل',
+  'checkout.tap_drag_pin': 'اضغط على الخريطة أو اسحب الدبوس إلى موقعك الدقيق',
+  'checkout.getting': 'جارٍ التحديد...',
+  'checkout.my_location': 'موقعي',
+  'checkout.drag_pin_popup': 'اسحبني إلى موقعك',
+  'checkout.pin_moved': 'تم نقل الدبوس إلى موقعك!',
+  'checkout.location_failed': 'تعذر تحديد موقعك. اضغط على الخريطة لتحديد الموقع يدوياً.',
+  'checkout.location_access_unavailable': 'الوصول إلى الموقع غير متاح',
+  'checkout.location_access_help': 'اضغط على الخريطة أو اسحب الدبوس لتحديد موقع التوصيل.',
+  'checkout.try_again': 'حاول مرة أخرى',
+  'checkout.still_no_access': 'لا يزال الوصول غير متاح. حدد موقعك يدوياً على الخريطة.',
+  'checkout.getting_your_location': 'جارٍ تحديد موقعك...',
+  'checkout.delivery_fee': 'رسوم التوصيل',
+  'checkout.delivery_notes_label': 'ملاحظات التوصيل (المبنى، الطابق، إلخ)',
+  'checkout.delivery_notes_placeholder': 'اسم المبنى، الطابق، رقم الشقة...',
+  'checkout.estimated_delivery': 'وقت التوصيل المتوقع',
+  'checkout.car_optional': 'رقم السيارة ولونها (اختياري)',
+  'checkout.car_help': 'يساعدنا في التعرف عليك عند الاستلام',
+  'checkout.applied': 'تم تطبيقه!',
+  'checkout.saving': 'التوفير',
+  'checkout.remove': 'إزالة',
+  'checkout.add_tip': 'إضافة إكرامية',
+  'checkout.tip_goes_rider_note': '(تذهب للسائق)',
+  'checkout.tip_goes_shop_note': '(تذهب لموظفي المتجر)',
+  'checkout.custom': 'مخصص',
+  'checkout.no_tip': 'بدون إكرامية',
+  'checkout.enter_amount': 'أدخل المبلغ',
+  'checkout.will_go_rider': 'ستذهب إلى سائق التوصيل',
+  'checkout.will_go_shop': 'ستذهب إلى موظفي المتجر',
+  'checkout.contact_restaurant': 'يرجى التواصل مع المطعم.',
+  'checkout.order_summary': 'ملخص الطلب',
+  'checkout.original_subtotal': 'المجموع الفرعي الأصلي',
+  'checkout.item_discounts': 'خصومات الأصناف',
+  'checkout.subtotal': 'المجموع الفرعي',
+  'checkout.service_fee': 'رسوم الخدمة',
+  'checkout.small_order_fee': 'رسوم الطلب الصغير',
+  'checkout.vat_included': 'ضريبة القيمة المضافة (مشمولة)',
+  'checkout.vat_tax': 'ضريبة القيمة المضافة / الضريبة',
+  'checkout.rider': 'السائق',
+  'checkout.shop': 'المتجر',
+  'checkout.discount': 'الخصم',
+  'checkout.tip': 'الإكرامية',
+  'checkout.please_fix_following': 'يرجى تصحيح التالي:',
+  'checkout.phone_required': 'يرجى إدخال رقم الهاتف',
+  'checkout.valid_phone_allowed': 'يرجى إدخال رقم هاتف صالح برمز دولة مسموح',
+  'checkout.phone_too_short': 'رقم الهاتف قصير جداً. يرجى إدخال الرقم كاملاً.',
+  'checkout.valid_phone_min': 'يرجى إدخال رقم هاتف صالح (9 أرقام على الأقل)',
+  'checkout.enter_name': 'يرجى إدخال اسمك',
+  'checkout.select_location': 'يرجى تحديد موقع التوصيل على الخريطة',
+  'checkout.unable_delivery_charge': 'تعذر حساب رسوم التوصيل. يرجى إعادة تحديد موقعك على الخريطة.',
+  'checkout.no_payment_for_type': 'لا توجد طرق دفع متاحة لهذا النوع من الطلبات',
+  'checkout.cart_add_items': 'سلة التسوق فارغة — أضف أصنافاً أولاً',
+  'checkout.delivery_available_from': 'التوصيل متاح من',
+  'checkout.to': 'إلى',
+  'checkout.select_pickup': 'يرجى اختيار الاستلام.',
+  'checkout.fix_before_order': 'يرجى تصحيح',
+  'checkout.issue': 'مشكلة',
+  'checkout.issues': 'مشكلات',
+  'checkout.order_number': 'الطلب',
+  'checkout.order_success': 'تم تقديمه بنجاح!',
+  'checkout.failed_place_order': 'تعذر تقديم الطلب. يرجى المحاولة مرة أخرى.',
+  'checkout.enter_promo': 'يرجى إدخال كود الخصم',
+  'checkout.first_order_only': 'هذا العرض صالح للطلب الأول فقط',
+  'checkout.offer_usage_limit': 'تم الوصول إلى الحد المسموح لاستخدام هذا العرض.',
+  'checkout.minimum_promo_order': 'الحد الأدنى للطلب لاستخدام هذا العرض هو',
+  'checkout.discount_applied': 'تم تطبيق الخصم!',
+  'checkout.promo_applied': 'تم تطبيق كود الخصم!',
+  'checkout.invalid_promo': 'كود الخصم غير صالح أو منتهي',
+  'checkout.promo_validate_failed': 'تعذر التحقق من كود الخصم',
+  'checkout.delivery_not_available_area': 'التوصيل غير متاح في منطقتك',
+  'checkout.delivery_within': 'نقوم بالتوصيل ضمن',
+  'checkout.shop_closed_message': 'المطعم مغلق حالياً. يرجى المحاولة خلال ساعات العمل.',
+  'checkout.shop_busy_message': 'نحن مشغولون حالياً. قد تستغرق الطلبات وقتاً أطول من المعتاد.',
+  'checkout.save_delivery_location': 'حفظ موقع التوصيل',
+  'checkout.use_saved_location': 'استخدام الموقع المحفوظ',
+  'checkout.saved_location_success': 'تم حفظ موقع التوصيل.',
+  'checkout.saved_location_loaded': 'تم تحميل موقع التوصيل المحفوظ.',
+  'checkout.no_saved_location': 'لا يوجد موقع توصيل محفوظ.',
+  'checkout.select_location_first': 'حدد موقع التوصيل أولاً.',
+  'checkout.location_unsupported': 'متصفحك لا يدعم خدمات الموقع. حدد موقعك يدوياً على الخريطة.',
+  'checkout.location_denied': 'تم رفض إذن الموقع. يمكنك تحديد موقعك يدوياً على الخريطة.',
+  'checkout.name_placeholder': 'الاسم الكامل',
+  'checkout.notes_placeholder': 'أي تعليمات خاصة...',
+  'checkout.promo_placeholder': 'أدخل كود الخصم',
+  'checkout.car_placeholder': 'مثال: تويوتا بيضاء ABC 1234',
+  'menu.small': 'صغير',
+  'menu.medium': 'وسط',
+  'menu.large': 'كبير',
+  'deals.off': 'خصم',
+};
+
 export default function Checkout() {
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t: baseT, language } = useTranslation();
+  const t = (key: string) => language === 'ar' ? (CHECKOUT_AR[key] || baseT(key)) : baseT(key);
   const { isLoggedIn } = useCustomerAuth();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -133,6 +263,7 @@ export default function Checkout() {
   const [calculatedDeliveryCharge, setCalculatedDeliveryCharge] = useState(0);
   const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
   const [gettingLocation, setGettingLocation] = useState(false);
+  const [hasSavedDeliveryLocation, setHasSavedDeliveryLocation] = useState(() => !!readSavedDeliveryLocation());
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -186,6 +317,63 @@ export default function Checkout() {
     }
   }, [showMap]);
 
+  function displayZoneName(value: string): string {
+    const name = String(value || '').trim();
+    if (language !== 'ar') return name;
+    const normalized = name.toLowerCase();
+    if (normalized === 'near zone') return t('checkout.near_zone');
+    if (normalized === 'far zone') return t('checkout.far_zone');
+    if (normalized === 'madha province') return t('checkout.madha_province');
+    return name;
+  }
+
+  function displaySize(value: string): string {
+    if (language !== 'ar') return value;
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'small' || normalized === 's') return t('menu.small');
+    if (normalized === 'medium' || normalized === 'm') return t('menu.medium');
+    if (normalized === 'large' || normalized === 'l') return t('menu.large');
+    return value;
+  }
+
+  async function useSavedDeliveryLocation() {
+    const saved = readSavedDeliveryLocation();
+    if (!saved) {
+      setHasSavedDeliveryLocation(false);
+      toast.error(t('checkout.no_saved_location'));
+      return;
+    }
+
+    if (markerRef.current) {
+      markerRef.current.setLatLng([saved.lat, saved.lng]);
+    }
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView([saved.lat, saved.lng], 15);
+    }
+
+    setDeliveryAddress(saved.address || '');
+    await handleLocationSelected(saved.lat, saved.lng);
+    toast.success(t('checkout.saved_location_loaded'));
+  }
+
+  function saveCurrentDeliveryLocation() {
+    if (!locationShared || customerLat === null || customerLng === null) {
+      toast.error(t('checkout.select_location_first'));
+      return;
+    }
+
+    localStorage.setItem(
+      SAVED_DELIVERY_LOCATION_KEY,
+      JSON.stringify({
+        lat: customerLat,
+        lng: customerLng,
+        address: deliveryAddress.trim(),
+      }),
+    );
+    setHasSavedDeliveryLocation(true);
+    toast.success(t('checkout.saved_location_success'));
+  }
+
   function initMap() {
     if (!mapRef.current) return;
     const map = L.map(mapRef.current).setView([restaurantLat, restaurantLng], 13);
@@ -201,7 +389,7 @@ export default function Checkout() {
       iconAnchor: [8, 8],
     });
     L.marker([restaurantLat, restaurantLng], { icon: restaurantIcon }).addTo(map)
-      .bindPopup('🍕 Vita Napoli');
+      .bindPopup('🥤 Fai Fai Juice');
 
     // Draw delivery zones on map
     const zoneColors = ['#22c55e', '#f59e0b', '#f97316', '#ef4444', '#8b5cf6'];
@@ -242,7 +430,7 @@ export default function Checkout() {
     const marker = L.marker([restaurantLat + 0.005, restaurantLng + 0.005], {
       draggable: true,
     }).addTo(map);
-    marker.bindPopup('📍 Drag me to your location').openPopup();
+    marker.bindPopup(`📍 ${t('checkout.drag_pin_popup')}`).openPopup();
 
     marker.on('dragend', () => {
       const pos = marker.getLatLng();
@@ -305,7 +493,7 @@ export default function Checkout() {
         setCalculatedDeliveryCharge(result.charge || 0);
         setZoneName(result.zone_name || '');
       } else {
-        setDeliveryZoneError(result?.message || `Delivery not available in your area (${result?.distance_km?.toFixed(1) || '?'} km away).`);
+        setDeliveryZoneError(result?.message || `${t('checkout.delivery_not_available_area')} (${result?.distance_km?.toFixed(1) || '?'} km).`);
         setCalculatedDeliveryCharge(0);
         setZoneName('');
       }
@@ -315,13 +503,13 @@ export default function Checkout() {
       if (distance <= nearRadius) {
         setDeliveryZoneError('');
         setCalculatedDeliveryCharge(nearCharge);
-        setZoneName('Near Zone');
+        setZoneName(t('checkout.near_zone'));
       } else if (distance <= farRadius) {
         setDeliveryZoneError('');
         setCalculatedDeliveryCharge(farCharge);
-        setZoneName('Far Zone');
+        setZoneName(t('checkout.far_zone'));
       } else {
-        setDeliveryZoneError(`Delivery not available in your area (${distance.toFixed(1)} km away). We deliver within ${farRadius} km.`);
+        setDeliveryZoneError(`${t('checkout.delivery_not_available_area')} (${distance.toFixed(1)} km). ${t('checkout.delivery_within')} ${farRadius} km.`);
         setCalculatedDeliveryCharge(0);
         setZoneName('');
       }
@@ -351,10 +539,10 @@ export default function Checkout() {
         const status = (s.restaurant_status || '').toLowerCase().trim();
         if (status === 'closed') {
           setShopClosed(true);
-          setShopClosedMessage(s.busy_message || 'The restaurant is currently closed. Please try again during opening hours.');
+          setShopClosedMessage(s.busy_message || t('checkout.shop_closed_message'));
         } else if (status === 'busy') {
           // Busy but still accepting orders - show warning
-          setShopClosedMessage(s.busy_message || 'We are currently busy. Orders may take longer than usual.');
+          setShopClosedMessage(s.busy_message || t('checkout.shop_busy_message'));
         } else {
           setShopClosed(false);
           setShopClosedMessage('');
@@ -479,7 +667,7 @@ export default function Checkout() {
 
   async function validatePromoCode() {
     if (!promoCode.trim()) {
-      toast.error('Please enter a promo code');
+      toast.error(t('checkout.enter_promo'));
       return;
     }
     setValidatingPromo(true);
@@ -517,7 +705,7 @@ export default function Checkout() {
             (o: any) => o.status !== 'cancelled' && o.status !== 'expired'
           );
           if (completedOrders.length > 0) {
-            toast.error('This offer is valid for first orders only');
+            toast.error(t('checkout.first_order_only'));
             setPromoApplied(false);
             setPromoDiscount(0);
             setPromoOffer(null);
@@ -538,7 +726,7 @@ export default function Checkout() {
           }).length;
 
           if (usageCount >= usageLimit) {
-            toast.error(`This offer has already been used${usageLimit === 1 ? '' : ` ${usageLimit} times`}. Limit reached.`);
+            toast.error(`${t('checkout.offer_usage_limit')} ${usageLimit > 1 ? `(${usageLimit})` : ''}`.trim());
             setPromoApplied(false);
             setPromoDiscount(0);
             setPromoOffer(null);
@@ -549,7 +737,7 @@ export default function Checkout() {
 
         const minimumOrder = Number(matchedOffer.minimum_order_amount || 0);
         if (subtotal < minimumOrder) {
-          toast.error(`Minimum order for this promo is AED ${minimumOrder.toFixed(2)}`);
+          toast.error(`${t('checkout.minimum_promo_order')} AED ${minimumOrder.toFixed(2)}`);
           setPromoApplied(false);
           setPromoOffer(null);
           return;
@@ -562,15 +750,15 @@ export default function Checkout() {
         setPromoApplied(true);
         setPromoDiscount(value);
         setPromoOffer(matchedOffer);
-        toast.success(isFixed ? `🎉 AED ${value.toFixed(2)} discount applied!` : `🎉 Promo code applied! ${value}% off`);
+        toast.success(isFixed ? `🎉 AED ${value.toFixed(2)} ${t('checkout.discount_applied')}` : `🎉 ${t('checkout.promo_applied')} ${value}% ${t('deals.off')}`);
       } else {
-        toast.error('Invalid or expired promo code');
+        toast.error(t('checkout.invalid_promo'));
         setPromoApplied(false);
         setPromoDiscount(0);
         setPromoOffer(null);
       }
     } catch {
-      toast.error('Failed to validate promo code');
+      toast.error(t('checkout.promo_validate_failed'));
     } finally {
       setValidatingPromo(false);
     }
@@ -652,7 +840,7 @@ export default function Checkout() {
     const cleaned = phoneNumber.trim().replace(/[\s\-()]/g, '');
     
     if (!cleaned) {
-      return 'Please enter your phone number';
+      return t('checkout.phone_required');
     }
 
     if (strict) {
@@ -670,19 +858,19 @@ export default function Checkout() {
       });
 
       if (!hasValidCode) {
-        return `Please enter a valid phone number with allowed country code (${allowedCountryCodes.join(', ')})`;
+        return `${t('checkout.valid_phone_allowed')} (${allowedCountryCodes.join(', ')})`;
       }
 
       // Check minimum digits after country code
       const digitsOnly = cleaned.replace(/\D/g, '');
       if (digitsOnly.length < 9) {
-        return 'Phone number is too short. Please enter a complete number.';
+        return t('checkout.phone_too_short');
       }
     } else {
       // For pickup: minimum 9 digits (allows any number)
       const digitsOnly = cleaned.replace(/\D/g, '');
       if (digitsOnly.length < 9) {
-        return 'Please enter a valid phone number (minimum 9 digits)';
+        return t('checkout.valid_phone_min');
       }
     }
     
@@ -693,7 +881,7 @@ export default function Checkout() {
     const newErrors: Record<string, string> = {};
 
     if (!name.trim()) {
-      newErrors.name = 'Please enter your name';
+      newErrors.name = t('checkout.enter_name');
     }
     
     // For delivery: strict validation with allowed country codes. For pickup: minimum 9 digits
@@ -702,23 +890,23 @@ export default function Checkout() {
       newErrors.phone = phoneError;
     }
     if (orderType === 'delivery' && !locationShared) {
-      newErrors.location = 'Please select your delivery location on the map';
+      newErrors.location = t('checkout.select_location');
     }
     if (orderType === 'delivery' && deliveryZoneError) {
       newErrors.location = deliveryZoneError;
     }
     // CRITICAL: Block delivery orders with zero delivery charge (pin not in valid zone)
     if (orderType === 'delivery' && locationShared && calculatedDeliveryCharge <= 0 && !deliveryZoneError) {
-      newErrors.location = 'Unable to calculate delivery charge. Please re-select your location on the map.';
+      newErrors.location = t('checkout.unable_delivery_charge');
     }
     if (availablePaymentMethods.length === 0) {
-      newErrors.payment = 'No payment methods available for this order type';
+      newErrors.payment = t('checkout.no_payment_for_type');
     }
     if (cart.length === 0) {
-      newErrors.cart = 'Your cart is empty — please add items first';
+      newErrors.cart = t('checkout.cart_add_items');
     }
     if (!isLoggedIn) {
-      newErrors.auth = 'Please login to place your order';
+      newErrors.auth = t('checkout.login_required');
     }
 
     return newErrors;
@@ -732,13 +920,13 @@ export default function Checkout() {
 
     // Block if shop is closed
     if (shopClosed) {
-      toast.error(shopClosedMessage || 'Restaurant is currently closed.');
+      toast.error(shopClosedMessage || t('checkout.restaurant_closed'));
       return;
     }
 
     if (orderType === 'delivery' && !deliveryAvailableNow) {
       toast.error(
-        `Delivery is available from ${formatScheduleTime(deliveryStartTime)} to ${formatScheduleTime(deliveryEndTime)}. Please select Pickup.`,
+        `${t('checkout.delivery_available_from')} ${formatScheduleTime(deliveryStartTime, language)} ${t('checkout.to')} ${formatScheduleTime(deliveryEndTime, language)}. ${t('checkout.select_pickup')}`,
       );
       setOrderType('pickup');
       setShowMap(false);
@@ -747,7 +935,7 @@ export default function Checkout() {
 
     // Block if not logged in
     if (!isLoggedIn) {
-      toast.error('Please login to place your order.');
+      toast.error(t('checkout.login_required'));
       return;
     }
 
@@ -758,7 +946,7 @@ export default function Checkout() {
     if (Object.keys(validationErrors).length > 0) {
       // Show summary toast
       const errorCount = Object.keys(validationErrors).length;
-      toast.error(`Please fix ${errorCount} ${errorCount === 1 ? 'issue' : 'issues'} before placing your order`);
+      toast.error(`${t('checkout.fix_before_order')} ${errorCount} ${errorCount === 1 ? t('checkout.issue') : t('checkout.issues')}`);
 
       // Scroll to first error field
       const errorFieldIds: Record<string, string> = {
@@ -869,10 +1057,10 @@ export default function Checkout() {
       
       clearCart();
       window.dispatchEvent(new Event('cart-updated'));
-      toast.success(`Order #${orderId} placed successfully!`);
+      toast.success(`${t('checkout.order_number')} #${orderId} ${t('checkout.order_success')}`);
       navigate('/order-confirmation', { state: { orderId } });
     } catch (e: any) {
-      const errorMsg = e?.data?.detail || e?.response?.data?.detail || e?.message || 'Failed to place order. Please try again.';
+      const errorMsg = e?.data?.detail || e?.response?.data?.detail || e?.message || t('checkout.failed_place_order');
       toast.error(errorMsg);
       console.error('Order placement failed:', e);
     } finally {
@@ -888,12 +1076,12 @@ export default function Checkout() {
 
         {!isLoggedIn && (
           <div id="auth-section" className="mb-6 p-4 rounded-xl bg-red-600/10 border border-red-600/30">
-            <p className="text-red-400 text-sm mb-3">Please login to place your order</p>
+            <p className="text-red-400 text-sm mb-3">{t('checkout.login_required')}</p>
             <Button
               onClick={() => navigate('/account')}
               className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
             >
-              Login / Sign Up
+              {t('checkout.login_signup')}
             </Button>
           </div>
         )}
@@ -903,7 +1091,7 @@ export default function Checkout() {
           <div className="mb-6 p-4 rounded-xl bg-orange-600/10 border border-orange-600/30">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-2xl">🚫</span>
-              <h3 className="text-orange-400 font-bold text-lg">Restaurant Closed</h3>
+              <h3 className="text-orange-400 font-bold text-lg">{t('checkout.restaurant_closed')}</h3>
             </div>
             <p className="text-orange-300 text-sm">{shopClosedMessage}</p>
           </div>
@@ -933,7 +1121,7 @@ export default function Checkout() {
                 >
                   <Car className={`w-6 h-6 ${orderType === 'pickup' ? 'text-red-400' : 'text-gray-400'}`} />
                   <span className={`font-medium ${orderType === 'pickup' ? 'text-white' : 'text-gray-400'}`}>{t('checkout.pickup')}</span>
-                  <span className="text-gray-500 text-xs">Collect from store</span>
+                  <span className="text-gray-500 text-xs">{t('checkout.collect_store')}</span>
                 </button>
                 <button
                   type="button"
@@ -957,8 +1145,8 @@ export default function Checkout() {
                   <span className={`font-medium ${orderType === 'delivery' ? 'text-white' : 'text-gray-400'}`}>{t('checkout.delivery')}</span>
                   <span className="text-gray-500 text-xs">
                     {deliveryAvailableNow
-                      ? 'To your location'
-                      : `Opens ${formatScheduleTime(deliveryStartTime)}`}
+                      ? t('checkout.to_your_location')
+                      : `${t('checkout.opens')} ${formatScheduleTime(deliveryStartTime, language)}`}
                   </span>
                 </button>
               </div>
@@ -972,11 +1160,11 @@ export default function Checkout() {
                 : 'border-yellow-700/40 bg-yellow-900/10 text-yellow-300'
             }`}>
               <p className="text-sm">
-                Delivery hours: {formatScheduleTime(deliveryStartTime)} – {formatScheduleTime(deliveryEndTime)}
+                {t('checkout.delivery_hours')}: {formatScheduleTime(deliveryStartTime, language)} – {formatScheduleTime(deliveryEndTime, language)}
               </p>
               {!deliveryAvailableNow && (
                 <p className="text-xs mt-1">
-                  Delivery is closed now. Pickup is available while the shop is open.
+                  {t('checkout.delivery_closed_pickup_available')}
                 </p>
               )}
             </div>
@@ -990,7 +1178,7 @@ export default function Checkout() {
                 id="name"
                 value={name}
                 onChange={e => { setName(e.target.value); if (showErrors) setErrors(prev => { const n = {...prev}; delete n.name; return n; }); }}
-                placeholder="Your full name"
+                placeholder={t('checkout.name_placeholder')}
                 className={`bg-gray-900 border-gray-700 text-white mt-1 ${showErrors && errors.name ? 'border-red-500' : ''}`}
                 required
               />
@@ -1008,7 +1196,7 @@ export default function Checkout() {
               />
               {orderType === 'delivery' && (
                 <p className="text-gray-500 text-xs mt-1">
-                  Valid number required for delivery ({allowedCountryCodes.join(', ')})
+                  {t('checkout.valid_number_delivery')} ({allowedCountryCodes.join(', ')})
                 </p>
               )}
               {showErrors && errors.phone && <p className="text-red-400 text-xs mt-1">⚠️ {errors.phone}</p>}
@@ -1018,18 +1206,28 @@ export default function Checkout() {
             {orderType === 'delivery' && (
               <>
                 <div id="delivery-map">
-                  <Label className="text-gray-300 mb-2 block">Select Delivery Location *</Label>
+                  <Label className="text-gray-300 mb-2 block">{t('checkout.select_delivery_location')} *</Label>
                   <div className="flex items-center gap-2 mb-2">
                     <p className="text-gray-500 text-xs flex-1">
-                      Tap on the map or drag the pin to your exact location
+                      {t('checkout.tap_drag_pin')}
                     </p>
+                    {hasSavedDeliveryLocation && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void useSavedDeliveryLocation()}
+                        className="bg-gray-800 hover:bg-gray-700 text-white text-xs cursor-pointer"
+                      >
+                        <MapPin className="w-3 h-3 mr-1" /> {t('checkout.use_saved_location')}
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       size="sm"
                       disabled={gettingLocation}
                       onClick={() => {
                         if (!navigator.geolocation) {
-                          toast.error('Your browser does not support location services. Please tap on the map to select your location.');
+                          toast.error(t('checkout.location_unsupported'));
                           return;
                         }
                         setGettingLocation(true);
@@ -1047,17 +1245,17 @@ export default function Checkout() {
                             handleLocationSelected(latitude, longitude);
                             setLocationPermissionDenied(false);
                             setGettingLocation(false);
-                            toast.success('Pin moved to your location!');
+                            toast.success(t('checkout.pin_moved'));
                           },
                           (err) => {
                             setGettingLocation(false);
                             if (err.code === err.PERMISSION_DENIED) {
                               setLocationPermissionDenied(true);
-                              toast.warning('Location permission denied. You can tap on the map to select your delivery location manually.');
+                              toast.warning(t('checkout.location_denied'));
                             } else if (err.code === err.TIMEOUT) {
-                              toast.warning('Could not get your location. Please tap on the map to select your location.');
+                              toast.warning(t('checkout.location_failed'));
                             } else {
-                              toast.warning('Could not get your location. Please tap on the map to select your location.');
+                              toast.warning(t('checkout.location_failed'));
                             }
                           },
                           { enableHighAccuracy: true, timeout: 15000 }
@@ -1065,7 +1263,7 @@ export default function Checkout() {
                       }}
                       className="bg-blue-600 hover:bg-blue-700 text-white text-xs cursor-pointer disabled:opacity-50"
                     >
-                      <Navigation className="w-3 h-3 mr-1" /> {gettingLocation ? 'Getting...' : 'My Location'}
+                      <Navigation className="w-3 h-3 mr-1" /> {gettingLocation ? t('checkout.getting') : t('checkout.my_location')}
                     </Button>
                   </div>
                   <div
@@ -1078,22 +1276,22 @@ export default function Checkout() {
                     {deliveryZones.length > 0 ? (
                       deliveryZones.map((z, i) => (
                         <span key={i} className={`${i === 0 ? 'text-green-400' : i === 1 ? 'text-yellow-400' : 'text-orange-400'}`}>
-                          ● {z.zone_name} ({z.min_distance_km}-{z.max_distance_km} km = AED {z.charge})
+                          ● {displayZoneName(z.zone_name)} ({z.min_distance_km}-{z.max_distance_km} km = AED {z.charge})
                         </span>
                       ))
                     ) : (
                       <>
-                        <span className="text-green-400">● Near zone (AED {nearCharge})</span>
-                        <span className="text-yellow-400">● Far zone (AED {farCharge})</span>
+                        <span className="text-green-400">● {t('checkout.near_zone')} (AED {nearCharge})</span>
+                        <span className="text-yellow-400">● {t('checkout.far_zone')} (AED {farCharge})</span>
                       </>
                     )}
                   </div>
                   {/* Location permission denied - friendly guidance */}
                   {locationPermissionDenied && !locationShared && (
                     <div className="mt-2 p-3 rounded-lg bg-yellow-600/10 border border-yellow-600/30">
-                      <p className="text-yellow-300 text-sm font-medium mb-1">📍 Location access not available</p>
+                      <p className="text-yellow-300 text-sm font-medium mb-1">📍 {t('checkout.location_access_unavailable')}</p>
                       <p className="text-yellow-200/70 text-xs mb-2">
-                        No problem! Simply tap anywhere on the map or drag the pin to set your delivery location.
+                        {t('checkout.location_access_help')}
                       </p>
                       <Button
                         type="button"
@@ -1113,18 +1311,18 @@ export default function Checkout() {
                               handleLocationSelected(latitude, longitude);
                               setLocationPermissionDenied(false);
                               setGettingLocation(false);
-                              toast.success('Pin moved to your location!');
+                              toast.success(t('checkout.pin_moved'));
                             },
                             () => {
                               setGettingLocation(false);
-                              toast.warning('Still no access. Please tap on the map to select your location.');
+                              toast.warning(t('checkout.still_no_access'));
                             },
                             { enableHighAccuracy: true, timeout: 10000 }
                           );
                         }}
                         className="bg-yellow-600 hover:bg-yellow-700 text-white text-xs cursor-pointer"
                       >
-                        <Navigation className="w-3 h-3 mr-1" /> Try Again
+                        <Navigation className="w-3 h-3 mr-1" /> {t('checkout.try_again')}
                       </Button>
                     </div>
                   )}
@@ -1132,13 +1330,26 @@ export default function Checkout() {
                   {gettingLocation && !locationShared && (
                     <div className="mt-2 flex items-center gap-2 text-blue-400 text-sm">
                       <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                      <span>Getting your location...</span>
+                      <span>{t('checkout.getting_your_location')}</span>
                     </div>
                   )}
                   {locationShared && !deliveryZoneError && (
                     <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
                       <CheckCircle className="w-4 h-4" />
-                      <span>Location selected{zoneName ? ` (${zoneName})` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
+                      <span>{t('checkout.delivery_fee')}: AED {calculatedDeliveryCharge}</span>
+                    </div>
+                  )}
+                  {locationShared && !deliveryZoneError && (
+                    <div className="mt-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={saveCurrentDeliveryLocation}
+                        className="border-green-700 text-green-400 hover:bg-green-950/30"
+                      >
+                        <MapPin className="w-3 h-3 mr-1" /> {t('checkout.save_delivery_location')}
+                      </Button>
                     </div>
                   )}
                   {deliveryZoneError && (
@@ -1151,16 +1362,16 @@ export default function Checkout() {
                   )}
                 </div>
                 <div>
-                  <Label htmlFor="address" className="text-gray-300">Delivery Notes (building, floor, etc.)</Label>
+                  <Label htmlFor="address" className="text-gray-300">{t('checkout.delivery_notes_label')}</Label>
                   <Textarea
                     id="address"
                     value={deliveryAddress}
                     onChange={e => setDeliveryAddress(e.target.value)}
-                    placeholder="Building name, floor, apartment number..."
+                    placeholder={t('checkout.delivery_notes_placeholder')}
                     className="bg-gray-900 border-gray-700 text-white mt-1"
                   />
                   <p className="text-gray-500 text-xs mt-1 flex items-center gap-1">
-                    <MapPin className="w-3 h-3" /> Estimated delivery: {estimatedDeliveryTime}
+                    <MapPin className="w-3 h-3" /> {t('checkout.estimated_delivery')}: {estimatedDeliveryTime}
                   </p>
                 </div>
               </>
@@ -1169,15 +1380,15 @@ export default function Checkout() {
             {/* Car Info (only for pickup) */}
             {orderType === 'pickup' && (
               <div>
-                <Label htmlFor="carInfo" className="text-gray-300">Car Number & Color (optional)</Label>
+                <Label htmlFor="carInfo" className="text-gray-300">{t('checkout.car_optional')}</Label>
                 <Input
                   id="carInfo"
                   value={carInfo}
                   onChange={e => setCarInfo(e.target.value)}
-                  placeholder="e.g. White Toyota ABC 1234"
+                  placeholder={t('checkout.car_placeholder')}
                   className="bg-gray-900 border-gray-700 text-white mt-1"
                 />
-                <p className="text-gray-500 text-xs mt-1">Helps us identify you for pickup</p>
+                <p className="text-gray-500 text-xs mt-1">{t('checkout.car_help')}</p>
               </div>
             )}
 
@@ -1187,7 +1398,7 @@ export default function Checkout() {
                 id="notes"
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
-                placeholder="Any special instructions..."
+                placeholder={t('checkout.notes_placeholder')}
                 className="bg-gray-900 border-gray-700 text-white mt-1"
               />
             </div>
@@ -1201,16 +1412,16 @@ export default function Checkout() {
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-green-600/10 border border-green-600/30">
                   <Tag className="w-5 h-5 text-green-400" />
                   <div className="flex-1">
-                    <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} applied!</p>
+                    <p className="text-green-400 font-medium text-sm">{promoOffer?.promo_code} {t('checkout.applied')}</p>
                     <p className="text-green-400/70 text-xs">
                       {(promoOffer?.discount_type || 'percentage') === 'fixed'
-                        ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)} discount`
-                        : `${Number(promoOffer?.discount_percent || promoDiscount)}% discount`}
-                      {' — '}saving AED {discountAmount.toFixed(2)}
+                        ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)} ${t('checkout.discount')}`
+                        : `${Number(promoOffer?.discount_percent || promoDiscount)}% ${t('checkout.discount')}`}
+                      {' — '}{t('checkout.saving')} AED {discountAmount.toFixed(2)}
                     </p>
                   </div>
                   <button type="button" onClick={removePromo} className="text-gray-400 text-xs hover:text-red-400 cursor-pointer">
-                    Remove
+                    {t('checkout.remove')}
                   </button>
                 </div>
               ) : (
@@ -1218,7 +1429,7 @@ export default function Checkout() {
                   <Input
                     value={promoCode}
                     onChange={e => setPromoCode(e.target.value)}
-                    placeholder="Enter promo code"
+                    placeholder={t('checkout.promo_placeholder')}
                     className="bg-gray-900 border-gray-700 text-white flex-1"
                   />
                   <Button
@@ -1237,7 +1448,7 @@ export default function Checkout() {
           {/* Tip Section */}
           <div>
             <Label className="text-gray-300 mb-3 block">
-              💝 Add a Tip {orderType === 'delivery' ? '(goes to rider)' : '(goes to shop staff)'}
+              💝 {t('checkout.add_tip')} {orderType === 'delivery' ? t('checkout.tip_goes_rider_note') : t('checkout.tip_goes_shop_note')}
             </Label>
             <div className="flex flex-wrap gap-2 mb-2">
               {[5, 10, 15].map(amount => (
@@ -1263,7 +1474,7 @@ export default function Checkout() {
                     : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500'
                 }`}
               >
-                Custom
+                {t('checkout.custom')}
               </button>
               {tipAmount > 0 && (
                 <button
@@ -1271,7 +1482,7 @@ export default function Checkout() {
                   onClick={() => { setTipAmount(0); setShowCustomTip(false); setCustomTip(''); }}
                   className="px-3 py-2.5 rounded-lg border-2 border-gray-700 bg-gray-900 text-gray-500 text-sm cursor-pointer hover:border-red-600 hover:text-red-400"
                 >
-                  No Tip
+                  {t('checkout.no_tip')}
                 </button>
               )}
             </div>
@@ -1288,14 +1499,14 @@ export default function Checkout() {
                     const val = parseFloat(e.target.value);
                     setTipAmount(val > 0 ? val : 0);
                   }}
-                  placeholder="Enter amount"
+                  placeholder={t('checkout.enter_amount')}
                   className="bg-gray-900 border-gray-700 text-white w-32"
                 />
               </div>
             )}
             {tipAmount > 0 && (
               <p className="text-green-400/80 text-xs mt-2">
-                ✓ AED {tipAmount.toFixed(0)} tip will go to {orderType === 'delivery' ? 'your delivery rider' : 'the shop staff'}
+                ✓ AED {tipAmount.toFixed(0)} {t('checkout.tip')} {orderType === 'delivery' ? t('checkout.will_go_rider') : t('checkout.will_go_shop')}
               </p>
             )}
           </div>
@@ -1305,7 +1516,7 @@ export default function Checkout() {
             <Label className="text-gray-300 mb-3 block">{t('checkout.payment_method')}</Label>
             {availablePaymentMethods.length === 0 ? (
               <div className="p-4 rounded-xl bg-red-600/10 border border-red-600/30">
-                <p className="text-red-400 text-sm">No payment methods available for {orderType} orders. Please contact the restaurant.</p>
+                <p className="text-red-400 text-sm">{t('checkout.no_payment_for_type')}. {t('checkout.contact_restaurant')}</p>
               </div>
             ) : (
               <RadioGroup value={availablePaymentMethods.some(m => m.value === paymentMethod) ? paymentMethod : availablePaymentMethods[0]?.value || 'cash'} onValueChange={setPaymentMethod} className="space-y-3">
@@ -1324,15 +1535,15 @@ export default function Checkout() {
 
           {/* Order Summary */}
           <div id="order-summary" className={`p-4 rounded-xl bg-gray-900 border ${showErrors && errors.cart ? 'border-red-500' : 'border-gray-800'}`}>
-            <h3 className="text-white font-semibold mb-3">Order Summary</h3>
+            <h3 className="text-white font-semibold mb-3">{t('checkout.order_summary')}</h3>
             {showErrors && errors.cart && <p className="text-red-400 text-xs mb-3">⚠️ {errors.cart}</p>}
             {cart.map(item => (
               <div key={item.id} className="flex justify-between text-sm py-1.5">
                 <span className="text-gray-400">
-                  {item.quantity}x {item.menuItem.name} ({item.size})
+                  {item.quantity}x {localizedMenuText(item.menuItem, language)} ({displaySize(item.size)})
                   {item.extras.length > 0 && (
                     <span className="text-gray-600 text-xs block">
-                      + {item.extras.map(e => e.name).join(', ')}
+                      + {item.extras.map(e => localizedMenuText(e, language)).join(', ')}
                     </span>
                   )}
                 </span>
@@ -1352,54 +1563,54 @@ export default function Checkout() {
               {itemDiscountTotal > 0 && (
                 <>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Original Subtotal</span>
+                    <span className="text-gray-400">{t('checkout.original_subtotal')}</span>
                     <span className="text-gray-500 line-through">AED {originalSubtotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-green-400">Item Discounts</span>
+                    <span className="text-green-400">{t('checkout.item_discounts')}</span>
                     <span className="text-green-400">-AED {itemDiscountTotal.toFixed(2)}</span>
                   </div>
                 </>
               )}
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Subtotal</span>
+                <span className="text-gray-400">{t('checkout.subtotal')}</span>
                 <span className="text-gray-300">AED {subtotal.toFixed(2)}</span>
               </div>
               {orderType === 'delivery' && deliveryFee > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Delivery Fee</span>
+                  <span className="text-gray-400">{t('checkout.delivery_fee')}</span>
                   <span className="text-gray-300">AED {deliveryFee.toFixed(2)}</span>
                 </div>
               )}
               {serviceFee > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Service Fee</span>
+                  <span className="text-gray-400">{t('checkout.service_fee')}</span>
                   <span className="text-gray-300">AED {serviceFee.toFixed(2)}</span>
                 </div>
               )}
               {smallOrderFee > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-yellow-400">Small Order Fee</span>
+                  <span className="text-yellow-400">{t('checkout.small_order_fee')}</span>
                   <span className="text-yellow-400">AED {smallOrderFee.toFixed(2)}</span>
                 </div>
               )}
               {taxAmount > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-400">
-                    {vatIncluded ? 'VAT (Incl.)' : `VAT / Tax (${taxPercent.toFixed(2)}%)`}
+                    {vatIncluded ? t('checkout.vat_included') : `${t('checkout.vat_tax')} (${taxPercent.toFixed(2)}%)`}
                   </span>
                   <span className="text-gray-300">AED {taxAmount.toFixed(2)}</span>
                 </div>
               )}
               {tipAmount > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">Tip ({orderType === 'delivery' ? 'Rider' : 'Shop'})</span>
+                  <span className="text-green-400">{t('checkout.tip')} ({orderType === 'delivery' ? t('checkout.rider') : t('checkout.shop')})</span>
                   <span className="text-green-400">AED {tipAmount.toFixed(2)}</span>
                 </div>
               )}
               {promoApplied && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">Discount ({(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})</span>
+                  <span className="text-green-400">{t('checkout.discount')} ({(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})</span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
               )}
@@ -1412,7 +1623,7 @@ export default function Checkout() {
 
           {showErrors && Object.keys(errors).length > 0 && (
             <div className="p-3 rounded-xl bg-red-600/10 border border-red-500/30 mb-3">
-              <p className="text-red-400 text-sm font-medium mb-1">⚠️ Please fix the following:</p>
+              <p className="text-red-400 text-sm font-medium mb-1">⚠️ {t('checkout.please_fix_following')}</p>
               <ul className="space-y-0.5">
                 {Object.values(errors).map((err, i) => (
                   <li key={i} className="text-red-400/80 text-xs">• {err}</li>
