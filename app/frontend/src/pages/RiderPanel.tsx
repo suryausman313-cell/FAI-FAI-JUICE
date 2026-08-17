@@ -261,7 +261,9 @@ export default function RiderPanel() {
         url: `/api/v1/rider/heartbeat/${rider.id}`,
         method: 'POST',
         data: {},
-      }).catch(() => {});
+      }).catch((error: any) => {
+        if (error?.response?.status === 401 || error?.response?.status === 403) handleRiderAuthFailure('Rider login required. Please login once again.');
+      });
     }
     sendHeartbeat(); // Send immediately on login
     const heartbeatInterval = setInterval(sendHeartbeat, 15000);
@@ -278,7 +280,9 @@ export default function RiderPanel() {
             url: `/api/v1/rider/location/${rider.id}`,
             method: 'POST',
             data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
-          }).catch(() => {});
+          }).catch((error: any) => {
+            if (error?.response?.status === 401 || error?.response?.status === 403) handleRiderAuthFailure('Rider login required. Please login once again.');
+          });
         },
         () => {},
         { enableHighAccuracy: true, timeout: 10000 }
@@ -502,6 +506,18 @@ export default function RiderPanel() {
     mapInstanceRef.current = map;
   }
 
+  function handleRiderAuthFailure(message = 'Rider session expired. Please login again.') {
+    localStorage.removeItem('rider_auth');
+    localStorage.removeItem('rider_access_token');
+    setRider(null);
+    setDeliveries([]);
+    setStats(null);
+    setFinanceSummary(null);
+    setCashSubmissions([]);
+    stopRiderRingNow();
+    toast.error(message);
+  }
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     if (!phone || !pin) { toast.error('Please enter phone and PIN'); return; }
@@ -510,9 +526,11 @@ export default function RiderPanel() {
       const res = await riderApi({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
       if (res?.data?.success) {
         const riderData = res.data.rider;
-        setRider(riderData);
+        const accessToken = String(res.data.access_token || '').trim();
+        if (!accessToken) throw new Error('Secure rider session could not be created. Please login again.');
+        localStorage.setItem('rider_access_token', accessToken);
         localStorage.setItem('rider_auth', JSON.stringify(riderData));
-        localStorage.setItem('rider_access_token', String(res.data.access_token || ''));
+        setRider(riderData);
         toast.success(`Welcome, ${riderData.name}!`);
         loadDeliveries(riderData.id);
         loadStats(riderData.id);
@@ -552,10 +570,7 @@ export default function RiderPanel() {
     } catch (e: any) {
       console.error('Failed to load deliveries:', e);
       if (e?.response?.status === 401 || e?.response?.status === 403) {
-        localStorage.removeItem('rider_auth');
-        localStorage.removeItem('rider_access_token');
-        setRider(null);
-        toast.error('Rider session expired. Please login again.');
+        handleRiderAuthFailure();
         return;
       }
       if (loading) { toast.error('Could not load deliveries.'); }
@@ -566,7 +581,10 @@ export default function RiderPanel() {
     try {
       const res = await riderApi({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
       if (res?.data) { setStats(res.data); }
-    } catch (e) { console.error('Failed to load stats:', e); }
+    } catch (e: any) {
+      console.error('Failed to load stats:', e);
+      if (e?.response?.status === 401 || e?.response?.status === 403) handleRiderAuthFailure();
+    }
   }
 
   function getFinanceUrl(riderId: number, period: FinancePeriod) {
@@ -590,6 +608,10 @@ export default function RiderPanel() {
       if (res?.data) setFinanceSummary(res.data);
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
+      if (e?.response?.status === 401 || e?.response?.status === 403) {
+        handleRiderAuthFailure('Rider login required. Please login once again.');
+        return;
+      }
       toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not load finance report');
     } finally {
       setFinanceLoading(false);
@@ -604,8 +626,9 @@ export default function RiderPanel() {
         data: {},
       });
       setCashSubmissions(res?.data?.items || []);
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load cash submissions:', e);
+      if (e?.response?.status === 401 || e?.response?.status === 403) handleRiderAuthFailure();
     }
   }
 
