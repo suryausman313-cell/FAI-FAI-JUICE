@@ -1021,15 +1021,28 @@ async def get_admin_rider_reports(
             rider_settlements = [
                 item for item in all_settlements if item.rider_id == rider.id
             ]
+
+            # Cash figures on Rider Management must follow the selected period too.
+            # Approved cash uses reviewed_at (when Admin actually approved it).
+            # Pending/awaiting cash uses submitted_at.
             approved_cash = sum(
                 float(item.amount or 0)
                 for item in rider_settlements
                 if item.status == "approved"
+                and in_selected_period(
+                    getattr(item, "reviewed_at", None)
+                    or getattr(item, "updated_at", None)
+                    or getattr(item, "submitted_at", None)
+                )
             )
             awaiting_approval = sum(
                 float(item.amount or 0)
                 for item in rider_settlements
                 if item.status == "pending"
+                and in_selected_period(
+                    getattr(item, "submitted_at", None)
+                    or getattr(item, "created_at", None)
+                )
             )
             cash_pending = max(cash_collected - approved_cash, 0.0)
 
