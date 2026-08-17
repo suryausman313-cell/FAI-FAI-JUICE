@@ -46,14 +46,14 @@ export function LanguagePickerModal() {
 }
 
 export function LanguageSwitcher() {
-  const { language, setLanguage } = useI18n();
+  const { language, setLanguage, t } = useI18n();
   const currentLang = LANGUAGES.find(l => l.code === language);
 
   return (
     <div className="relative group">
       <button
         className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-300 text-xs cursor-pointer transition-colors"
-        title="Change language"
+        title={t('lang.change')}
       >
         <span className="text-sm">{currentLang?.flag}</span>
         <span className="uppercase font-medium">{language}</span>

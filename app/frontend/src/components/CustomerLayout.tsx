@@ -34,7 +34,7 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
     { path: '/menu', icon: UtensilsCrossed, label: t('nav.menu') },
     { path: '/cart', icon: ShoppingCart, label: t('nav.cart'), badge: cartCount },
     { path: '/my-orders', icon: ClipboardList, label: t('nav.orders') },
-    { path: '/account?manage=1', activePath: '/account', icon: UserRound, label: 'Account' },
+    { path: '/account?manage=1', activePath: '/account', icon: UserRound, label: t('nav.account') },
   ];
 
   return (
