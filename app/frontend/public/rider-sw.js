@@ -3,6 +3,7 @@
 const CACHE_NAME = 'fai-fai-rider-final-combined-v1';
 let riderId = null;
 let apiBaseUrl = '';
+let riderToken = '';
 let pollingInterval = null;
 let lastKnownDeliveryIds = [];
 
@@ -12,6 +13,7 @@ self.addEventListener('message', (event) => {
   if (type === 'RIDER_LOGIN') {
     riderId = data.riderId;
     apiBaseUrl = String(data.apiBaseUrl || '').replace(/\/$/, '');
+    riderToken = String(data.token || '');
     lastKnownDeliveryIds = data.currentDeliveryIds || [];
     startPolling();
   }
@@ -19,6 +21,7 @@ self.addEventListener('message', (event) => {
   if (type === 'RIDER_LOGOUT') {
     riderId = null;
     apiBaseUrl = '';
+    riderToken = '';
     lastKnownDeliveryIds = [];
     stopPolling();
   }
@@ -55,12 +58,12 @@ function stopPolling() {
 }
 
 async function checkForNewDeliveries() {
-  if (!riderId || !apiBaseUrl) return;
+  if (!riderId || !apiBaseUrl || !riderToken) return;
 
   try {
     const response = await fetch(`${apiBaseUrl}/api/v1/rider/deliveries/${riderId}`, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', Authorization: `Bearer ${riderToken}` },
       cache: 'no-store',
     });
     if (!response.ok) return;
