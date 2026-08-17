@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff, ChevronDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,10 @@ import { useTranslation } from '@/lib/i18n';
 import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
-import { syncCustomerPushIfAllowed } from '@/lib/customer-push';
+import {
+  enableCustomerPush,
+  syncCustomerPushIfAllowed,
+} from '@/lib/customer-push';
 
 const PICKUP_STEPS = [
   { key: 'new', label: 'Order Placed', icon: Store },
@@ -422,6 +425,11 @@ export default function MyOrders() {
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
+  const [expandedPastOrderId, setExpandedPastOrderId] = useState<number | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState<
+    'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
+  >('checking');
+  const [notificationMessage, setNotificationMessage] = useState('');
 
   // Admin-configured timeouts
   const [acceptTimeout, setAcceptTimeout] = useState(5); // minutes
@@ -431,12 +439,52 @@ export default function MyOrders() {
 
   useEffect(() => {
     void loadInitialData();
-    void syncCustomerPushIfAllowed().catch(() => undefined);
+    void checkReadyNotifications();
     const interval = setInterval(() => {
       void loadOrders();
     }, 8000);
     return () => clearInterval(interval);
   }, []);
+
+  async function checkReadyNotifications() {
+    if (!localStorage.getItem('vita_customer_token')) {
+      setNotificationStatus('login_required');
+      return;
+    }
+    try {
+      const state = await syncCustomerPushIfAllowed();
+      if (!state.supported) setNotificationStatus('unsupported');
+      else if (state.permission === 'denied') setNotificationStatus('blocked');
+      else if (state.permission === 'granted' && state.subscribed) setNotificationStatus('enabled');
+      else setNotificationStatus('available');
+    } catch (error: any) {
+      // A stale browser subscription should not leave the customer trapped on
+      // an error card. The Enable button will repair/recreate it on demand.
+      setNotificationStatus('available');
+      setNotificationMessage(error?.message || 'Could not check notifications');
+    }
+  }
+
+  async function handleEnableReadyNotifications() {
+    if (!localStorage.getItem('vita_customer_token')) {
+      navigate('/account');
+      return;
+    }
+    setNotificationStatus('enabling');
+    setNotificationMessage('');
+    try {
+      await enableCustomerPush();
+      setNotificationStatus('enabled');
+    } catch (error: any) {
+      const message = error?.message || 'Could not enable notifications';
+      setNotificationMessage(message);
+      setNotificationStatus(
+        typeof Notification !== 'undefined' && Notification.permission === 'denied'
+          ? 'blocked'
+          : 'error',
+      );
+    }
+  }
 
   async function loadInitialData() {
     try {
@@ -644,6 +692,59 @@ export default function MyOrders() {
           </Button>
         </div>
 
+        <div className={`rounded-xl border p-4 mb-5 ${
+          notificationStatus === 'enabled'
+            ? 'border-green-600/30 bg-green-600/10'
+            : notificationStatus === 'blocked' || notificationStatus === 'error'
+              ? 'border-red-600/30 bg-red-600/10'
+              : 'border-gray-700 bg-gray-900'
+        }`}>
+          <div className="flex items-start gap-3">
+            <div className={`rounded-full p-2 ${
+              notificationStatus === 'enabled' ? 'bg-green-600/20' : 'bg-gray-800'
+            }`}>
+              {notificationStatus === 'blocked' || notificationStatus === 'unsupported' ? (
+                <BellOff className="w-5 h-5 text-red-400" />
+              ) : (
+                <Bell className={`w-5 h-5 ${notificationStatus === 'enabled' ? 'text-green-400' : 'text-yellow-400'}`} />
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="text-white font-semibold text-sm">
+                {notificationStatus === 'enabled'
+                  ? 'Ready notifications enabled'
+                  : notificationStatus === 'blocked'
+                    ? 'Notifications are blocked'
+                    : notificationStatus === 'unsupported'
+                      ? 'Notifications are not supported'
+                      : 'Get notified when your order is ready'}
+              </p>
+              <p className="text-gray-400 text-xs mt-1">
+                {notificationStatus === 'enabled'
+                  ? 'You will receive a phone alert when Kitchen marks your order Ready.'
+                  : notificationStatus === 'blocked'
+                    ? 'Open browser settings and allow notifications for Fai Fai Juice.'
+                    : notificationMessage || 'Enable once to receive Ready alerts even when the app is in background.'}
+              </p>
+              {!['enabled', 'blocked', 'unsupported', 'checking'].includes(notificationStatus) && (
+                <Button
+                  onClick={handleEnableReadyNotifications}
+                  disabled={notificationStatus === 'enabling'}
+                  size="sm"
+                  className="mt-3 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  {notificationStatus === 'login_required'
+                    ? 'Login to Enable'
+                    : notificationStatus === 'enabling'
+                      ? 'Enabling...'
+                      : 'Enable Notifications'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
         {orders.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-5xl mb-4">🥤</div>
@@ -765,64 +866,267 @@ export default function MyOrders() {
             {/* Past Orders */}
             {pastOrders.length > 0 && (
               <div>
-                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">Past Orders</h2>
+                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">
+                  Past Orders
+                </h2>
                 <div className="space-y-3">
                   {pastOrders.map(order => {
                     let items: any[] = [];
-                    try { items = JSON.parse(order.items_json); } catch { /* */ }
+                    try {
+                      const parsed = JSON.parse(order.items_json);
+                      items = Array.isArray(parsed) ? parsed : [];
+                    } catch {
+                      items = [];
+                    }
+
                     const hasReviewed = reviewedOrders.has(order.id);
+                    const isExpanded = expandedPastOrderId === order.id;
+                    const completed =
+                      order.status === 'completed' ||
+                      order.delivery_status === 'delivered';
+                    const delivery = isDeliveryOrder(order);
 
                     return (
-                      <Card key={order.id} className="bg-gray-900/50 border-gray-800 p-4">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-gray-300 font-medium">#{order.id}</span>
-                            <Badge className={`${order.status === 'completed' || order.delivery_status === 'delivered' ? 'bg-gray-700' : 'bg-red-600/20 text-red-400 border border-red-600/30'} text-xs`}>
-                              {order.status === 'completed' || order.delivery_status === 'delivered' ? (
-                                <><CheckCircle className="w-3 h-3 mr-1" /> Completed</>
-                              ) : (
-                                <><XCircle className="w-3 h-3 mr-1" /> Cancelled</>
+                      <Card
+                        key={order.id}
+                        className={`bg-gray-900/50 border-gray-800 p-4 transition-colors ${
+                          isExpanded ? 'border-green-600/40 bg-gray-900' : ''
+                        }`}
+                      >
+                        {/* Tap this area to see what was ordered */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedPastOrderId(current =>
+                              current === order.id ? null : order.id
+                            )
+                          }
+                          className="w-full text-left cursor-pointer"
+                          aria-expanded={isExpanded}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-gray-300 font-medium">
+                                #{order.id}
+                              </span>
+                              <Badge
+                                className={`${
+                                  completed
+                                    ? 'bg-gray-700'
+                                    : 'bg-red-600/20 text-red-400 border border-red-600/30'
+                                } text-xs`}
+                              >
+                                {completed ? (
+                                  <>
+                                    <CheckCircle className="w-3 h-3 mr-1" />
+                                    Completed
+                                  </>
+                                ) : (
+                                  <>
+                                    <XCircle className="w-3 h-3 mr-1" />
+                                    Cancelled
+                                  </>
+                                )}
+                              </Badge>
+                            </div>
+
+                            <div className="flex items-center gap-3 pl-3">
+                              <div className="flex flex-col items-end">
+                                {order.delivery_charge > 0 && (
+                                  <span className="text-[10px] text-gray-500">
+                                    Delivery: AED {order.delivery_charge?.toFixed(2)}
+                                  </span>
+                                )}
+                                {order.tip_amount > 0 && (
+                                  <span className="text-[10px] text-green-500">
+                                    Tip: AED {order.tip_amount?.toFixed(2)}
+                                  </span>
+                                )}
+                                <span className="text-gray-300 font-semibold">
+                                  AED {order.total_amount?.toFixed(2)}
+                                </span>
+                              </div>
+
+                              <ChevronDown
+                                className={`w-5 h-5 text-gray-500 shrink-0 transition-transform ${
+                                  isExpanded ? 'rotate-180 text-green-400' : ''
+                                }`}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between mt-1 gap-3">
+                            <p className="text-gray-600 text-xs">
+                              {formatDateShort(order.created_at)} • {items.length} item
+                              {items.length > 1 ? 's' : ''}
+                            </p>
+                            <span className="text-green-500 text-xs shrink-0">
+                              {isExpanded ? 'Hide details' : 'View order'}
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Easy-to-read order details */}
+                        {isExpanded && (
+                          <div className="mt-4 pt-4 border-t border-gray-800">
+                            <div className="flex items-center justify-between mb-3">
+                              <div>
+                                <p className="text-white font-semibold">Order details</p>
+                                <p className="text-gray-500 text-xs mt-0.5">
+                                  {delivery ? 'Delivery order' : 'Pickup order'}
+                                </p>
+                              </div>
+                              <span className="text-gray-500 text-xs">
+                                {items.length} item{items.length !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+
+                            {items.length > 0 ? (
+                              <div className="space-y-2">
+                                {items.map((item: any, index: number) => {
+                                  const quantity = Number(item.quantity || 1);
+                                  const itemPrice = Number(item.price || 0);
+                                  const extras = Array.isArray(item.extras)
+                                    ? item.extras
+                                        .map((extra: any) =>
+                                          typeof extra === 'string'
+                                            ? extra
+                                            : extra?.name || ''
+                                        )
+                                        .filter(Boolean)
+                                    : [];
+
+                                  return (
+                                    <div
+                                      key={`${order.id}-item-${index}`}
+                                      className="rounded-xl bg-black/40 border border-gray-800 px-3 py-3"
+                                    >
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className="flex items-start gap-2">
+                                            <span className="inline-flex min-w-7 h-7 items-center justify-center rounded-lg bg-green-600/15 text-green-400 text-xs font-bold px-2">
+                                              {quantity}×
+                                            </span>
+                                            <div>
+                                              <p className="text-white font-medium leading-6">
+                                                {item.name || 'Item'}
+                                              </p>
+                                              {item.size && (
+                                                <p className="text-gray-500 text-xs">
+                                                  Size: {item.size}
+                                                </p>
+                                              )}
+                                              {extras.length > 0 && (
+                                                <p className="text-gray-500 text-xs mt-1">
+                                                  Extras: {extras.join(', ')}
+                                                </p>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <span className="text-gray-300 font-medium shrink-0">
+                                          AED {itemPrice.toFixed(2)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="rounded-xl bg-black/40 border border-gray-800 p-3 text-gray-500 text-sm">
+                                Item details are not available for this older order.
+                              </div>
+                            )}
+
+                            <div className="mt-3 rounded-xl bg-black/30 border border-gray-800 px-3 py-3 space-y-2 text-sm">
+                              {Number(order.service_fee || 0) > 0 && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-500">Service fee</span>
+                                  <span className="text-gray-300">
+                                    AED {Number(order.service_fee || 0).toFixed(2)}
+                                  </span>
+                                </div>
                               )}
-                            </Badge>
+
+                              {Number(order.small_order_fee || 0) > 0 && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-500">Small order fee</span>
+                                  <span className="text-gray-300">
+                                    AED {Number(order.small_order_fee || 0).toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+
+                              {Number(order.delivery_charge || 0) > 0 && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-500">Delivery</span>
+                                  <span className="text-gray-300">
+                                    AED {Number(order.delivery_charge || 0).toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+
+                              {Number(order.tip_amount || 0) > 0 && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-500">
+                                    {String(order.tip_type || '').toLowerCase() === 'rider'
+                                      ? 'Rider tip'
+                                      : 'Tip'}
+                                  </span>
+                                  <span className="text-gray-300">
+                                    AED {Number(order.tip_amount || 0).toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+
+                              {'payment_method' in order && order.payment_method && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-500">Payment</span>
+                                  <span className="text-gray-300 text-right">
+                                    {String(order.payment_method).replace(/_/g, ' ')}
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="flex justify-between gap-3 pt-2 border-t border-gray-800">
+                                <span className="text-white font-semibold">Total</span>
+                                <span className="text-green-400 font-bold">
+                                  AED {Number(order.total_amount || 0).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex flex-col items-end">
-                            {order.delivery_charge > 0 && (
-                              <span className="text-[10px] text-gray-500">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
-                            )}
-                            {order.tip_amount > 0 && (
-                              <span className="text-[10px] text-green-500">Tip: AED {order.tip_amount?.toFixed(2)}</span>
-                            )}
-                            <span className="text-gray-400 font-medium">AED {order.total_amount?.toFixed(2)}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between mt-1">
-                          <p className="text-gray-600 text-xs">
-                            {formatDateShort(order.created_at)} • {items.length} item{items.length > 1 ? 's' : ''}
-                          </p>
-                          {(order.status === 'completed' || order.delivery_status === 'delivered') && (
-                            hasReviewed ? (
+                        )}
+
+                        {/* Feedback is separate from opening/closing the card */}
+                        {completed && (
+                          <div className="mt-3 flex justify-end">
+                            {hasReviewed ? (
                               <span className="text-green-500 text-xs flex items-center gap-1">
                                 <CheckCircle className="w-3 h-3" /> Reviewed
                               </span>
                             ) : (
                               <button
+                                type="button"
                                 onClick={() => navigate(`/feedback?order=${order.id}`)}
                                 className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
                               >
                                 <MessageSquare className="w-3 h-3" /> Give Feedback
                               </button>
-                            )
-                          )}
-                        </div>
-                        {/* Order Again button for completed orders */}
-                        {(order.status === 'completed' || order.delivery_status === 'delivered') && (
+                            )}
+                          </div>
+                        )}
+
+                        {/* Reorder stays obvious and separate */}
+                        {completed && (
                           <div className="mt-3 pt-3 border-t border-gray-800">
                             <Button
                               onClick={() => handleOrderAgain(order)}
                               size="sm"
-                              className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                              className="w-full bg-green-600 hover:bg-green-700 text-white cursor-pointer"
                             >
-                              <ShoppingCart className="w-4 h-4 mr-2" /> Order Again
+                              <ShoppingCart className="w-4 h-4 mr-2" />
+                              Order Again
                             </Button>
                           </div>
                         )}
