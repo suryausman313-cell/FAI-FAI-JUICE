@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client } from '@/lib/api';
 import { addDealToCart } from '@/lib/cart-store';
+import { useTranslation } from '@/lib/i18n';
 
 interface DealItem {
   id: number;
@@ -38,6 +39,7 @@ interface Deal {
 
 export default function Deals() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
@@ -105,7 +107,7 @@ export default function Deals() {
       const itemIds = selections[i] || [];
       const items = itemIds.map(id => {
         const item = cat.available_items.find(it => it.id === id);
-        return { id, name: item?.name || 'Unknown' };
+        return { id, name: item?.name || t('home.unknown') };
       });
       selectedItems.push({ categoryName: cat.category_name, items });
     });
@@ -118,7 +120,7 @@ export default function Deals() {
     });
 
     window.dispatchEvent(new Event('cart-updated'));
-    toast.success(`${selectedDeal.name} added to cart!`);
+    toast.success(`${selectedDeal.name} ${t('deals.added')}`);
     setSelectedDeal(null);
     navigate('/cart');
   }
@@ -171,10 +173,10 @@ export default function Deals() {
                 <div key={catIndex}>
                   <div className="flex items-center justify-between mb-3">
                     <h2 className="text-white font-semibold">
-                      Choose {cat.required_quantity} {cat.category_name}
+                      {t('deals.choose')} {cat.required_quantity} {cat.category_name}
                     </h2>
                     <span className={`text-xs px-2 py-1 rounded-full ${remaining === 0 ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
-                      {remaining === 0 ? '✓ Done' : `${remaining} more`}
+                      {remaining === 0 ? `✓ ${t('deals.done')}` : `${remaining} ${t('deals.more')}`}
                     </span>
                   </div>
 
@@ -230,7 +232,7 @@ export default function Deals() {
               }`}
             >
               <ShoppingBag className="w-5 h-5 mr-2" />
-              {isAllSelected() ? `Add to Cart - AED ${(selectedDeal.discounted_price || selectedDeal.price).toFixed(2)}` : 'Select all required items'}
+              {isAllSelected() ? `${t('menu.add_to_cart')} - AED ${(selectedDeal.discounted_price || selectedDeal.price).toFixed(2)}` : t('deals.select_required')}
             </Button>
           </div>
         </div>
@@ -246,13 +248,13 @@ export default function Deals() {
           <button onClick={() => navigate('/')} className="text-gray-400 hover:text-white cursor-pointer">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-white text-2xl font-bold">Deals & Combos</h1>
+          <h1 className="text-white text-2xl font-bold">{t('deals.title')}</h1>
         </div>
 
         {deals.length === 0 ? (
           <Card className="bg-gray-900 border-gray-800 p-8 text-center">
             <Package className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-400">No deals available right now</p>
+            <p className="text-gray-400">{t('deals.none')}</p>
           </Card>
         ) : (
           <div className="space-y-4">

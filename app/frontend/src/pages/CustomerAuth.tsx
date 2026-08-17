@@ -17,7 +17,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
-import { enableCustomerPush, requestCustomerPushPermissionOnLogin } from '@/lib/customer-push';
+import { useTranslation } from '@/lib/i18n';
+import { LanguageSwitcher } from '@/components/LanguagePicker';
 
 type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
 
@@ -208,6 +209,7 @@ function PinInput({
 }
 
 export default function CustomerAuth() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const manageMode = searchParams.get('manage') === '1';
@@ -334,19 +336,6 @@ export default function CustomerAuth() {
     return phone;
   }
 
-  async function finishCustomerPushAfterAuth(
-    permissionPromise: Promise<NotificationPermission | 'unsupported'>,
-  ): Promise<void> {
-    try {
-      const permission = await permissionPromise;
-      if (permission === 'granted') {
-        await enableCustomerPush();
-      }
-    } catch {
-      // Push setup must never block login/signup.
-    }
-  }
-
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
     const phone = validatePhoneOrShow(loginPhone);
@@ -356,8 +345,6 @@ export default function CustomerAuth() {
       toast.error('PIN must be exactly 4 digits.');
       return;
     }
-
-    const notificationPermission = requestCustomerPushPermissionOnLogin();
 
     setLoading(true);
     try {
@@ -369,7 +356,6 @@ export default function CustomerAuth() {
       setRegisteredOnThisDevice(true);
       setActiveCustomer(customer);
       setLoginPin('');
-      await finishCustomerPushAfterAuth(notificationPermission);
       toast.success('Login successful');
       window.location.replace('/');
     } catch (error) {
@@ -405,8 +391,6 @@ export default function CustomerAuth() {
       return;
     }
 
-    const notificationPermission = requestCustomerPushPermissionOnLogin();
-
     setLoading(true);
     try {
       const result = await postCustomerAuth<AuthResponse>(
@@ -424,7 +408,6 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setSignupPin('');
       setSignupConfirmPin('');
-      await finishCustomerPushAfterAuth(notificationPermission);
       toast.success('Account created successfully');
       window.location.replace('/');
     } catch (error) {
@@ -551,7 +534,7 @@ export default function CustomerAuth() {
           <h1 className="text-4xl font-extrabold">
             Fai Fai <span className="text-red-600">Juice</span>
           </h1>
-          <p className="mt-2 text-gray-500">Customer Account</p>
+          <p className="mt-2 text-gray-500">{t('account.customer_account')}</p>
         </div>
 
         {sessionChecking && (
@@ -566,7 +549,7 @@ export default function CustomerAuth() {
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-600/15">
                 <ShieldCheck className="h-9 w-9 text-green-500" />
               </div>
-              <h2 className="text-2xl font-bold">Account logged in</h2>
+              <h2 className="text-2xl font-bold">{t('account.logged_in')}</h2>
               <p className="mt-2 text-lg text-white">{activeName}</p>
               <p className="text-sm text-gray-400">{activePhone}</p>
             </div>
@@ -672,7 +655,7 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? 'Logging in…' : 'Login'}
+              {loading ? t('account.logging_in') : t('account.login')}
             </Button>
 
             <button
@@ -716,7 +699,7 @@ export default function CustomerAuth() {
         {!sessionChecking && !activeCustomer && mode === 'signup' && !registeredOnThisDevice && (
           <form onSubmit={handleSignup} className={cardClass}>
             <div>
-              <h2 className="text-xl font-bold">Create Customer Account</h2>
+              <h2 className="text-xl font-bold">{t('account.create')}</h2>
               <p className="mt-2 text-sm text-gray-400">
                 Enter your mobile number and create a private 4-digit PIN.
               </p>
@@ -773,7 +756,7 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? 'Creating account…' : 'Create Account'}
+              {loading ? t('account.creating') : t('account.create_button')}
             </Button>
           </form>
         )}

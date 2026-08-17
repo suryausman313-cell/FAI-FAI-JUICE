@@ -2,8 +2,10 @@ import { Link, useLocation } from 'react-router-dom';
 import { CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import CustomerLayout from '@/components/CustomerLayout';
+import { useTranslation } from '@/lib/i18n';
 
 export default function OrderConfirmation() {
+  const { t } = useTranslation();
   const location = useLocation();
   const orderId = location.state?.orderId;
 
@@ -13,12 +15,12 @@ export default function OrderConfirmation() {
         <div className="w-20 h-20 rounded-full bg-green-600/20 flex items-center justify-center mb-6">
           <CheckCircle className="w-12 h-12 text-green-500" />
         </div>
-        <h1 className="text-white text-3xl font-bold mb-4">Order Confirmed!</h1>
+        <h1 className="text-white text-3xl font-bold mb-4">{t('confirmation.title')}</h1>
         {orderId && (
           <p className="text-green-400 font-semibold text-lg mb-2">Order #{orderId}</p>
         )}
         <p className="text-gray-400 max-w-md mb-8 text-lg">
-          Thank you! Your order has been received. Please collect your order from Vita Napoli at your selected pickup time.
+          {t('confirmation.message')}
         </p>
         <div className="flex gap-4">
           <Link to="/my-orders">

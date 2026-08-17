@@ -961,7 +961,7 @@ export default function MyOrders() {
                               {items.length > 1 ? 's' : ''}
                             </p>
                             <span className="text-green-500 text-xs shrink-0">
-                              {isExpanded ? 'Hide details' : 'View order'}
+                              {isExpanded ? t('orders.hide_details') : t('orders.view_order')}
                             </span>
                           </div>
                         </button>
@@ -971,9 +971,9 @@ export default function MyOrders() {
                           <div className="mt-4 pt-4 border-t border-gray-800">
                             <div className="flex items-center justify-between mb-3">
                               <div>
-                                <p className="text-white font-semibold">Order details</p>
+                                <p className="text-white font-semibold">{t('orders.order_details')}</p>
                                 <p className="text-gray-500 text-xs mt-0.5">
-                                  {delivery ? 'Delivery order' : 'Pickup order'}
+                                  {delivery ? t('orders.delivery_order') : t('orders.pickup_order')}
                                 </p>
                               </div>
                               <span className="text-gray-500 text-xs">
@@ -1034,14 +1034,14 @@ export default function MyOrders() {
                               </div>
                             ) : (
                               <div className="rounded-xl bg-black/40 border border-gray-800 p-3 text-gray-500 text-sm">
-                                Item details are not available for this older order.
+                                {t('orders.item_details_unavailable')}
                               </div>
                             )}
 
                             <div className="mt-3 rounded-xl bg-black/30 border border-gray-800 px-3 py-3 space-y-2 text-sm">
                               {Number(order.service_fee || 0) > 0 && (
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Service fee</span>
+                                  <span className="text-gray-500">{t('orders.service_fee')}</span>
                                   <span className="text-gray-300">
                                     AED {Number(order.service_fee || 0).toFixed(2)}
                                   </span>
@@ -1050,7 +1050,7 @@ export default function MyOrders() {
 
                               {Number(order.small_order_fee || 0) > 0 && (
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Small order fee</span>
+                                  <span className="text-gray-500">{t('orders.small_order_fee')}</span>
                                   <span className="text-gray-300">
                                     AED {Number(order.small_order_fee || 0).toFixed(2)}
                                   </span>
@@ -1081,7 +1081,7 @@ export default function MyOrders() {
 
                               {'payment_method' in order && order.payment_method && (
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Payment</span>
+                                  <span className="text-gray-500">{t('orders.payment')}</span>
                                   <span className="text-gray-300 text-right">
                                     {String(order.payment_method).replace(/_/g, ' ')}
                                   </span>
@@ -1089,7 +1089,7 @@ export default function MyOrders() {
                               )}
 
                               <div className="flex justify-between gap-3 pt-2 border-t border-gray-800">
-                                <span className="text-white font-semibold">Total</span>
+                                <span className="text-white font-semibold">{t('orders.total')}</span>
                                 <span className="text-green-400 font-bold">
                                   AED {Number(order.total_amount || 0).toFixed(2)}
                                 </span>

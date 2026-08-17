@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes, getItemExtras } from '@/lib/api';
+import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes, getItemExtras, localizedMenuText, localizedMenuDescription } from '@/lib/api';
 import { getItemPriceBreakdown } from '@/lib/discounts';
 import { addToCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
@@ -37,7 +37,7 @@ function setMenuCache(data: Omit<MenuCache, 'timestamp'>) {
 }
 
 export default function Menu() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const cached = getMenuCache();
   const [categories, setCategories] = useState<Category[]>(cached?.categories || []);
   const [menuItems, setMenuItems] = useState<MenuItem[]>(cached?.menuItems || []);
@@ -153,7 +153,7 @@ export default function Menu() {
                       : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
                   }`}
                 >
-                  {cat.name}
+                  {localizedMenuText(cat, language)}
                 </button>
               ))}
             </div>
@@ -175,13 +175,13 @@ export default function Menu() {
                     {item.image_url && (
                       <img
                         src={item.image_url}
-                        alt={item.name}
+                        alt={localizedMenuText(item, language)}
                         className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
                         loading="lazy"
                       />
                     )}
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-white font-semibold text-lg truncate">{item.name}</h3>
+                      <h3 className="text-white font-semibold text-lg truncate">{localizedMenuText(item, language)}</h3>
                       {item.description && (
                         <p className="text-gray-400 text-sm mt-1 line-clamp-2">{item.description}</p>
                       )}
@@ -240,13 +240,13 @@ export default function Menu() {
                 {selectedItem.image_url && (
                   <img
                     src={selectedItem.image_url}
-                    alt={selectedItem.name}
+                    alt={localizedMenuText(selectedItem, language)}
                     className="w-full h-48 object-cover rounded-xl"
                   />
                 )}
 
                 {selectedItem.description && (
-                  <p className="text-gray-400">{selectedItem.description}</p>
+                  <p className="text-gray-400">{localizedMenuDescription(selectedItem, language)}</p>
                 )}
 
                 {(() => {
@@ -313,7 +313,7 @@ export default function Menu() {
                               checked={selectedExtras.some(e => e.id === extra.id)}
                               onCheckedChange={() => toggleExtra(extra)}
                             />
-                            <span>{extra.name}</span>
+                            <span>{localizedMenuText(extra, language)}</span>
                           </div>
                           <span className="text-red-400 font-medium">
                             +AED {Number(extra.price || 0).toFixed(2)}

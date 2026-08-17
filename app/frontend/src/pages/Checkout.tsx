@@ -51,16 +51,6 @@ function formatScheduleTime(value: string): string {
   return `${displayHours}:${String(minutes).padStart(2, '0')} ${suffix}`;
 }
 
-
-type SavedLocation = {
-  id: number;
-  label: string;
-  address_text: string;
-  area_name: string;
-  latitude: number;
-  longitude: number;
-};
-
 export default function Checkout() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -76,11 +66,6 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
-  const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
-  const [savedLocationsLoading, setSavedLocationsLoading] = useState(false);
-  const [saveLocationForNextTime, setSaveLocationForNextTime] = useState(false);
-  const [saveLocationLabel, setSaveLocationLabel] = useState('Home');
-  const [savingLocation, setSavingLocation] = useState(false);
 
   // Field-level validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -120,8 +105,7 @@ export default function Checkout() {
   const [nearCharge, setNearCharge] = useState(5);
   const [farCharge, setFarCharge] = useState(15);
   const [zoneName, setZoneName] = useState('');
-  const [roadDistanceKm, setRoadDistanceKm] = useState<number | null>(null);
-  const [deliveryZones, setDeliveryZones] = useState<{zone_name: string; min_distance_km: number; max_distance_km: number; charge: number; zone_type?: string}[]>([]);
+  const [deliveryZones, setDeliveryZones] = useState<{zone_name: string; min_distance_km: number; max_distance_km: number; charge: number}[]>([]);
 
   // Tip
   const [tipAmount, setTipAmount] = useState(0);
@@ -157,10 +141,7 @@ export default function Checkout() {
     setCart(getCart());
     loadDeliverySettings();
     loadActivePromoOffers();
-    if (isLoggedIn) {
-      void loadSavedLocations();
-    }
-  }, [isLoggedIn]);
+  }, []);
 
   const deliveryAvailableNow = deliveryEnabled && (
     !deliveryScheduleEnabled ||
@@ -301,124 +282,6 @@ export default function Checkout() {
     markerRef.current = marker;
   }
 
-  function customerAuthHeaders() {
-    const token = localStorage.getItem('vita_customer_token') || '';
-    return { Authorization: `Bearer ${token}` };
-  }
-
-  async function loadSavedLocations() {
-    if (!localStorage.getItem('vita_customer_token')) {
-      setSavedLocations([]);
-      return;
-    }
-
-    setSavedLocationsLoading(true);
-    try {
-      const response = await axios.get(
-        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations`,
-        { headers: customerAuthHeaders(), timeout: 15000 },
-      );
-      setSavedLocations(Array.isArray(response?.data?.items) ? response.data.items : []);
-    } catch {
-      // Saved locations are optional and must never block checkout.
-      setSavedLocations([]);
-    } finally {
-      setSavedLocationsLoading(false);
-    }
-  }
-
-  async function useSavedLocation(location: SavedLocation) {
-    const lat = Number(location.latitude);
-    const lng = Number(location.longitude);
-
-    setCustomerLat(lat);
-    setCustomerLng(lng);
-    setDeliveryAddress(location.address_text || '');
-    setLocationShared(true);
-
-    if (markerRef.current) {
-      markerRef.current.setLatLng([lat, lng]);
-    }
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.setView([lat, lng], 15);
-    }
-
-    // Important: never reuse an old delivery fee. Recalculate current blocked
-    // area, road distance and delivery fee from the backend every time.
-    await handleLocationSelected(lat, lng);
-    toast.success(`${location.label} selected`);
-  }
-
-  async function deleteSavedLocation(locationId: number) {
-    try {
-      await axios.delete(
-        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations/${locationId}`,
-        { headers: customerAuthHeaders(), timeout: 15000 },
-      );
-      setSavedLocations(prev => prev.filter(item => item.id !== locationId));
-      toast.success('Saved location deleted');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Could not delete saved location');
-    }
-  }
-
-  async function renameSavedLocation(location: SavedLocation) {
-    const current = location.label || 'Saved Location';
-    const nextLabel = window.prompt('Location name', current)?.trim();
-    if (!nextLabel || nextLabel === current) return;
-
-    try {
-      const response = await axios.patch(
-        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations/${location.id}`,
-        { label: nextLabel },
-        { headers: customerAuthHeaders(), timeout: 15000 },
-      );
-      setSavedLocations(prev =>
-        prev.map(item => item.id === location.id ? response.data : item),
-      );
-      toast.success('Location name updated');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Could not update saved location');
-    }
-  }
-
-  async function saveSelectedLocationIfRequested() {
-    if (
-      !saveLocationForNextTime ||
-      orderType !== 'delivery' ||
-      customerLat === null ||
-      customerLng === null ||
-      !localStorage.getItem('vita_customer_token')
-    ) {
-      return;
-    }
-
-    setSavingLocation(true);
-    try {
-      const response = await axios.post(
-        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/customer-saved-locations`,
-        {
-          label: saveLocationLabel.trim() || 'Saved Location',
-          address_text: deliveryAddress.trim(),
-          area_name: zoneName || '',
-          latitude: customerLat,
-          longitude: customerLng,
-        },
-        { headers: customerAuthHeaders(), timeout: 15000 },
-      );
-
-      setSavedLocations(prev => [response.data, ...prev].slice(0, 10));
-      setSaveLocationForNextTime(false);
-    } catch (error: any) {
-      const message =
-        error?.response?.data?.detail ||
-        'Order was placed, but this location could not be saved.';
-      toast.warning(message);
-    } finally {
-      setSavingLocation(false);
-    }
-  }
-
   async function handleLocationSelected(lat: number, lng: number) {
     setCustomerLat(lat);
     setCustomerLng(lng);
@@ -437,31 +300,31 @@ export default function Checkout() {
         },
       });
       const result = res?.data;
-      setRoadDistanceKm(
-        typeof result?.distance_km === 'number' ? result.distance_km : null,
-      );
       if (result?.available) {
         setDeliveryZoneError('');
-        setCalculatedDeliveryCharge(Number(result.charge) || 0);
+        setCalculatedDeliveryCharge(result.charge || 0);
         setZoneName(result.zone_name || '');
       } else {
-        setDeliveryZoneError(
-          result?.message || 'Delivery is not available at this location.',
-        );
+        setDeliveryZoneError(result?.message || `Delivery not available in your area (${result?.distance_km?.toFixed(1) || '?'} km away).`);
         setCalculatedDeliveryCharge(0);
         setZoneName('');
       }
-    } catch (error: any) {
-      // Do NOT fall back to straight-line distance. That can undercharge routes
-      // that require a long road detour or accidentally allow a blocked country/area.
-      setRoadDistanceKm(null);
-      setCalculatedDeliveryCharge(0);
-      setZoneName('');
-      setDeliveryZoneError(
-        error?.data?.detail ||
-          error?.message ||
-          'Could not calculate the road route. Please try your location again.',
-      );
+    } catch {
+      // Fallback to client-side near/far calculation if API fails
+      const distance = getDistanceKm(restaurantLat, restaurantLng, lat, lng);
+      if (distance <= nearRadius) {
+        setDeliveryZoneError('');
+        setCalculatedDeliveryCharge(nearCharge);
+        setZoneName('Near Zone');
+      } else if (distance <= farRadius) {
+        setDeliveryZoneError('');
+        setCalculatedDeliveryCharge(farCharge);
+        setZoneName('Far Zone');
+      } else {
+        setDeliveryZoneError(`Delivery not available in your area (${distance.toFixed(1)} km away). We deliver within ${farRadius} km.`);
+        setCalculatedDeliveryCharge(0);
+        setZoneName('');
+      }
     }
   }
 
@@ -560,7 +423,7 @@ export default function Checkout() {
       // Load delivery zones from backend for map legend
       try {
         const zonesRes = await client.apiCall.invoke({
-          url: '/api/v1/entities/delivery_zones?query={"is_active":true,"zone_type":"distance"}&sort=min_distance_km&limit=50',
+          url: '/api/v1/entities/delivery_zones?query={"is_active":true}&sort=min_distance_km&limit=50',
           method: 'GET',
         });
         const zones = zonesRes?.data?.items || [];
@@ -756,11 +619,11 @@ export default function Checkout() {
   // Determine available payment methods based on order type
   const availablePaymentMethods: { value: string; label: string; description: string }[] = [];
   if (orderType === 'pickup') {
-    if (cashEnabledPickup) availablePaymentMethods.push({ value: 'cash', label: `💵 Cash on Pickup`, description: 'Pay cash when you collect your order' });
-    if (cardEnabledPickup) availablePaymentMethods.push({ value: 'card', label: `💳 Card on Pickup`, description: 'Pay by card when you collect' });
+    if (cashEnabledPickup) availablePaymentMethods.push({ value: 'cash', label: `💵 ${t('checkout.cash_on_pickup')}`, description: t('checkout.pay_cash_collect') });
+    if (cardEnabledPickup) availablePaymentMethods.push({ value: 'card', label: `💳 ${t('checkout.card_on_pickup')}`, description: t('checkout.pay_card_collect') });
   } else {
-    if (cashEnabledDelivery) availablePaymentMethods.push({ value: 'cash', label: `💵 Cash on Delivery`, description: 'Pay cash when you receive your order' });
-    if (cardEnabledDelivery) availablePaymentMethods.push({ value: 'card', label: `💳 Card on Delivery`, description: 'Pay by card when you receive' });
+    if (cashEnabledDelivery) availablePaymentMethods.push({ value: 'cash', label: `💵 ${t('checkout.cash_on_delivery')}`, description: t('checkout.pay_cash_rider') });
+    if (cardEnabledDelivery) availablePaymentMethods.push({ value: 'card', label: `💳 ${t('checkout.card_on_delivery')}`, description: t('checkout.pay_card_rider') });
   }
 
   // Allowed country codes from admin settings
@@ -1154,76 +1017,6 @@ export default function Checkout() {
             {/* Delivery Map Location */}
             {orderType === 'delivery' && (
               <>
-                {isLoggedIn && (
-                  <div className="rounded-xl border border-gray-700 bg-gray-900/70 p-3">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <div>
-                        <p className="text-white text-sm font-semibold">Saved Locations</p>
-                        <p className="text-gray-500 text-xs">Choose one or use a new pin below · max 10</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void loadSavedLocations()}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-
-                    {savedLocationsLoading ? (
-                      <p className="text-gray-500 text-xs">Loading saved locations...</p>
-                    ) : savedLocations.length === 0 ? (
-                      <p className="text-gray-500 text-xs">No saved locations yet.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {savedLocations.map(location => (
-                          <div
-                            key={location.id}
-                            className="rounded-lg border border-gray-700 bg-black/40 p-3"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void useSavedLocation(location)}
-                                className="text-left flex-1"
-                              >
-                                <p className="text-white text-sm font-medium">📍 {location.label}</p>
-                                <p className="text-gray-500 text-xs mt-1">
-                                  {location.address_text || location.area_name || 'Saved delivery pin'}
-                                </p>
-                              </button>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => void renameSavedLocation(location)}
-                                  className="text-xs text-blue-400 hover:text-blue-300"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void deleteSavedLocation(location.id)}
-                                  className="text-xs text-red-400 hover:text-red-300"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() => void useSavedLocation(location)}
-                              className="mt-2 w-full bg-gray-800 hover:bg-gray-700 text-white"
-                            >
-                              Use this location
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 <div id="delivery-map">
                   <Label className="text-gray-300 mb-2 block">Select Delivery Location *</Label>
                   <div className="flex items-center gap-2 mb-2">
@@ -1280,7 +1073,21 @@ export default function Checkout() {
                     className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700"
                     style={{ zIndex: 1 }}
                   />
-                  {/* Customer sees only the final charge for the selected delivery pin. */}
+                  {/* Zone legend */}
+                  <div className="flex flex-wrap gap-3 mt-2 text-xs">
+                    {deliveryZones.length > 0 ? (
+                      deliveryZones.map((z, i) => (
+                        <span key={i} className={`${i === 0 ? 'text-green-400' : i === 1 ? 'text-yellow-400' : 'text-orange-400'}`}>
+                          ● {z.zone_name} ({z.min_distance_km}-{z.max_distance_km} km = AED {z.charge})
+                        </span>
+                      ))
+                    ) : (
+                      <>
+                        <span className="text-green-400">● Near zone (AED {nearCharge})</span>
+                        <span className="text-yellow-400">● Far zone (AED {farCharge})</span>
+                      </>
+                    )}
+                  </div>
                   {/* Location permission denied - friendly guidance */}
                   {locationPermissionDenied && !locationShared && (
                     <div className="mt-2 p-3 rounded-lg bg-yellow-600/10 border border-yellow-600/30">
@@ -1331,11 +1138,7 @@ export default function Checkout() {
                   {locationShared && !deliveryZoneError && (
                     <div className="mt-2 flex items-center gap-2 text-green-400 text-sm">
                       <CheckCircle className="w-4 h-4" />
-                      <span>
-                        Delivery available
-                        {roadDistanceKm !== null ? ` · ${roadDistanceKm.toFixed(1)} km away` : ''}
-                        {` · Delivery AED ${Number(calculatedDeliveryCharge || 0).toFixed(2)}`}
-                      </span>
+                      <span>Location selected{zoneName ? ` (${zoneName})` : ''} — Delivery fee: AED {calculatedDeliveryCharge}</span>
                     </div>
                   )}
                   {deliveryZoneError && (
@@ -1345,55 +1148,6 @@ export default function Checkout() {
                   )}
                   {showErrors && errors.location && !deliveryZoneError && (
                     <p className="text-red-400 text-xs mt-2">⚠️ {errors.location}</p>
-                  )}
-                  {locationShared && !deliveryZoneError && isLoggedIn && (
-                    <div className="mt-3 rounded-lg border border-gray-700 bg-gray-900 p-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={saveLocationForNextTime}
-                          onChange={e => setSaveLocationForNextTime(e.target.checked)}
-                          disabled={savedLocations.length >= 10}
-                          className="w-4 h-4"
-                        />
-                        <span className="text-white text-sm">Save this location for next time</span>
-                      </label>
-
-                      {savedLocations.length >= 10 && (
-                        <p className="text-yellow-400 text-xs mt-2">
-                          You already have 10 saved locations. Delete one to save another.
-                        </p>
-                      )}
-
-                      {saveLocationForNextTime && savedLocations.length < 10 && (
-                        <div className="mt-3">
-                          <Label className="text-gray-400 text-xs">Location name</Label>
-                          <div className="grid grid-cols-3 gap-2 mt-2">
-                            {['Home', 'Work', 'Other'].map(label => (
-                              <button
-                                key={label}
-                                type="button"
-                                onClick={() => setSaveLocationLabel(label)}
-                                className={`rounded-lg border px-3 py-2 text-xs ${
-                                  saveLocationLabel === label
-                                    ? 'border-blue-500 bg-blue-500/10 text-blue-300'
-                                    : 'border-gray-700 text-gray-400'
-                                }`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                          <Input
-                            value={saveLocationLabel}
-                            onChange={e => setSaveLocationLabel(e.target.value)}
-                            maxLength={60}
-                            placeholder="e.g. Home, Work, Sister Home"
-                            className="bg-black border-gray-700 text-white mt-2"
-                          />
-                        </div>
-                      )}
-                    </div>
                   )}
                 </div>
                 <div>
@@ -1650,7 +1404,7 @@ export default function Checkout() {
                 </div>
               )}
               <div className="flex justify-between pt-2 border-t border-gray-700">
-                <span className="text-white font-semibold">Total</span>
+                <span className="text-white font-semibold">{t('checkout.total')}</span>
                 <span className="text-red-400 font-bold text-lg">AED {total.toFixed(2)}</span>
               </div>
             </div>

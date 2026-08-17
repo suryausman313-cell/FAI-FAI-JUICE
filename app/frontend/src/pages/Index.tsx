@@ -4,7 +4,7 @@ import { ShoppingBag, Clock, Phone, MapPin, ChevronRight, Tag, MessageSquare, St
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes } from '@/lib/api';
+import { client, MenuItem, Category, RestaurantSettings, Offer, getItemSizes, localizedMenuText, localizedMenuDescription } from '@/lib/api';
 import { getItemPriceBreakdown, isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
@@ -51,7 +51,7 @@ function setCachedData(data: Omit<CachedData, 'timestamp'>) {
 
 export default function Index() {
   const navigate = useNavigate();
-  const { t, isRTL } = useTranslation();
+  const { t, isRTL, language } = useTranslation();
 
   // Initialize from cache for instant display
   const cached = getCachedData();
@@ -122,7 +122,7 @@ export default function Index() {
       case 'open': return t('home.open_now');
       case 'busy': return t('home.busy');
       case 'closed': return t('home.closed');
-      default: return 'Unknown';
+      default: return t('home.unknown');
     }
   }
 
@@ -196,7 +196,7 @@ export default function Index() {
                 {settings?.busy_message || 'We are currently very busy. Your order may take longer than usual.'}
               </p>
               {settings?.estimated_wait_time && (
-                <p className="text-yellow-500/70 text-xs mt-1">Estimated wait: {settings.estimated_wait_time}</p>
+                <p className="text-yellow-500/70 text-xs mt-1">{t('home.estimated_wait')}: {settings.estimated_wait_time}</p>
               )}
             </div>
           )}
@@ -265,7 +265,7 @@ export default function Index() {
             className="bg-orange-600 hover:bg-orange-700 text-white h-14 rounded-xl font-semibold cursor-pointer flex flex-col items-center justify-center gap-0.5"
           >
             <Package className="w-5 h-5" />
-            <span className="text-[10px]">Deals</span>
+            <span className="text-[10px]">{t('home.deals')}</span>
           </Button>
           )}
           {settings?.show_orders_action !== false && (
@@ -316,7 +316,7 @@ export default function Index() {
                     {item.image_url ? (
                       <img
                         src={customerImageUrl(item.image_url)}
-                        alt={item.name}
+                        alt={localizedMenuText(item, language)}
                         className="w-full h-28 object-cover"
                         loading="lazy"
                         onError={(event) => {
@@ -341,7 +341,7 @@ export default function Index() {
                     )}
                   </div>
                   <div className="p-3">
-                    <h3 className="text-white text-sm font-semibold truncate">{item.name}</h3>
+                    <h3 className="text-white text-sm font-semibold truncate">{localizedMenuText(item, language)}</h3>
                     {lowestBreakdown.discountActive ? (
                       <div className="mt-1">
                         <div className="flex items-center gap-1 flex-wrap">

@@ -29,7 +29,7 @@ export default function Contact() {
   return (
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-8 max-w-2xl mx-auto">
-        <h1 className="text-white text-3xl font-bold mb-8 text-center">Contact Us</h1>
+        <h1 className="text-white text-3xl font-bold mb-8 text-center">{t('contact.title')}</h1>
 
         <div className="space-y-6">
           <div className="p-6 rounded-2xl bg-gray-900 border border-gray-800">
@@ -38,7 +38,7 @@ export default function Contact() {
                 <PhoneIcon className="w-6 h-6 text-green-500" />
               </div>
               <div>
-                <h3 className="text-white font-semibold">Phone</h3>
+                <h3 className="text-white font-semibold">{t('contact.phone')}</h3>
                 <a href={`tel:${phone}`} className="text-red-400 hover:text-red-300 text-lg">
                   {phone}
                 </a>
@@ -52,7 +52,7 @@ export default function Contact() {
                 <MapPin className="w-6 h-6 text-red-500" />
               </div>
               <div>
-                <h3 className="text-white font-semibold">Address</h3>
+                <h3 className="text-white font-semibold">{t('contact.address')}</h3>
                 <p className="text-gray-400 text-lg">{address}</p>
               </div>
             </div>
@@ -64,7 +64,7 @@ export default function Contact() {
                 <Clock className="w-6 h-6 text-yellow-500" />
               </div>
               <div>
-                <h3 className="text-white font-semibold">Opening Hours</h3>
+                <h3 className="text-white font-semibold">{t('contact.hours')}</h3>
                 <p className="text-gray-400 text-lg">{hours}</p>
               </div>
             </div>
@@ -72,9 +72,9 @@ export default function Contact() {
 
           {/* Location Map Link */}
           <div className="p-6 rounded-2xl bg-red-600/5 border border-red-600/20 text-center">
-            <h3 className="text-white font-semibold mb-2">Find Us</h3>
+            <h3 className="text-white font-semibold mb-2">{t('contact.find_us')}</h3>
             <p className="text-gray-400 mb-3">
-              We offer both pickup and delivery orders.
+              {t('contact.pickup_delivery')}
             </p>
             <a
               href="https://www.google.com/maps/search/?api=1&query=25.2747,56.3450"
@@ -82,7 +82,7 @@ export default function Contact() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
-              <MapPin className="w-4 h-4" /> Open in Google Maps
+              <MapPin className="w-4 h-4" /> {t('contact.open_maps')}
             </a>
           </div>
         </div>

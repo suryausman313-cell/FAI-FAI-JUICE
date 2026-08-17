@@ -104,7 +104,7 @@ export default function Feedback() {
         },
       });
       setSubmitted(true);
-      toast.success('Thank you for your feedback! 🎉');
+      toast.success(`${t('feedback.thank_you')} 🎉`);
     } catch (e: any) {
       toast.error(e?.data?.detail || e?.message || 'Failed to submit feedback');
     } finally {
@@ -128,9 +128,9 @@ export default function Feedback() {
       <CustomerLayout>
         <div className="bg-black min-h-screen px-4 py-12 max-w-lg mx-auto flex flex-col items-center justify-center text-center">
           <div className="text-5xl mb-4">📝</div>
-          <h2 className="text-white text-xl font-bold mb-2">Give Feedback</h2>
+          <h2 className="text-white text-xl font-bold mb-2">{t('orders.give_feedback')}</h2>
           <p className="text-gray-400 mb-6">
-            You can give feedback on your completed orders. Go to My Orders and tap "Give Feedback" on any completed order.
+            {t('feedback.completed_hint')}
           </p>
           <Button onClick={() => navigate('/my-orders')} className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
             Go to My Orders

@@ -7,7 +7,7 @@ import { client, Feedback } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 
 export default function Reviews() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [reviews, setReviews] = useState<Feedback[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +62,7 @@ export default function Reviews() {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     if (days < 7) return `${days}d ago`;
-    return new Date(dateStr).toLocaleDateString();
+    return new Date(dateStr).toLocaleDateString(language === 'ar' ? 'ar-AE' : 'en-AE');
   }
 
   return (
@@ -73,7 +73,7 @@ export default function Reviews() {
           <Button variant="ghost" onClick={() => navigate('/')} className="text-gray-400 p-2 cursor-pointer">
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <h1 className="text-white text-2xl font-bold">Customer Reviews</h1>
+          <h1 className="text-white text-2xl font-bold">{t('reviews.title')}</h1>
         </div>
 
         {/* Rating Summary */}
@@ -88,18 +88,18 @@ export default function Reviews() {
                 />
               ))}
             </div>
-            <p className="text-gray-400 text-sm">{reviews.length} review{reviews.length !== 1 ? 's' : ''}</p>
+            <p className="text-gray-400 text-sm">{reviews.length} {reviews.length === 1 ? t('reviews.review') : t('reviews.reviews')}</p>
           </div>
         )}
 
         {/* Reviews List */}
         {loading ? (
-          <div className="text-center text-gray-400 py-12">Loading reviews...</div>
+          <div className="text-center text-gray-400 py-12">{t('reviews.loading')}</div>
         ) : reviews.length === 0 ? (
           <div className="text-center py-12">
             <div className="text-5xl mb-4">⭐</div>
-            <p className="text-gray-400">No reviews yet</p>
-            <p className="text-gray-600 text-sm mt-1">Be the first to leave a review!</p>
+            <p className="text-gray-400">{t('reviews.no_reviews')}</p>
+            <p className="text-gray-600 text-sm mt-1">{t('reviews.first')}</p>
           </div>
         ) : (
           <div className="space-y-4">

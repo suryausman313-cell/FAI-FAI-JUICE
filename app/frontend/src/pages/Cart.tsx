@@ -174,7 +174,7 @@ export default function Cart() {
               <span className="text-gray-300 text-lg">{t('cart.total')}</span>
               <span className="text-white text-2xl font-bold">{t('common.aed')} {subtotal.toFixed(2)}</span>
             </div>
-            <p className="text-gray-500 text-xs">Service fee & other charges will be shown at checkout</p>
+            <p className="text-gray-500 text-xs">{t('cart.service_fee_note')}</p>
           </div>
           <Link to="/checkout">
             <Button className="w-full bg-red-600 hover:bg-red-700 text-white py-6 text-lg font-semibold rounded-xl cursor-pointer">
