@@ -11,7 +11,7 @@ import httpx
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -845,10 +845,10 @@ from models.delivery_zones import Delivery_zones
 
 
 class CalculateChargeRequest(BaseModel):
-    customer_lat: float
-    customer_lng: float
-    restaurant_lat: float
-    restaurant_lng: float
+    customer_lat: float = Field(ge=-90, le=90)
+    customer_lng: float = Field(ge=-180, le=180)
+    restaurant_lat: float = Field(ge=-90, le=90)
+    restaurant_lng: float = Field(ge=-180, le=180)
 
 
 def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

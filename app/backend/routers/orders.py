@@ -2,8 +2,9 @@
 # @Desc: Customer-facing order placement API
 import json
 import logging
+import math
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, or_
 from typing import Optional
@@ -33,37 +34,39 @@ def get_guest_user_id(session_id: str) -> str:
 
 
 class PlaceOrderRequest(BaseModel):
-    session_id: str
-    customer_name: str
-    customer_phone: str
-    order_notes: Optional[str] = ""
-    payment_method: str
-    total_amount: float
-    subtotal_amount: Optional[float] = 0
-    promo_code: Optional[str] = ""
-    discount_type: Optional[str] = ""
-    discount_percent: Optional[float] = 0
-    discount_amount: Optional[float] = 0
-    service_fee: Optional[float] = 0
-    small_order_fee: Optional[float] = 0
-    delivery_charge: Optional[float] = 0
-    tax_amount: Optional[float] = 0
-    tip_amount: Optional[float] = 0
-    tip_type: Optional[str] = ""  # 'rider' or 'shop'
-    items_json: str
+    # Browser money fields are accepted only for backwards compatibility/UI
+    # freshness checks. The backend recalculates all chargeable amounts.
+    session_id: str = Field(min_length=8, max_length=120)
+    customer_name: str = Field(min_length=1, max_length=120)
+    customer_phone: str = Field(min_length=5, max_length=40)
+    order_notes: Optional[str] = Field(default="", max_length=1000)
+    payment_method: str = Field(min_length=2, max_length=40)
+    total_amount: float = Field(ge=0, le=100000)
+    subtotal_amount: Optional[float] = Field(default=0, ge=0, le=100000)
+    promo_code: Optional[str] = Field(default="", max_length=80)
+    discount_type: Optional[str] = Field(default="", max_length=40)
+    discount_percent: Optional[float] = Field(default=0, ge=0, le=100)
+    discount_amount: Optional[float] = Field(default=0, ge=0, le=100000)
+    service_fee: Optional[float] = Field(default=0, ge=0, le=100000)
+    small_order_fee: Optional[float] = Field(default=0, ge=0, le=100000)
+    delivery_charge: Optional[float] = Field(default=0, ge=0, le=100000)
+    tax_amount: Optional[float] = Field(default=0, ge=0, le=100000)
+    tip_amount: Optional[float] = Field(default=0, ge=0, le=500)
+    tip_type: Optional[str] = Field(default="", max_length=20)  # 'rider' or 'shop'
+    items_json: str = Field(min_length=2, max_length=100000)
 
 
 class DeliveryLocationData(BaseModel):
-    customer_lat: Optional[float] = None
-    customer_lng: Optional[float] = None
-    order_type: Optional[str] = "pickup"  # 'pickup' or 'delivery'
+    customer_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    customer_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    order_type: Optional[str] = Field(default="pickup", max_length=20)  # 'pickup' or 'delivery'
 
 
 class PlaceOrderFullRequest(PlaceOrderRequest):
-    customer_lat: Optional[float] = None
-    customer_lng: Optional[float] = None
-    customer_address: Optional[str] = ""
-    order_type: Optional[str] = "pickup"
+    customer_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    customer_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    customer_address: Optional[str] = Field(default="", max_length=500)
+    order_type: Optional[str] = Field(default="pickup", max_length=20)
 
 
 @router.post("/place")
@@ -72,9 +75,40 @@ async def place_order(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Place a new order with duplicate prevention, menu validation, shop-closed check, and zone validation"""
+    """Place an order using server-side pricing and fulfilment validation."""
     try:
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+        from zoneinfo import ZoneInfo
+
+        from models.restaurant_settings import Restaurant_settings
+        from services.order_pricing import money, validate_and_price_order_items
+
+        dubai_tz = ZoneInfo("Asia/Dubai")
+
+        def parse_time_minutes(value: object) -> int | None:
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            try:
+                hour_text, minute_text = raw.split(":", 1)
+                hour = int(hour_text)
+                minute = int(minute_text[:2])
+            except (TypeError, ValueError):
+                return None
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                return None
+            return hour * 60 + minute
+
+        def within_schedule(now_minutes: int, start_value: object, end_value: object) -> bool:
+            start = parse_time_minutes(start_value)
+            end = parse_time_minutes(end_value)
+            if start is None or end is None:
+                return True
+            if start == end:
+                return True
+            if end < start:
+                return now_minutes >= start or now_minutes < end
+            return start <= now_minutes < end
 
         customer_payload = decode_customer_token(get_bearer_token(authorization))
         account_phone = normalize_phone(str(customer_payload.get("phone") or ""))
@@ -90,250 +124,130 @@ async def place_order(
         data.customer_name = str(
             customer_payload.get("customer_name") or data.customer_name
         ).strip()
+        if not data.customer_name:
+            raise HTTPException(status_code=400, detail="Customer name is required")
 
-        # ===== SHOP OPEN/CLOSED CHECK =====
-        from models.restaurant_settings import Restaurant_settings
-        settings_result = await db.execute(select(Restaurant_settings).limit(1))
-        settings = settings_result.scalar_one_or_none()
-
-        if settings and settings.restaurant_status:
-            status_lower = settings.restaurant_status.lower().strip()
-            if status_lower == "closed":
-                raise HTTPException(
-                    status_code=403,
-                    detail="Sorry, the restaurant is currently closed. Please try again during opening hours."
-                )
-            # Check auto-schedule if enabled
-            if settings.auto_schedule_enabled and settings.auto_open_time and settings.auto_close_time:
-                import re
-                now_utc = datetime.now(timezone.utc)
-                # Convert to UAE time (UTC+4)
-                uae_offset = timedelta(hours=4)
-                now_uae = now_utc + uae_offset
-                current_minutes = now_uae.hour * 60 + now_uae.minute
-
-                def parse_time_to_minutes(time_str: str) -> int:
-                    """Parse HH:MM to minutes since midnight"""
-                    match = re.match(r'(\d{1,2}):(\d{2})', time_str.strip())
-                    if match:
-                        return int(match.group(1)) * 60 + int(match.group(2))
-                    return -1
-
-                open_minutes = parse_time_to_minutes(settings.auto_open_time)
-                close_minutes = parse_time_to_minutes(settings.auto_close_time)
-
-                if open_minutes >= 0 and close_minutes >= 0:
-                    # Handle overnight schedule (e.g., open 15:00, close 02:00)
-                    if close_minutes < open_minutes:
-                        # Overnight: open if current >= open OR current < close
-                        is_open = current_minutes >= open_minutes or current_minutes < close_minutes
-                    else:
-                        # Same day: open if current >= open AND current < close
-                        is_open = open_minutes <= current_minutes < close_minutes
-
-                    if not is_open and status_lower != "open":
-                        raise HTTPException(
-                            status_code=403,
-                            detail="Sorry, the restaurant is currently closed. Please try again during opening hours."
-                        )
-
-        # ===== DELIVERY ZONE VALIDATION =====
-        if data.order_type == "delivery":
-            # GPS coordinates are MANDATORY for delivery orders
-            if data.customer_lat is None or data.customer_lng is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Delivery location is required. Please select your location on the map."
-                )
-            if True:  # Always validate when delivery
-                # Validate customer is within a delivery zone
-                from models.delivery_zones import Delivery_zones
-                zones_result = await db.execute(
-                    select(Delivery_zones).where(Delivery_zones.is_active == True)
-                )
-                zones = zones_result.scalars().all()
-
-                if zones:
-                    # Calculate distance from restaurant to customer
-                    import math
-                    rest_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
-                    rest_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
-
-                    def haversine_km(lat1, lon1, lat2, lon2):
-                        R = 6371
-                        dLat = math.radians(lat2 - lat1)
-                        dLon = math.radians(lon2 - lon1)
-                        a = math.sin(dLat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon / 2) ** 2
-                        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-                    distance_km = haversine_km(rest_lat, rest_lng, data.customer_lat, data.customer_lng)
-
-                    # Check if customer is within any active zone
-                    # Sort zones by max_distance ascending for gap-tolerant matching
-                    sorted_zones = sorted(zones, key=lambda z: z.max_distance_km)
-                    matched_zone = None
-
-                    # First pass: exact range match
-                    for zone in sorted_zones:
-                        if zone.min_distance_km <= distance_km <= zone.max_distance_km:
-                            matched_zone = zone
-                            break
-
-                    # Second pass: gap-tolerant - find first zone whose max covers the distance
-                    if not matched_zone:
-                        for zone in sorted_zones:
-                            if distance_km <= zone.max_distance_km:
-                                matched_zone = zone
-                                break
-
-                    if not matched_zone:
-                        max_zone_km = max(z.max_distance_km for z in zones)
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Delivery not available in your area ({distance_km:.1f} km away). We deliver within {max_zone_km:.0f} km."
-                        )
-
-                    # Verify that the matched zone has a valid charge > 0
-                    matched_zone_charge = matched_zone.charge or 0
-                    if matched_zone_charge <= 0:
-                        logging.warning(
-                            f"Delivery order rejected - zone charge is 0 for user {guest_user_id}, "
-                            f"distance={distance_km:.2f}km"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Unable to calculate delivery charge for your location. Please contact us or try again."
-                        )
-
-        # ===== MENU ITEM VALIDATION - Reject fake orders =====
-        calculated_subtotal = 0.0
-        try:
-            order_items = json.loads(data.items_json)
-            if not isinstance(order_items, list) or len(order_items) == 0:
-                raise HTTPException(status_code=400, detail="Order must contain at least one item")
-
-            if len(order_items) > 50:
-                raise HTTPException(status_code=400, detail="Order cannot contain more than 50 items")
-
-            # Get all active menu items with prices from database
-            menu_result = await db.execute(
-                select(Menu_items).where(Menu_items.is_active == True)
-            )
-            menu_items_db = menu_result.scalars().all()
-
-            # Build lookup: name -> menu item (for validation)
-            valid_menu_map = {}
-            for mi in menu_items_db:
-                valid_menu_map[mi.name.lower().strip()] = mi
-
-            if not valid_menu_map:
-                # If no menu items exist at all, skip validation (initial setup)
-                logging.warning("No active menu items found - skipping validation")
-            else:
-                # Validate each item in the order exists in the active menu
-                invalid_items = []
-                calculated_subtotal = 0.0
-
-                for item in order_items:
-                    item_name = (item.get("name") or "").lower().strip()
-                    item_quantity = item.get("quantity", 1)
-                    item_price = item.get("price", 0)
-
-                    if not item_name:
-                        invalid_items.append("(empty name)")
-                        continue
-
-                    if item_name not in valid_menu_map:
-                        invalid_items.append(item.get("name", "unknown"))
-                        continue
-
-                    # Validate quantity is reasonable
-                    if not isinstance(item_quantity, int) or item_quantity < 1 or item_quantity > 20:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid quantity for {item.get('name')}: must be between 1 and 20"
-                        )
-
-                    # Validate price is not negative or absurdly high
-                    if item_price < 0:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid price for {item.get('name')}"
-                        )
-
-                    # Accumulate calculated subtotal from item prices
-                    # Checkout sends each cart line total in item.price, so add it once.
-                    calculated_subtotal += item_price
-
-                if invalid_items:
-                    logging.warning(
-                        f"FAKE ORDER REJECTED for user {guest_user_id}: "
-                        f"Invalid items: {invalid_items}. "
-                        f"Valid menu has {len(valid_menu_map)} items."
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Order contains items not on our menu: {', '.join(invalid_items[:3])}. Please refresh and try again."
-                    )
-
-                # ===== PRICE VALIDATION - Prevent price manipulation =====
-                # Allow tolerance for fees (service fee, small order fee, delivery, tips)
-                # but reject if total is unreasonably low (someone trying to pay less)
-                max_fees = (data.service_fee or 0) + (data.small_order_fee or 0) + (data.delivery_charge or 0) + (data.tip_amount or 0)
-                expected_minimum = calculated_subtotal * 0.5  # Allow 50% tolerance for discounts/promos
-                expected_maximum = calculated_subtotal + max_fees + 200  # Allow up to 200 AED extra for delivery + fees
-
-                if data.total_amount < 0:
-                    logging.warning(
-                        f"FAKE ORDER REJECTED - negative total for user {guest_user_id}: "
-                        f"total={data.total_amount}"
-                    )
-                    raise HTTPException(status_code=400, detail="Invalid order total")
-
-                if calculated_subtotal > 0 and data.total_amount < expected_minimum:
-                    logging.warning(
-                        f"PRICE MANIPULATION REJECTED for user {guest_user_id}: "
-                        f"claimed_total={data.total_amount}, calculated_subtotal={calculated_subtotal}, "
-                        f"expected_min={expected_minimum}"
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Order total doesn't match item prices. Please refresh your cart and try again."
-                    )
-
-                if data.total_amount > expected_maximum:
-                    logging.warning(
-                        f"SUSPICIOUS ORDER for user {guest_user_id}: "
-                        f"claimed_total={data.total_amount}, calculated_max={expected_maximum}"
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Order total seems incorrect. Please refresh your cart and try again."
-                    )
-                # ===== END PRICE VALIDATION =====
-
-                # ===== TIP VALIDATION =====
-                if (data.tip_amount or 0) < 0:
-                    raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
-                if (data.tip_amount or 0) > 500:
-                    raise HTTPException(status_code=400, detail="Tip amount exceeds maximum allowed (AED 500)")
-                if data.tip_type and data.tip_type not in ('rider', 'shop', ''):
-                    raise HTTPException(status_code=400, detail="Invalid tip type")
-                # ===== END TIP VALIDATION =====
-
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid order items format")
-        except HTTPException:
-            raise
-        # ===== END MENU VALIDATION =====
-
-        # ===== PROMO VALIDATION + SERVER TOTAL =====
         normalized_order_type = str(data.order_type or "pickup").lower().strip()
         if normalized_order_type not in {"pickup", "delivery"}:
             raise HTTPException(status_code=400, detail="Invalid order type")
 
-        # Cart line prices already include item-level discounts.
-        subtotal_amount = round(float(calculated_subtotal or data.subtotal_amount or 0), 2)
+        settings_result = await db.execute(
+            select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
+        )
+        settings = settings_result.scalar_one_or_none()
+
+        # ===== SHOP OPEN/CLOSED + ORDER-TYPE RULES =====
+        now_dubai = datetime.now(dubai_tz)
+        current_minutes = now_dubai.hour * 60 + now_dubai.minute
+        status_lower = str(getattr(settings, "restaurant_status", "open") or "open").lower().strip()
+        if status_lower == "closed":
+            raise HTTPException(
+                status_code=403,
+                detail="Sorry, the restaurant is currently closed. Please try again during opening hours.",
+            )
+
+        # Explicit Admin OPEN remains an override, matching the current customer UI.
+        if (
+            settings
+            and bool(settings.auto_schedule_enabled)
+            and status_lower != "open"
+            and not within_schedule(current_minutes, settings.auto_open_time, settings.auto_close_time)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Sorry, the restaurant is currently closed. Please try again during opening hours.",
+            )
+
+        if normalized_order_type == "delivery":
+            if not settings or settings.delivery_enabled is not True:
+                raise HTTPException(status_code=403, detail="Delivery is currently unavailable. Please choose Pickup.")
+            if (
+                bool(settings.delivery_schedule_enabled)
+                and not within_schedule(current_minutes, settings.delivery_start_time, settings.delivery_end_time)
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Delivery is available from {settings.delivery_start_time or '16:00'} to {settings.delivery_end_time or '01:00'}. Please choose Pickup for now.",
+                )
+            if data.customer_lat is None or data.customer_lng is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Delivery location is required. Please select your location on the map.",
+                )
+            if not (-90 <= float(data.customer_lat) <= 90 and -180 <= float(data.customer_lng) <= 180):
+                raise HTTPException(status_code=400, detail="Invalid delivery location")
+            if not str(data.customer_address or "").strip():
+                raise HTTPException(status_code=400, detail="Delivery address is required")
+
+        # ===== PAYMENT METHOD RULES =====
+        payment_text = str(data.payment_method or "").lower().strip()
+        if "cash" in payment_text:
+            payment_kind = "cash"
+        elif "card" in payment_text:
+            payment_kind = "card"
+        else:
+            raise HTTPException(status_code=400, detail="Invalid payment method")
+
+        if settings:
+            if normalized_order_type == "pickup":
+                allowed = (
+                    settings.cash_enabled_pickup is not False
+                    if payment_kind == "cash"
+                    else settings.card_enabled_pickup is not False
+                )
+            else:
+                allowed = (
+                    settings.cash_enabled_delivery is not False
+                    if payment_kind == "cash"
+                    else settings.card_enabled_delivery is not False
+                )
+            if not allowed:
+                raise HTTPException(status_code=400, detail="Selected payment method is currently unavailable")
+
+        # ===== SERVER-SIDE CART VALIDATION / PRICING =====
+        subtotal_amount, canonical_items = await validate_and_price_order_items(db, data.items_json)
+        canonical_items_json = json.dumps(canonical_items, ensure_ascii=False, separators=(",", ":"))
+
+        # ===== DELIVERY SERVER SOURCE OF TRUTH =====
+        delivery_charge = 0.0
+        delivery_distance_km = None
+        delivery_zone_name = ""
+        if normalized_order_type == "delivery":
+            try:
+                from routers.delivery_zones import CalculateChargeRequest, evaluate_delivery_location
+
+                restaurant_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
+                restaurant_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
+                delivery_result = await evaluate_delivery_location(
+                    CalculateChargeRequest(
+                        customer_lat=float(data.customer_lat),
+                        customer_lng=float(data.customer_lng),
+                        restaurant_lat=restaurant_lat,
+                        restaurant_lng=restaurant_lng,
+                    ),
+                    db,
+                )
+            except HTTPException:
+                raise
+            except Exception:
+                logging.exception("Delivery validation failed")
+                raise HTTPException(status_code=503, detail="Could not verify delivery location. Please try again.")
+
+            if not bool(delivery_result.get("available")):
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(delivery_result.get("message") or "Delivery is not available at this location."),
+                )
+            delivery_charge = money(delivery_result.get("charge"))
+            if delivery_charge <= 0:
+                raise HTTPException(status_code=400, detail="Delivery charge is not configured for this location")
+            try:
+                delivery_distance_km = float(delivery_result.get("distance_km"))
+            except (TypeError, ValueError):
+                delivery_distance_km = None
+            delivery_zone_name = str(delivery_result.get("zone_name") or "")[:100]
+
+        # ===== PROMO VALIDATION =====
         promo_code = str(data.promo_code or "").strip().upper()
         discount_type = ""
         discount_percent = 0.0
@@ -342,7 +256,7 @@ async def place_order(
         if promo_code:
             offer_result = await db.execute(
                 select(Offers).where(
-                    Offers.is_active == True,
+                    Offers.is_active.is_(True),
                     func.upper(func.trim(Offers.promo_code)) == promo_code,
                 ).limit(1)
             )
@@ -364,8 +278,11 @@ async def place_order(
                     except ValueError:
                         return None
                 if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                return parsed
+                    # Admin offer dates are entered in UAE local time. Treat
+                    # timezone-less values as Asia/Dubai so backend validation
+                    # matches the customer checkout and does not shift by 4h.
+                    parsed = parsed.replace(tzinfo=dubai_tz)
+                return parsed.astimezone(timezone.utc)
 
             now_utc = datetime.now(timezone.utc)
             start_at = parse_offer_time(offer.start_date)
@@ -375,7 +292,7 @@ async def place_order(
             if end_at and now_utc > end_at:
                 raise HTTPException(status_code=400, detail="Promo code has expired")
 
-            minimum = float(offer.minimum_order_amount or 0)
+            minimum = money(offer.minimum_order_amount)
             if subtotal_amount + 0.001 < minimum:
                 raise HTTPException(
                     status_code=400,
@@ -386,7 +303,8 @@ async def place_order(
             if bool(offer.first_order_only):
                 previous_count = await db.scalar(
                     select(func.count(Orders.id)).where(
-                        Orders.user_id == guest_user_id, active_order_filter
+                        Orders.user_id == guest_user_id,
+                        active_order_filter,
                     )
                 )
                 if int(previous_count or 0) > 0:
@@ -417,72 +335,115 @@ async def place_order(
 
             discount_type = str(offer.discount_type or "percentage").lower().strip()
             if discount_type == "fixed":
-                discount_amount = min(subtotal_amount, float(offer.fixed_discount_amount or 0))
+                discount_amount = min(subtotal_amount, money(offer.fixed_discount_amount))
             else:
                 discount_type = "percentage"
                 discount_percent = max(0.0, min(100.0, float(offer.discount_percent or 0)))
-                discount_amount = subtotal_amount * discount_percent / 100
+                discount_amount = money(subtotal_amount * discount_percent / 100)
 
-            maximum = float(offer.maximum_discount_amount or 0)
+            maximum = money(offer.maximum_discount_amount)
             if maximum > 0:
                 discount_amount = min(discount_amount, maximum)
-            discount_amount = round(max(0.0, discount_amount), 2)
+            discount_amount = money(max(0.0, discount_amount))
 
-        service_fee = round(max(0.0, float(data.service_fee or 0)), 2)
-        small_order_fee = round(max(0.0, float(data.small_order_fee or 0)), 2)
-        delivery_charge = round(max(0.0, float(data.delivery_charge or 0)), 2)
-        tip_amount = round(max(0.0, float(data.tip_amount or 0)), 2)
-        if normalized_order_type == "pickup":
-            delivery_charge = 0.0
+        # ===== FEES FROM DATABASE SETTINGS =====
+        service_fee = 0.0
+        if settings and bool(settings.service_fee_enabled):
+            applies_to = str(settings.service_fee_applies_to or "both").lower().strip()
+            if applies_to in {"both", normalized_order_type}:
+                fee_amount = max(0.0, float(settings.service_fee_amount or 0))
+                if str(settings.service_fee_type or "fixed").lower().strip() == "percentage":
+                    service_fee = money(subtotal_amount * fee_amount / 100)
+                else:
+                    service_fee = money(fee_amount)
+
+        small_order_fee = 0.0
+        if settings and bool(settings.small_order_fee_enabled):
+            threshold = max(0.0, float(settings.small_order_fee_threshold or 0))
+            if subtotal_amount < threshold:
+                small_order_fee = money(max(0.0, float(settings.small_order_fee_amount or 0)))
+
+        tip_amount = money(data.tip_amount)
+        if tip_amount < 0 or tip_amount > 500:
+            raise HTTPException(status_code=400, detail="Tip amount must be between AED 0 and AED 500")
+        normalized_tip_type = str(data.tip_type or "").lower().strip()
+        if tip_amount > 0:
+            expected_tip_type = "rider" if normalized_order_type == "delivery" else "shop"
+            if normalized_tip_type not in {"", expected_tip_type}:
+                raise HTTPException(status_code=400, detail="Invalid tip type")
+            normalized_tip_type = expected_tip_type
+        else:
+            normalized_tip_type = ""
 
         tax_percent = max(0.0, min(100.0, float(getattr(settings, "tax_percent", 0) or 0)))
-        taxable_amount = max(0.0, subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge)
-        tax_amount = round(taxable_amount * tax_percent / 100, 2)
-
-        server_total = round(
-            max(0.0, subtotal_amount + service_fee + small_order_fee + delivery_charge + tax_amount + tip_amount - discount_amount),
-            2,
+        vat_included = bool(getattr(settings, "vat_included", False))
+        taxable_amount = money(
+            max(
+                0.0,
+                subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge,
+            )
         )
-        if abs(float(data.total_amount) - server_total) > 0.15:
+        if tax_percent > 0:
+            if vat_included:
+                tax_amount = money(taxable_amount - taxable_amount / (1 + tax_percent / 100))
+                tax_added_to_total = 0.0
+            else:
+                tax_amount = money(taxable_amount * tax_percent / 100)
+                tax_added_to_total = tax_amount
+        else:
+            tax_amount = 0.0
+            tax_added_to_total = 0.0
+
+        server_total = money(
+            max(
+                0.0,
+                subtotal_amount
+                + service_fee
+                + small_order_fee
+                + delivery_charge
+                + tax_added_to_total
+                + tip_amount
+                - discount_amount,
+            )
+        )
+
+        # A stale checkout is refreshed instead of trusting client-provided money.
+        try:
+            submitted_total = float(data.total_amount)
+        except (TypeError, ValueError):
+            submitted_total = -1
+        if not math.isfinite(submitted_total) or abs(submitted_total - server_total) > 0.15:
             raise HTTPException(
                 status_code=400,
                 detail=f"Order total changed. Correct total is AED {server_total:.2f}. Please refresh checkout.",
             )
-        # ===== END PROMO VALIDATION + SERVER TOTAL =====
 
-        # ===== RATE LIMITING - Prevent order spam =====
-        # Check if user has placed more than 5 orders in the last 5 minutes
+        # ===== RATE LIMIT + DUPLICATE PREVENTION =====
         five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-        rate_check = await db.execute(
-            select(Orders).where(
+        recent_count = await db.scalar(
+            select(func.count(Orders.id)).where(
                 Orders.user_id == guest_user_id,
                 Orders.created_at >= five_minutes_ago,
             )
         )
-        recent_orders = rate_check.scalars().all()
-        if len(recent_orders) >= 5:
-            logging.warning(f"RATE LIMIT: User {guest_user_id} attempted to place more than 5 orders in 5 minutes")
+        if int(recent_count or 0) >= 5:
             raise HTTPException(
                 status_code=429,
-                detail="Too many orders placed recently. Please wait a few minutes before ordering again."
+                detail="Too many orders placed recently. Please wait a few minutes before ordering again.",
             )
-        # ===== END RATE LIMITING =====
 
-        # Duplicate order prevention: check if same user placed same items within 60 seconds
         sixty_seconds_ago = datetime.now(timezone.utc) - timedelta(seconds=60)
         duplicate_check = await db.execute(
             select(Orders).where(
                 Orders.user_id == guest_user_id,
-                Orders.items_json == data.items_json,
-                Orders.total_amount == data.total_amount,
+                Orders.items_json == canonical_items_json,
+                Orders.total_amount == server_total,
                 Orders.created_at >= sixty_seconds_ago,
                 Orders.status != "cancelled",
             ).order_by(desc(Orders.created_at)).limit(1)
         )
         existing_order = duplicate_check.scalar_one_or_none()
         if existing_order:
-            # Return the existing order instead of creating a duplicate
-            logging.warning(f"Duplicate order prevented for user {guest_user_id}, returning existing order {existing_order.id}")
             return {
                 "success": True,
                 "order_id": existing_order.id,
@@ -493,14 +454,16 @@ async def place_order(
         order = Orders(
             user_id=guest_user_id,
             customer_name=data.customer_name.strip(),
-            customer_phone=data.customer_phone.strip(),
+            customer_phone=account_phone,
             pickup_time="",
             order_notes=data.order_notes or "",
             payment_method=data.payment_method,
             order_type=normalized_order_type,
-            customer_lat=data.customer_lat if normalized_order_type == "delivery" else None,
-            customer_lng=data.customer_lng if normalized_order_type == "delivery" else None,
-            customer_address=(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
+            customer_lat=float(data.customer_lat) if normalized_order_type == "delivery" else None,
+            customer_lng=float(data.customer_lng) if normalized_order_type == "delivery" else None,
+            customer_address=str(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
+            delivery_distance_km=delivery_distance_km if normalized_order_type == "delivery" else None,
+            delivery_zone_name=delivery_zone_name if normalized_order_type == "delivery" else "",
             status="new",
             total_amount=server_total,
             subtotal_amount=subtotal_amount,
@@ -513,8 +476,8 @@ async def place_order(
             delivery_charge=delivery_charge,
             tax_amount=tax_amount,
             tip_amount=tip_amount,
-            tip_type=data.tip_type or "",
-            items_json=data.items_json,
+            tip_type=normalized_tip_type,
+            items_json=canonical_items_json,
         )
         db.add(order)
         await db.commit()
@@ -525,7 +488,8 @@ async def place_order(
             try:
                 rider_assignment = await auto_assign_order(db, order)
             except Exception:
-                # Order placement must never fail only because no rider is online.
+                # The order itself is already committed. Rider availability must
+                # never make a successful customer order disappear.
                 logging.exception("Auto rider assignment failed for order %s", order.id)
                 await db.rollback()
 
@@ -534,13 +498,24 @@ async def place_order(
             "order_id": order.id,
             "status": order.status,
             "rider_assignment": rider_assignment,
+            "pricing": {
+                "subtotal": subtotal_amount,
+                "discount": discount_amount,
+                "service_fee": service_fee,
+                "small_order_fee": small_order_fee,
+                "delivery_charge": delivery_charge,
+                "tax_amount": tax_amount,
+                "vat_included": vat_included,
+                "tip_amount": tip_amount,
+                "total": server_total,
+            },
         }
     except HTTPException:
         raise
-    except Exception as e:
-        logging.error(f"Failed to place order: {e}")
+    except Exception as exc:
+        logging.exception("Failed to place order")
         await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not place order. Please try again.") from exc
 
 
 class CancelOrderRequest(BaseModel):
@@ -744,6 +719,36 @@ async def get_my_orders(
             items.append(order_data)
 
         return {"items": items}
-    except Exception as e:
-        logging.error(f"Failed to get orders: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to get customer orders")
+        raise HTTPException(status_code=500, detail="Could not load your orders. Please try again.") from exc
+
+@router.get("/my-feedbacks")
+async def get_my_feedbacks(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return feedback order IDs owned by the logged-in customer."""
+    try:
+        from models.feedbacks import Feedbacks
+
+        customer_payload = decode_customer_token(get_bearer_token(authorization))
+        customer_user_id = f"customer:{customer_payload.get('sub', '')}"
+        rows = (
+            await db.execute(
+                select(Feedbacks.order_id)
+                .join(Orders, Orders.id == Feedbacks.order_id)
+                .where(Orders.user_id == customer_user_id)
+                .order_by(desc(Feedbacks.created_at))
+                .limit(100)
+            )
+        ).scalars().all()
+        return {"order_ids": [int(order_id) for order_id in rows if order_id is not None]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to load customer feedback history")
+        raise HTTPException(status_code=500, detail="Could not load feedback history") from exc
+
