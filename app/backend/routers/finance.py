@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -47,13 +47,6 @@ def _uae_day_start(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=UAE_TZ).astimezone(
         timezone.utc
     )
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Normalize database timestamps before comparing finance periods."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def _resolve_period(
@@ -256,14 +249,9 @@ def _order_financials(
         getattr(assignment, "status", "") or ""
     ).lower()
 
-    order_status = str(order.status or "").lower().strip()
-
     rider_has_delivered = (
         assignment is not None
-        and (
-            assignment_status == "delivered"
-            or order_status in {"delivered", "completed"}
-        )
+        and assignment_status == "delivered"
     )
 
     rider_earning = (
@@ -284,6 +272,7 @@ def _order_financials(
         else 0.0
     )
 
+    order_status = str(order.status or "").lower()
     is_delivered = (
         rider_has_delivered
         or order_status in {"delivered", "completed"}
@@ -437,7 +426,6 @@ async def _get_rider_period_totals(
     end: Optional[datetime],
 ) -> dict:
     delivered_at = func.coalesce(
-        Orders.updated_at,
         Delivery_assignments.updated_at,
         Delivery_assignments.created_at,
     )
@@ -447,10 +435,7 @@ async def _get_rider_period_totals(
         .join(Orders, Orders.id == Delivery_assignments.order_id)
         .where(
             Delivery_assignments.rider_id == rider_id,
-            or_(
-                func.lower(func.coalesce(Delivery_assignments.status, "")) == "delivered",
-                func.lower(func.coalesce(Orders.status, "")).in_(["completed", "delivered"]),
-            ),
+            Delivery_assignments.status == "delivered",
             func.lower(func.coalesce(Orders.status, ""))
             .notin_(["cancelled", "deleted", "expired"]),
         )
@@ -488,65 +473,38 @@ async def _get_settlement_totals(
             Rider_cash_settlements.rider_id == rider_id
         )
 
+    query = _apply_datetime_filter(
+        query,
+        Rider_cash_settlements.submitted_at,
+        start,
+        end,
+    )
+
     settlements = (await db.execute(query)).scalars().all()
 
-    def in_period(value: Optional[datetime]) -> bool:
-        if value is None:
-            return False
+    approved = sum(
+        _money(item.amount)
+        for item in settlements
+        if item.status == "approved"
+    )
 
-        value = _as_utc(value)
+    awaiting = sum(
+        _money(item.amount)
+        for item in settlements
+        if item.status == "pending"
+    )
 
-        if start is not None and value < start:
-            return False
-
-        if end is not None and value >= end:
-            return False
-
-        return True
-
-    approved = 0.0
-    awaiting = 0.0
-    rejected = 0.0
-    submissions = 0
-
-    for item in settlements:
-        status = str(item.status or "").lower().strip()
-
-        if status == "approved":
-            event_at = (
-                getattr(item, "reviewed_at", None)
-                or getattr(item, "updated_at", None)
-                or getattr(item, "submitted_at", None)
-            )
-        elif status == "rejected":
-            event_at = (
-                getattr(item, "reviewed_at", None)
-                or getattr(item, "updated_at", None)
-                or getattr(item, "submitted_at", None)
-            )
-        else:
-            event_at = (
-                getattr(item, "submitted_at", None)
-                or getattr(item, "created_at", None)
-            )
-
-        if (start is not None or end is not None) and not in_period(event_at):
-            continue
-
-        submissions += 1
-
-        if status == "approved":
-            approved += _money(item.amount)
-        elif status == "pending":
-            awaiting += _money(item.amount)
-        elif status == "rejected":
-            rejected += _money(item.amount)
+    rejected = sum(
+        _money(item.amount)
+        for item in settlements
+        if item.status == "rejected"
+    )
 
     return {
         "approved_cash": round(approved, 2),
         "awaiting_approval": round(awaiting, 2),
         "rejected_cash": round(rejected, 2),
-        "submissions": submissions,
+        "submissions": len(settlements),
     }
 
 
