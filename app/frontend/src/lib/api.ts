@@ -359,6 +359,27 @@ export interface Extra {
   is_active: boolean;
 }
 
+
+/**
+ * Return the extras available for a menu item.
+ *
+ * The current Fai Fai backend stores only `has_extras` on menu_items;
+ * extras themselves are a separate entity. Therefore an item either
+ * receives all active extras, or none when has_extras is false.
+ *
+ * This helper is null-safe so Menu.tsx can call it during loading too.
+ */
+export function getItemExtras(
+  item: MenuItem | null | undefined,
+  availableExtras: Extra[] | null | undefined = [],
+): Extra[] {
+  if (!item || item.has_extras === false) return [];
+
+  return (Array.isArray(availableExtras) ? availableExtras : []).filter(
+    (extra) => extra && extra.is_active !== false,
+  );
+}
+
 export interface Order {
   id: number;
   user_id: string;
