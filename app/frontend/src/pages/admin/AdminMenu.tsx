@@ -61,12 +61,15 @@ type DiscountType = 'percentage' | 'fixed';
 
 type ItemExtraOption = {
   name: string;
+  name_ar: string;
   price: number;
 };
 
 type ItemForm = {
   name: string;
+  name_ar: string;
   description: string;
+  description_ar: string;
   category_id: number;
   image_url: string;
   has_extras: boolean;
@@ -120,7 +123,9 @@ function errorText(error: unknown, fallback: string): string {
 function emptyItemForm(categoryId = 0): ItemForm {
   return {
     name: '',
+    name_ar: '',
     description: '',
+    description_ar: '',
     category_id: categoryId,
     image_url: '',
     has_extras: true,
@@ -146,6 +151,7 @@ function parseItemExtras(
         return parsed
           .map((extra: any) => ({
             name: String(extra?.name || '').trim(),
+            name_ar: String(extra?.name_ar || '').trim(),
             price: Math.max(0, Number(extra?.price || 0)),
           }))
           .filter((extra: ItemExtraOption) => extra.name);
@@ -163,6 +169,7 @@ function parseItemExtras(
     .filter(extra => extra.is_active !== false)
     .map(extra => ({
       name: String(extra.name || '').trim(),
+      name_ar: String((extra as any).name_ar || '').trim(),
       price: Math.max(0, Number(extra.price || 0)),
     }))
     .filter(extra => extra.name);
@@ -217,6 +224,7 @@ export default function AdminMenu() {
   const [itemExtraOptions, setItemExtraOptions] = useState<ItemExtraOption[]>([]);
   const [categoryForm, setCategoryForm] = useState({
     name: '',
+    name_ar: '',
     sort_order: 0,
   });
   const [extraForm, setExtraForm] = useState({
@@ -317,12 +325,14 @@ export default function AdminMenu() {
       setEditingCategory(category);
       setCategoryForm({
         name: category.name,
+        name_ar: String((category as any).name_ar || ''),
         sort_order: Number(category.sort_order || 0),
       });
     } else {
       setEditingCategory(null);
       setCategoryForm({
         name: '',
+        name_ar: '',
         sort_order: categories.length + 1,
       });
     }
@@ -374,7 +384,9 @@ export default function AdminMenu() {
       setEditingItem(item);
       setItemForm({
         name: item.name || '',
+        name_ar: String((item as any).name_ar || ''),
         description: item.description || '',
+        description_ar: String((item as any).description_ar || ''),
         category_id: Number(item.category_id || 0),
         image_url: item.image_url || '',
         has_extras: item.has_extras !== false,
@@ -405,7 +417,7 @@ export default function AdminMenu() {
   function addSizeOption() {
     setSizeOptions((current) => [
       ...current,
-      { name: '', price: 0 },
+      { name: '', name_ar: '', price: 0 },
     ]);
   }
 
@@ -422,7 +434,7 @@ export default function AdminMenu() {
 
   function updateSizeOption(
     index: number,
-    field: 'name' | 'price',
+    field: 'name' | 'name_ar' | 'price',
     value: string | number,
   ) {
     setSizeOptions((current) =>
@@ -440,7 +452,7 @@ export default function AdminMenu() {
   function addItemExtraOption() {
     setItemExtraOptions(current => [
       ...current,
-      { name: '', price: 0 },
+      { name: '', name_ar: '', price: 0 },
     ]);
   }
 
@@ -452,7 +464,7 @@ export default function AdminMenu() {
 
   function updateItemExtraOption(
     index: number,
-    field: 'name' | 'price',
+    field: 'name' | 'name_ar' | 'price',
     value: string | number,
   ) {
     setItemExtraOptions(current =>
@@ -542,6 +554,7 @@ export default function AdminMenu() {
     const validItemExtras = itemExtraOptions
       .map(extra => ({
         name: String(extra.name || '').trim(),
+        name_ar: String(extra.name_ar || '').trim(),
         price: Math.max(0, Number(extra.price || 0)),
       }))
       .filter(extra => extra.name);
@@ -554,7 +567,9 @@ export default function AdminMenu() {
 
     const saveData = {
       name: itemForm.name.trim(),
+      name_ar: itemForm.name_ar.trim(),
       description: itemForm.description.trim(),
+      description_ar: itemForm.description_ar.trim(),
       category_id: itemForm.category_id,
       price_medium: priceMedium,
       price_large: priceLarge,
@@ -1051,6 +1066,21 @@ export default function AdminMenu() {
                 className="bg-gray-800 border-gray-700 mt-1"
               />
             </div>
+            <div>
+              <Label>Arabic Item Name</Label>
+              <Input
+                value={itemForm.name_ar}
+                dir="rtl"
+                onChange={(event) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    name_ar: event.target.value,
+                  }))
+                }
+                placeholder="مثال: عصير مانجو"
+                className="bg-gray-800 border-gray-700 mt-1 text-right"
+              />
+            </div>
 
             <div>
               <Label>Description</Label>
@@ -1064,6 +1094,21 @@ export default function AdminMenu() {
                 }
                 className="bg-gray-800 border-gray-700 mt-1"
                 rows={2}
+              />
+            </div>
+            <div>
+              <Label>Arabic Description</Label>
+              <Textarea
+                value={itemForm.description_ar}
+                dir="rtl"
+                onChange={(event) =>
+                  setItemForm((current) => ({
+                    ...current,
+                    description_ar: event.target.value,
+                  }))
+                }
+                placeholder="وصف عربي اختياري"
+                className="bg-gray-800 border-gray-700 mt-1 text-right"
               />
             </div>
 
@@ -1208,7 +1253,7 @@ export default function AdminMenu() {
                       {itemExtraOptions.map((extra, index) => (
                         <div
                           key={`item-extra-${index}`}
-                          className="grid grid-cols-[1fr_110px_42px] gap-2 items-center"
+                          className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_110px_42px] gap-2 items-center"
                         >
                           <Input
                             value={extra.name}
@@ -1221,6 +1266,19 @@ export default function AdminMenu() {
                             }
                             placeholder="Extra name"
                             className="bg-gray-800 border-gray-700"
+                          />
+                          <Input
+                            value={extra.name_ar}
+                            dir="rtl"
+                            onChange={(event) =>
+                              updateItemExtraOption(
+                                index,
+                                'name_ar',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Extra Arabic"
+                            className="bg-gray-800 border-gray-700 text-right"
                           />
                           <Input
                             type="number"
@@ -1513,6 +1571,21 @@ export default function AdminMenu() {
                   }))
                 }
                 className="bg-gray-800 border-gray-700 mt-1"
+              />
+            </div>
+            <div>
+              <Label>Arabic Category Name</Label>
+              <Input
+                value={categoryForm.name_ar}
+                dir="rtl"
+                onChange={(event) =>
+                  setCategoryForm((current) => ({
+                    ...current,
+                    name_ar: event.target.value,
+                  }))
+                }
+                placeholder="مثال: العصائر"
+                className="bg-gray-800 border-gray-700 mt-1 text-right"
               />
             </div>
             <div>
