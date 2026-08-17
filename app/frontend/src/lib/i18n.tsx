@@ -13,7 +13,6 @@ export interface LanguageInfo {
 export const LANGUAGES: LanguageInfo[] = [
   { code: 'en', name: 'English', nativeName: 'English', dir: 'ltr', flag: '🇬🇧' },
   { code: 'ar', name: 'Arabic', nativeName: 'العربية', dir: 'rtl', flag: '🇦🇪' },
-  { code: 'ur', name: 'Urdu', nativeName: 'اردو', dir: 'rtl', flag: '🇵🇰' },
 ];
 
 // Translation keys
@@ -29,7 +28,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'Reviews',
 
     // Homepage
-    'home.tagline': 'Authentic Italian Pizza',
+    'home.tagline': 'Fresh Juices, Desserts & Beverages',
     'home.special_offers': 'Special Offers',
     'home.popular_items': 'Popular Items',
     'home.view_all': 'View All',
@@ -39,7 +38,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'Open Now',
     'home.busy': 'Busy',
     'home.closed': 'Closed',
-    'home.closed_message': 'Sorry, Vita Napoli Pizza is currently closed.',
+    'home.closed_message': 'Sorry, Fai Fai Juice is currently closed.',
     'home.closed_subtitle': 'You can browse the menu but cannot place orders.',
     'home.from_aed': 'From AED',
     'home.out_of_stock': 'Out of Stock',
@@ -204,6 +203,7 @@ const translations: Record<Language, Record<string, string>> = {
     'feedback.submit': 'Submit Feedback',
     'feedback.thank_you': 'Thank you for your feedback!',
     'feedback.select_order': 'Select an order',
+    'feedback.completed_hint': 'You can give feedback on your completed orders. Go to My Orders and tap Give Feedback on any completed order.',
 
     // Reviews
     'reviews.title': 'Customer Reviews',
@@ -222,6 +222,51 @@ const translations: Record<Language, Record<string, string>> = {
     'lang.subtitle': 'Select your preferred language',
     'lang.change': 'Language',
 
+    // Customer-wide language completion
+    'nav.account': 'Account',
+    'home.unknown': 'Unknown',
+    'home.estimated_wait': 'Estimated wait',
+    'home.deals': 'Deals',
+    'contact.pickup_delivery': 'We offer both pickup and delivery orders.',
+    'contact.open_maps': 'Open in Google Maps',
+    'reviews.loading': 'Loading reviews...',
+    'reviews.first': 'Be the first to leave a review!',
+    'reviews.review': 'review',
+    'reviews.reviews': 'reviews',
+    'deals.title': 'Deals & Combos',
+    'deals.none': 'No deals available right now',
+    'deals.choose': 'Choose',
+    'deals.done': 'Done',
+    'deals.more': 'more',
+    'deals.select_required': 'Select all required items',
+    'deals.added': 'added to cart!',
+    'deals.off': 'OFF',
+    'confirmation.title': 'Order Confirmed!',
+    'confirmation.message': 'Thank you! Your order has been received.',
+    'confirmation.view_orders': 'View My Orders',
+    'confirmation.back_home': 'Back to Home',
+    'orders.give_feedback': 'Give Feedback',
+    'orders.reviewed': 'Reviewed',
+    'orders.view_order': 'View order',
+    'orders.hide_details': 'Hide details',
+    'orders.order_details': 'Order details',
+    'orders.delivery_order': 'Delivery order',
+    'orders.pickup_order': 'Pickup order',
+    'orders.service_fee': 'Service fee',
+    'orders.small_order_fee': 'Small order fee',
+    'orders.payment': 'Payment',
+    'orders.total': 'Total',
+    'orders.item_details_unavailable': 'Item details are not available for this older order.',
+    'account.customer_account': 'Customer Account',
+    'account.logged_in': 'Account logged in',
+    'account.login': 'Login',
+    'account.signup': 'Sign Up',
+    'account.logout': 'Logout',
+    'account.create': 'Create Customer Account',
+    'account.create_button': 'Create Account',
+    'account.back_login': 'Back to Login',
+    'account.logging_in': 'Logging in…',
+    'account.creating': 'Creating account…',
     // Common
     'common.loading': 'Loading...',
     'common.error': 'Something went wrong',
@@ -243,7 +288,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'المراجعات',
 
     // Homepage
-    'home.tagline': 'بيتزا إيطالية أصلية',
+    'home.tagline': 'عصائر طازجة وحلويات ومشروبات',
     'home.special_offers': 'عروض خاصة',
     'home.popular_items': 'الأصناف المميزة',
     'home.view_all': 'عرض الكل',
@@ -253,7 +298,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'مفتوح الآن',
     'home.busy': 'مشغول',
     'home.closed': 'مغلق',
-    'home.closed_message': 'عذراً، فيتا نابولي بيتزا مغلق حالياً.',
+    'home.closed_message': 'عذراً، فاي فاي جوس مغلق حالياً.',
     'home.closed_subtitle': 'يمكنك تصفح القائمة لكن لا يمكنك تقديم طلبات.',
     'home.from_aed': 'من د.إ',
     'home.out_of_stock': 'غير متوفر',
@@ -418,6 +463,7 @@ const translations: Record<Language, Record<string, string>> = {
     'feedback.submit': 'إرسال التقييم',
     'feedback.thank_you': 'شكراً لتقييمك!',
     'feedback.select_order': 'اختر طلباً',
+    'feedback.completed_hint': 'يمكنك تقييم طلباتك المكتملة. افتح طلباتي واضغط إضافة تقييم على أي طلب مكتمل.',
 
     // Reviews
     'reviews.title': 'تقييمات العملاء',
@@ -436,6 +482,51 @@ const translations: Record<Language, Record<string, string>> = {
     'lang.subtitle': 'اختر لغتك المفضلة',
     'lang.change': 'اللغة',
 
+    // Customer-wide language completion
+    'nav.account': 'الحساب',
+    'home.unknown': 'غير معروف',
+    'home.estimated_wait': 'وقت الانتظار المتوقع',
+    'home.deals': 'العروض',
+    'contact.pickup_delivery': 'نوفر طلبات الاستلام والتوصيل.',
+    'contact.open_maps': 'فتح في خرائط Google',
+    'reviews.loading': 'جارٍ تحميل التقييمات...',
+    'reviews.first': 'كن أول من يترك تقييماً!',
+    'reviews.review': 'تقييم',
+    'reviews.reviews': 'تقييمات',
+    'deals.title': 'العروض والباقات',
+    'deals.none': 'لا توجد عروض متاحة حالياً',
+    'deals.choose': 'اختر',
+    'deals.done': 'تم',
+    'deals.more': 'متبقي',
+    'deals.select_required': 'اختر جميع الأصناف المطلوبة',
+    'deals.added': 'تمت إضافته إلى السلة!',
+    'deals.off': 'خصم',
+    'confirmation.title': 'تم تأكيد الطلب!',
+    'confirmation.message': 'شكراً لك! تم استلام طلبك.',
+    'confirmation.view_orders': 'عرض طلباتي',
+    'confirmation.back_home': 'العودة للرئيسية',
+    'orders.give_feedback': 'إضافة تقييم',
+    'orders.reviewed': 'تم التقييم',
+    'orders.view_order': 'عرض الطلب',
+    'orders.hide_details': 'إخفاء التفاصيل',
+    'orders.order_details': 'تفاصيل الطلب',
+    'orders.delivery_order': 'طلب توصيل',
+    'orders.pickup_order': 'طلب استلام',
+    'orders.service_fee': 'رسوم الخدمة',
+    'orders.small_order_fee': 'رسوم الطلب الصغير',
+    'orders.payment': 'الدفع',
+    'orders.total': 'الإجمالي',
+    'orders.item_details_unavailable': 'تفاصيل الأصناف غير متاحة لهذا الطلب القديم.',
+    'account.customer_account': 'حساب العميل',
+    'account.logged_in': 'تم تسجيل الدخول',
+    'account.login': 'تسجيل الدخول',
+    'account.signup': 'إنشاء حساب',
+    'account.logout': 'تسجيل الخروج',
+    'account.create': 'إنشاء حساب عميل',
+    'account.create_button': 'إنشاء الحساب',
+    'account.back_login': 'العودة لتسجيل الدخول',
+    'account.logging_in': 'جارٍ تسجيل الدخول…',
+    'account.creating': 'جارٍ إنشاء الحساب…',
     // Common
     'common.loading': 'جاري التحميل...',
     'common.error': 'حدث خطأ ما',
@@ -685,7 +776,7 @@ const I18nContext = createContext<I18nContextType>({
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     const saved = localStorage.getItem('app_language');
-    return saved === 'en' || saved === 'ar' || saved === 'ur' ? saved : 'en';
+    return saved === 'en' || saved === 'ar' ? saved : 'en';
   });
   const [hasChosenLanguage, setHasChosenLanguage] = useState(() => {
     return localStorage.getItem('language_chosen') === 'true';
