@@ -186,6 +186,7 @@ async def ensure_menu_discount_columns() -> None:
     if not db_manager.async_session_maker:
         raise RuntimeError("Database session is not initialized")
     statements = [
+        "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS extras_json TEXT",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS is_popular BOOLEAN DEFAULT FALSE",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS discount_enabled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20) DEFAULT 'percentage'",
@@ -216,10 +217,6 @@ async def ensure_order_delivery_columns() -> None:
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lat DOUBLE PRECISION",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lng DOUBLE PRECISION",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_area_name VARCHAR(160) DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_country VARCHAR(120) DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_distance_km DOUBLE PRECISION",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_zone_name VARCHAR(100) DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount DOUBLE PRECISION DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS ix_orders_order_type ON orders (order_type)",
     ]
@@ -292,81 +289,6 @@ async def ensure_admin_alarm_columns() -> None:
     logger.info("Admin-controlled alarm columns checked successfully")
 
 
-async def ensure_delivery_zone_area_columns() -> None:
-    """Add blocked-area polygon fields to delivery_zones safely."""
-    if not db_manager.async_session_maker:
-        raise RuntimeError("Database session is not initialized")
-    statements = [
-        "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS zone_type VARCHAR(20) NOT NULL DEFAULT 'distance'",
-        "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS polygon_json TEXT DEFAULT ''",
-        "CREATE INDEX IF NOT EXISTS ix_delivery_zones_zone_type ON delivery_zones (zone_type)",
-    ]
-    async with db_manager.async_session_maker() as session:
-        for statement in statements:
-            await session.execute(text(statement))
-        await session.execute(text("UPDATE delivery_zones SET zone_type='distance' WHERE zone_type IS NULL OR zone_type=''"))
-        await session.commit()
-    logger.info("Delivery zone blocked-area columns checked successfully")
-
-
-async def ensure_customer_saved_locations_table() -> None:
-    """Ensure optional customer saved delivery locations exist.
-
-    Locations store only the exact delivery pin and customer label/notes.
-    Delivery availability, blocked-area rules, road distance and delivery fee
-    are always recalculated when the customer selects a saved location.
-    """
-    if not db_manager.async_session_maker:
-        raise RuntimeError("Database session is not initialized")
-
-    statements = [
-        '''
-        CREATE TABLE IF NOT EXISTS customer_saved_locations (
-            id SERIAL PRIMARY KEY,
-            customer_account_id INTEGER NOT NULL,
-            label VARCHAR(60) NOT NULL DEFAULT 'Saved Location',
-            address_text TEXT NOT NULL DEFAULT '',
-            area_name VARCHAR(160) NOT NULL DEFAULT '',
-            latitude DOUBLE PRECISION NOT NULL,
-            longitude DOUBLE PRECISION NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        ''',
-        "CREATE INDEX IF NOT EXISTS ix_customer_saved_locations_account_id ON customer_saved_locations (customer_account_id)",
-    ]
-
-    async with db_manager.async_session_maker() as session:
-        for statement in statements:
-            await session.execute(text(statement))
-        await session.commit()
-
-    logger.info("Customer saved locations table checked successfully")
-
-
-
-async def ensure_order_timing_columns() -> None:
-    """Persist Kitchen/Rider timing so Admin can report early/late performance."""
-    if not db_manager.async_session_maker:
-        raise RuntimeError("Database session is not initialized")
-
-    statements = [
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS promised_ready_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparing_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_picked_up_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS promised_delivery_at TIMESTAMPTZ",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ",
-    ]
-
-    async with db_manager.async_session_maker() as session:
-        for statement in statements:
-            await session.execute(text(statement))
-        await session.commit()
-
-    logger.info("Order timing columns checked successfully")
-
 async def initialize_database():
     """Initialize database, create tables and prepare required columns."""
 
@@ -406,14 +328,9 @@ async def initialize_database():
         logger.info("V7 rider auto-assign schema migration completed")
 
         await ensure_admin_alarm_columns()
-        await ensure_customer_saved_locations_table()
         logger.info("V8 Admin alarm schema migration completed")
 
-        await ensure_delivery_zone_area_columns()
-        logger.info("V9 delivery blocked-area schema migration completed")
-
         logger.info("V7 database schema migration completed successfully")
-        await ensure_order_timing_columns()
         logger.info("Database initialized successfully")
         logger.debug(
             "[DB_OP] Database initialization completed in "
