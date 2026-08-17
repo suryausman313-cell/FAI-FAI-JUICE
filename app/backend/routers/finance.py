@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -47,6 +47,13 @@ def _uae_day_start(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=UAE_TZ).astimezone(
         timezone.utc
     )
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize database timestamps before comparing finance periods."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _resolve_period(

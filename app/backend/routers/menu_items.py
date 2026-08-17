@@ -26,6 +26,7 @@ class Menu_itemsData(BaseModel):
     price_medium: float = None
     price_large: float = None
     sizes_json: str = None
+    extras_json: str = None
     image_url: str = None
     is_active: bool = None
     has_extras: bool = None
@@ -46,6 +47,7 @@ class Menu_itemsUpdateData(BaseModel):
     price_medium: Optional[float] = None
     price_large: Optional[float] = None
     sizes_json: Optional[str] = None
+    extras_json: Optional[str] = None
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     has_extras: Optional[bool] = None
@@ -67,6 +69,7 @@ class Menu_itemsResponse(BaseModel):
     price_medium: Optional[float] = None
     price_large: Optional[float] = None
     sizes_json: Optional[str] = None
+    extras_json: Optional[str] = None
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     has_extras: Optional[bool] = None
