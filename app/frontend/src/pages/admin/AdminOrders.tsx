@@ -57,6 +57,22 @@ function isDeliveryOrder(order: AdminOrder): boolean {
   return notes.includes('order type: delivery') || notes.includes('delivery address:');
 }
 
+function getCancelInfo(order: AdminOrder): { by: string; reason: string } | null {
+  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  if (!match) return null;
+  const actor = match[1].toLowerCase();
+  return { by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen', reason: match[2].trim() };
+}
+
+function getLatestRiderReject(order: AdminOrder): { rider: string; reason: string } | null {
+  const notes = String(order.order_notes || '');
+  const matches = Array.from(notes.matchAll(/Rider\s+([^|:]+?)\s+rejected\s*:\s*([^|]+)/gi));
+  if (matches.length === 0) return null;
+  const match = matches[matches.length - 1];
+  return { rider: match[1].trim(), reason: match[2].trim() };
+}
+
+
 interface RiderInfo {
   id: number;
   name: string;
@@ -118,7 +134,8 @@ export default function AdminOrders() {
   const [staffNote, setStaffNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState<number | null>(null);
-  const [cancelReason, setCancelReason] = useState('');
+  const [cancelPreset, setCancelPreset] = useState('');
+  const [cancelOtherReason, setCancelOtherReason] = useState('');
   const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
   const [savingAutoAssign, setSavingAutoAssign] = useState(false);
   const riderMapContainerRef = useRef<HTMLDivElement>(null);
@@ -405,9 +422,11 @@ export default function AdminOrders() {
         { status: 'cancelled', cancel_reason: reason || '' },
       );
       setOrders(prev =>
-        prev.map(o => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
+        prev.map(o => (o.id === orderId
+          ? { ...o, status: 'cancelled', order_notes: `${o.order_notes || ''}${o.order_notes ? ' | ' : ''}Cancelled by admin: ${reason || ''}` }
+          : o))
       );
-      toast.success(`Order #${orderId} cancelled`);
+      toast.success(`Order #${orderId} cancelled — ${reason}`);
     } catch (e) {
       console.error('Failed to cancel order:', e);
       recentlyUpdatedRef.current.delete(orderId);
@@ -739,6 +758,18 @@ export default function AdminOrders() {
                 {order.order_notes && (
                   <p className="text-yellow-400/80 text-xs mb-3 italic">📝 {order.order_notes}</p>
                 )}
+                {order.status === 'cancelled' && getCancelInfo(order) && (
+                  <div className="mb-3 rounded-lg border border-red-600/30 bg-red-600/10 px-3 py-2">
+                    <p className="text-red-300 text-xs font-semibold">Cancelled by {getCancelInfo(order)!.by}</p>
+                    <p className="text-gray-300 text-xs mt-1">Reason: {getCancelInfo(order)!.reason}</p>
+                  </div>
+                )}
+                {getLatestRiderReject(order) && order.status !== 'cancelled' && (
+                  <div className="mb-3 rounded-lg border border-orange-600/30 bg-orange-600/10 px-3 py-2">
+                    <p className="text-orange-300 text-xs font-semibold">Rider {getLatestRiderReject(order)!.rider} rejected delivery</p>
+                    <p className="text-gray-300 text-xs mt-1">Reason: {getLatestRiderReject(order)!.reason}</p>
+                  </div>
+                )}
 
                 {order.status === 'out_for_delivery' && (
                   <div className="mb-3 rounded-lg border border-blue-600/30 bg-blue-600/10 px-3 py-2 text-sm text-blue-300">
@@ -899,39 +930,51 @@ export default function AdminOrders() {
 
                 {/* Cancel with Reason */}
                 {cancellingOrder === order.id && (
-                  <div className="bg-orange-950/50 rounded-lg p-3 mb-3 border border-orange-600/30">
-                    <p className="text-orange-400 text-sm font-medium mb-2">Cancel Order #{order.id} — Select Reason:</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
+                  <div className="bg-orange-600/10 border border-orange-600/30 rounded-xl p-3 mb-3">
+                    <p className="text-orange-400 text-sm font-medium mb-2">Cancel Order #{order.id} — Why?</p>
+                    <div className="grid grid-cols-2 gap-2 mb-2">
                       {['Customer requested', 'Out of stock', 'Kitchen too busy', 'Wrong order', 'Duplicate order', 'Other'].map(reason => (
                         <button
                           key={reason}
-                          onClick={() => setCancelReason(reason)}
-                          className={`px-2 py-1 rounded text-xs font-medium cursor-pointer ${
-                            cancelReason === reason ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                          }`}
+                          type="button"
+                          onClick={() => { setCancelPreset(reason); if (reason !== 'Other') setCancelOtherReason(''); }}
+                          className={`rounded-lg px-2 py-2 text-xs ${cancelPreset === reason ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
                         >
                           {reason}
                         </button>
                       ))}
                     </div>
-                    {cancelReason === 'Other' && (
-                      <Input
-                        value={cancelReason === 'Other' ? '' : cancelReason}
-                        onChange={e => setCancelReason(e.target.value || 'Other')}
-                        placeholder="Enter custom reason..."
-                        className="bg-gray-800 border-gray-700 text-white text-sm mb-2"
+                    {cancelPreset === 'Other' && (
+                      <Textarea
+                        value={cancelOtherReason}
+                        onChange={e => setCancelOtherReason(e.target.value)}
+                        maxLength={300}
+                        placeholder="Write cancellation reason..."
+                        className="bg-gray-800 border-gray-700 text-white mb-2"
                       />
                     )}
                     <div className="flex gap-2">
                       <Button
                         size="sm"
-                        onClick={() => { cancelOrder(order.id, cancelReason); setCancellingOrder(null); setCancelReason(''); }}
-                        disabled={!cancelReason}
-                        className="bg-orange-600 hover:bg-orange-700 text-white cursor-pointer"
+                        onClick={() => {
+                          const reason = cancelPreset === 'Other' ? cancelOtherReason.trim() : cancelPreset.trim();
+                          if (!reason) { toast.error('Cancellation reason is required'); return; }
+                          void cancelOrder(order.id, reason);
+                          setCancellingOrder(null);
+                          setCancelPreset('');
+                          setCancelOtherReason('');
+                        }}
+                        disabled={!cancelPreset || (cancelPreset === 'Other' && !cancelOtherReason.trim())}
+                        className="bg-red-600 hover:bg-red-700 text-white"
                       >
-                        <X className="w-3 h-3 mr-1" /> Confirm Cancel
+                        Confirm Cancel
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setCancellingOrder(null); setCancelReason(''); }} className="text-gray-400 cursor-pointer">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setCancellingOrder(null); setCancelPreset(''); setCancelOtherReason(''); }}
+                        className="border-gray-700 text-gray-300"
+                      >
                         Back
                       </Button>
                     </div>
@@ -1013,7 +1056,7 @@ export default function AdminOrders() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                          onClick={() => { setCancellingOrder(order.id); setCancelPreset(''); setCancelOtherReason(''); }}
                           className="text-red-400 hover:text-red-300 text-xs cursor-pointer"
                         >
                           <X className="w-3 h-3" />
@@ -1026,7 +1069,7 @@ export default function AdminOrders() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => { setCancellingOrder(order.id); setCancelReason(''); }}
+                        onClick={() => { setCancellingOrder(order.id); setCancelPreset(''); setCancelOtherReason(''); }}
                         className="text-orange-400 hover:text-orange-300 text-xs cursor-pointer p-1 h-auto"
                         title="Cancel order"
                       >

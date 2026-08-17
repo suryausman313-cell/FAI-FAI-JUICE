@@ -40,6 +40,7 @@ declare global {
   interface Window {
     VitaPrinter?: {
       printReceipt: (payload: string) => string | void;
+      startOrderAlarm?: (count: number) => void;
       stopOrderAlarm?: () => void;
     };
     webkitAudioContext?: typeof AudioContext;
@@ -60,6 +61,8 @@ type KitchenOrder = Order & {
   rider_picked_up_at?: string | null;
   promised_delivery_at?: string | null;
   delivered_at?: string | null;
+  cancel_reason?: string | null;
+  cancelled_by?: string | null;
 };
 
 type ReceiptSettings = {
@@ -103,6 +106,20 @@ type ParsedItem = {
 const TIME_OPTIONS = [10, 15, 20, 30, 45];
 const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
 const DELIVERY_PENDING_STATUSES = new Set(['out_for_delivery', 'picked_up', 'on_the_way']);
+
+function getCancelInfo(order: KitchenOrder): { by: string; reason: string } | null {
+  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  if (!match) return null;
+  const actor = match[1].toLowerCase();
+  return { by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen', reason: match[2].trim() };
+}
+
+function getLatestRiderReject(order: KitchenOrder): { rider: string; reason: string } | null {
+  const matches = Array.from(String(order.order_notes || '').matchAll(/Rider\s+([^|:]+?)\s+rejected\s*:\s*([^|]+)/gi));
+  if (!matches.length) return null;
+  const match = matches[matches.length - 1];
+  return { rider: match[1].trim(), reason: match[2].trim() };
+}
 
 function money(value: unknown): string {
   const amount = Number(value);
@@ -421,6 +438,9 @@ export default function KitchenOrders() {
   });
   const [assignments, setAssignments] = useState<Record<number, AssignmentInfo>>({});
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const [cancelOrderTarget, setCancelOrderTarget] = useState<KitchenOrder | null>(null);
+  const [cancelPreset, setCancelPreset] = useState('');
+  const [cancelOtherReason, setCancelOtherReason] = useState('');
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
@@ -493,20 +513,27 @@ export default function KitchenOrders() {
 
       const nextOrders = extractOrders(response.data);
       const currentNewIds = new Set(nextOrders.filter((order) => order.status === 'new').map((order) => order.id));
+      const isFirstLoad = firstLoadRef.current;
+      const newIds = isFirstLoad
+        ? [...currentNewIds]
+        : [...currentNewIds].filter((orderId) => !previousNewIdsRef.current.has(orderId));
 
-      if (!firstLoadRef.current) {
-        const newIds = [...currentNewIds].filter((orderId) => !previousNewIdsRef.current.has(orderId));
-        if (newIds.length > 0) {
-          toast.success(`${newIds.length} new order${newIds.length > 1 ? 's' : ''} received`);
-        }
+      if (!isFirstLoad && newIds.length > 0) {
+        toast.success(`${newIds.length} new order${newIds.length > 1 ? 's' : ''} received`);
       }
-
-      // Browser tone intentionally disabled; Android KitchenOrderService owns the ringtone.
 
       previousNewIdsRef.current = currentNewIds;
       firstLoadRef.current = false;
       setOrders(nextOrders);
       setLastRefresh(new Date());
+
+      // In the foreground, sound starts only AFTER React has received the order list.
+      // The Android background service stays responsible when the app is not visible.
+      if (newIds.length > 0 && window.VitaPrinter?.startOrderAlarm) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => window.VitaPrinter?.startOrderAlarm?.(newIds.length));
+        });
+      }
     } catch (error: any) {
       const status = error?.response?.status;
       if (status === 401 || status === 403) {
@@ -631,11 +658,31 @@ export default function KitchenOrders() {
     }
   }
 
-  async function updateOrderStatus(order: KitchenOrder, status: string, estimatedMinutes?: number) {
+  async function updateOrderStatus(
+    order: KitchenOrder,
+    status: string,
+    estimatedMinutes?: number,
+    cancelReason?: string,
+  ) {
+    const shouldStopAlarm = status !== 'new';
+
+    // Stop the native alarm immediately on the tap. Do not wait for Render/API.
+    if (shouldStopAlarm) {
+      try { window.VitaPrinter?.stopOrderAlarm?.(); } catch { /* optional Android bridge */ }
+    }
+
+    // Prevent the next foreground refresh from treating this same order as new
+    // while the status request is still in flight.
+    if (status !== 'new') previousNewIdsRef.current.delete(order.id);
+
     try {
       const response = await axios.put(
         `${getAPIBaseURL()}/api/v1/admin/kitchen/orders/${order.id}/status`,
-        { status, estimated_minutes: estimatedMinutes },
+        {
+          status,
+          estimated_minutes: estimatedMinutes,
+          cancel_reason: cancelReason || undefined,
+        },
         { headers: kitchenHeaders(), timeout: 15000 },
       );
 
@@ -649,16 +696,16 @@ export default function KitchenOrders() {
                 status,
                 updated_at: new Date().toISOString(),
                 estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : item.estimated_time,
+                order_notes:
+                  status === 'cancelled' && cancelReason
+                    ? `${item.order_notes || ''}${item.order_notes ? ' | ' : ''}Cancelled by kitchen: ${cancelReason}`
+                    : item.order_notes,
               }
             : item,
         ),
       );
 
       if (status === 'accepted') {
-        previousNewIdsRef.current.delete(order.id);
-
-        const remainingNew = orders.filter((item) => item.id !== order.id && item.status === 'new');
-
         const printKey = `kitchen_original_printed_${order.id}`;
         if (receiptSettings.auto_print_on_accept !== false && localStorage.getItem(printKey) !== 'true') {
           const printed = printReceipt(
@@ -673,18 +720,16 @@ export default function KitchenOrders() {
         }
       }
 
-      if (status !== 'new') {
-        try {
-          window.VitaPrinter?.stopOrderAlarm?.();
-        } catch {
-          // ignore
-        }
-      }
-
+      if (status === 'cancelled') setSelectedOrderId(null);
       setCustomTime('');
       toast.success(`Order #${order.id} → ${status}`);
       setTimeout(() => void loadOrders(), 700);
     } catch (error: any) {
+      // If accepting/cancelling a still-new order failed, let the alarm resume.
+      if (shouldStopAlarm && order.status === 'new') {
+        previousNewIdsRef.current.add(order.id);
+        try { window.VitaPrinter?.startOrderAlarm?.(1); } catch { /* optional bridge */ }
+      }
       console.error('Kitchen status update failed:', error);
       toast.error(String(error?.response?.data?.detail || 'Order update failed'));
     }
@@ -857,6 +902,19 @@ export default function KitchenOrders() {
               </div>
             </Card>
 
+          {order.status === 'cancelled' && getCancelInfo(order) && (
+            <div className="mt-5 rounded-3xl border border-red-200 bg-red-50 p-4">
+              <p className="font-black text-red-700">Cancelled by {getCancelInfo(order)!.by}</p>
+              <p className="mt-1 text-slate-700">Reason: {getCancelInfo(order)!.reason}</p>
+            </div>
+          )}
+          {getLatestRiderReject(order) && order.status !== 'cancelled' && (
+            <div className="mt-5 rounded-3xl border border-orange-200 bg-orange-50 p-4">
+              <p className="font-black text-orange-700">Rider {getLatestRiderReject(order)!.rider} rejected</p>
+              <p className="mt-1 text-slate-700">Reason: {getLatestRiderReject(order)!.reason}</p>
+            </div>
+          )}
+
             {order.status === 'new' && (
               <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-3xl font-black text-slate-900">Accept order</h3>
@@ -895,10 +953,10 @@ export default function KitchenOrders() {
                   <Button
                     variant="outline"
                     onClick={() => {
-                      if (window.confirm(`Cancel order #${order.id}?`)) {
-                        void updateOrderStatus(order, 'cancelled');
-                        setSelectedOrderId(null);
-                      }
+                      window.VitaPrinter?.stopOrderAlarm?.();
+                      setCancelPreset('');
+                      setCancelOtherReason('');
+                      setCancelOrderTarget(order);
                     }}
                     className="h-14 rounded-2xl border-red-200 text-lg font-bold text-red-600 hover:bg-red-50"
                   >
@@ -992,6 +1050,9 @@ export default function KitchenOrders() {
                     </Badge>
                   </div>
                   <p className="mt-2 text-lg text-slate-500">{formatUaeTime(order.updated_at || order.created_at)} · {order.customer_name}</p>
+                  {order.status === 'cancelled' && getCancelInfo(order) && (
+                    <p className="mt-1 text-sm font-semibold text-red-600">{getCancelInfo(order)!.by}: {getCancelInfo(order)!.reason}</p>
+                  )}
                 </div>
                 <div className="text-3xl font-black text-slate-900">AED {money(order.total_amount)}</div>
               </div>
@@ -1030,6 +1091,41 @@ export default function KitchenOrders() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
+      {cancelOrderTarget && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-xl font-black text-slate-900">Cancel Order #{cancelOrderTarget.id}</h3>
+              <button type="button" onClick={() => setCancelOrderTarget(null)} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-3 text-sm text-slate-500">Select a reason. A reason is required.</p>
+            <div className="grid grid-cols-2 gap-2">
+              {['Out of stock', 'Item unavailable', 'Kitchen too busy', 'Unable to prepare', 'Customer requested', 'Other'].map(reason => (
+                <button key={reason} type="button" onClick={() => { setCancelPreset(reason); if (reason !== 'Other') setCancelOtherReason(''); }} className={`rounded-2xl border px-3 py-3 text-sm font-semibold ${cancelPreset === reason ? 'border-red-500 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-700'}`}>{reason}</button>
+              ))}
+            </div>
+            {cancelPreset === 'Other' && (
+              <textarea value={cancelOtherReason} onChange={e => setCancelOtherReason(e.target.value)} maxLength={300} placeholder="Write cancellation reason..." className="mt-3 w-full rounded-2xl border border-slate-200 p-3 text-slate-900 outline-none focus:border-red-400" rows={2} />
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => { setCancelOrderTarget(null); setCancelPreset(''); setCancelOtherReason(''); }} className="h-12 rounded-2xl">Back</Button>
+              <Button
+                disabled={!cancelPreset || (cancelPreset === 'Other' && !cancelOtherReason.trim())}
+                onClick={() => {
+                  const reason = cancelPreset === 'Other' ? cancelOtherReason.trim() : cancelPreset;
+                  if (!reason) return;
+                  const target = cancelOrderTarget;
+                  setCancelOrderTarget(null);
+                  setCancelPreset('');
+                  setCancelOtherReason('');
+                  void updateOrderStatus(target, 'cancelled', undefined, reason);
+                }}
+                className="h-12 rounded-2xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >Confirm Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-5xl px-4 pb-12 pt-3">
         <header className="mb-4 flex items-center justify-between gap-3 rounded-3xl bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center gap-3">
