@@ -14,6 +14,7 @@ class Menu_items(Base):
     price_medium = Column(Float, nullable=True)
     price_large = Column(Float, nullable=True)
     sizes_json = Column(String, nullable=True)
+    extras_json = Column(String, nullable=True)
     image_url = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=True, default=True, server_default='true')
     has_extras = Column(Boolean, nullable=True, default=True, server_default='true')
