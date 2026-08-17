@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 import { Bike, MapPin, Phone, Package, CheckCircle, Navigation, LogOut, RefreshCw, Bell, BellOff, BarChart3, Clock, DollarSign, CreditCard, Banknote, Wallet, Send, CalendarDays, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +7,26 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { client } from '@/lib/api';
+import { getAPIBaseURL } from '@/lib/config';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+
+
+type RiderApiOptions = {
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  data?: unknown;
+};
+
+function riderApi(options: RiderApiOptions) {
+  return axios.request({
+    url: `${getAPIBaseURL().replace(/\/$/, '')}${options.url}`,
+    method: options.method,
+    data: options.data,
+    timeout: 25000,
+  });
+}
 
 // Fix leaflet default marker icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -64,7 +82,7 @@ interface RiderStats {
 }
 
 
-type FinancePeriod = 'today' | 'yesterday' | 'week' | 'thirty_days' | 'all' | 'custom';
+type FinancePeriod = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' | 'custom';
 
 interface FinanceTotals {
   delivered_orders: number;
@@ -126,6 +144,8 @@ interface CashSubmission {
 }
 
 export default function RiderPanel() {
+  const browserNotificationsSupported =
+    typeof window !== 'undefined' && 'Notification' in window;
   const [rider, setRider] = useState<Rider | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [stats, setStats] = useState<RiderStats | null>(null);
@@ -163,9 +183,16 @@ export default function RiderPanel() {
         loadCashSubmissions(parsed.id);
       } catch { /* ignore */ }
     }
-    if ('Notification' in window) {
+    if (browserNotificationsSupported) {
       setNotificationPermission(Notification.permission);
-      setNotificationsEnabled(Notification.permission === 'granted' && localStorage.getItem('rider_notifications') !== 'off');
+      setNotificationsEnabled(
+        Notification.permission === 'granted' &&
+        localStorage.getItem('rider_notifications') !== 'off'
+      );
+    } else {
+      // Android WebView / browsers without Notification API:
+      // keep reliable in-app rider alerts instead of showing an error.
+      setNotificationsEnabled(localStorage.getItem('rider_notifications') !== 'off');
     }
   }, []);
 
@@ -194,7 +221,7 @@ export default function RiderPanel() {
   useEffect(() => {
     if (!rider) return;
     function sendHeartbeat() {
-      client.apiCall.invoke({
+      riderApi({
         url: `/api/v1/rider/heartbeat/${rider.id}`,
         method: 'POST',
         data: {},
@@ -211,7 +238,7 @@ export default function RiderPanel() {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          client.apiCall.invoke({
+          riderApi({
             url: `/api/v1/rider/location/${rider.id}`,
             method: 'POST',
             data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
@@ -247,7 +274,7 @@ export default function RiderPanel() {
 
   useEffect(() => {
     if (!rider || deliveries.length === 0) return;
-    const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
+    const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())).map(d => d.id);
     const newIds = activeIds.filter(id => !prevDeliveryIdsRef.current.includes(id));
     if (newIds.length > 0 && prevDeliveryIdsRef.current.length > 0) {
       const newDelivery = deliveries.find(d => newIds.includes(d.id));
@@ -277,6 +304,23 @@ export default function RiderPanel() {
     } catch { /* ignore */ }
   }
 
+  // Keep an assigned order noticeable until rider Accepts or Rejects.
+  useEffect(() => {
+    const waitingForDecision = Boolean(
+      rider &&
+      notificationsEnabled &&
+      deliveries.some(
+        delivery => String(delivery.status || '').toLowerCase() === 'assigned'
+      )
+    );
+
+    if (!waitingForDecision) return;
+
+    playNotificationSound();
+    const ringTimer = window.setInterval(playNotificationSound, 5000);
+    return () => window.clearInterval(ringTimer);
+  }, [deliveries, rider, notificationsEnabled]);
+
   async function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     try {
@@ -291,47 +335,101 @@ export default function RiderPanel() {
         });
       }
       if (registration.active && rider) {
-        const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
+        const activeIds = deliveries.filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())).map(d => d.id);
+        registration.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds, apiBaseUrl: getAPIBaseURL() } });
       }
     } catch (error) { console.error('SW registration failed:', error); }
   }
 
   async function requestNotificationPermission() {
-    if (!('Notification' in window)) { toast.error('Notifications not supported'); return; }
+    if (!browserNotificationsSupported) {
+      setNotificationsEnabled(true);
+      localStorage.setItem('rider_notifications', 'on');
+      toast.success('🔔 Rider alerts enabled');
+      return;
+    }
+
     const permission = await Notification.requestPermission();
     setNotificationPermission(permission);
+
     if (permission === 'granted') {
       setNotificationsEnabled(true);
       localStorage.setItem('rider_notifications', 'on');
       toast.success('🔔 Notifications enabled!');
-      if (swRegistrationRef.current) {
-        swRegistrationRef.current.showNotification('🍕 Notifications Active!', { body: 'You will receive alerts for new orders.', icon: '/vite.svg', tag: 'test-notification' });
+
+      try {
+        if (swRegistrationRef.current) {
+          await swRegistrationRef.current.showNotification('🛵 Rider Notifications Active', {
+            body: 'You will receive alerts for new delivery orders.',
+            icon: '/vite.svg',
+            tag: 'rider-test-notification',
+          });
+        }
+      } catch (error) {
+        console.error('Rider notification test failed:', error);
       }
-    } else if (permission === 'denied') { toast.error('Notifications blocked.'); }
+    } else if (permission === 'denied') {
+      setNotificationsEnabled(false);
+      localStorage.setItem('rider_notifications', 'off');
+      toast.error('Notifications are blocked in browser settings.');
+    }
   }
 
   function toggleNotifications() {
     if (notificationsEnabled) {
       setNotificationsEnabled(false);
       localStorage.setItem('rider_notifications', 'off');
-      if (swRegistrationRef.current?.active) { swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGOUT' }); }
-      toast.info('Notifications off');
+      if (swRegistrationRef.current?.active) {
+        swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGOUT' });
+      }
+      toast.info(browserNotificationsSupported ? 'Notifications off' : 'Rider alerts off');
+      return;
+    }
+
+    if (!browserNotificationsSupported) {
+      setNotificationsEnabled(true);
+      localStorage.setItem('rider_notifications', 'on');
+      toast.success('🔔 Rider alerts on');
+      return;
+    }
+
+    if (notificationPermission === 'granted') {
+      setNotificationsEnabled(true);
+      localStorage.setItem('rider_notifications', 'on');
+      if (swRegistrationRef.current?.active && rider) {
+        const activeIds = deliveries
+          .filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase()))
+          .map(d => d.id);
+        swRegistrationRef.current.active.postMessage({
+          type: 'RIDER_LOGIN',
+          data: {
+            riderId: rider.id,
+            currentDeliveryIds: activeIds,
+            apiBaseUrl: getAPIBaseURL(),
+          },
+        });
+      }
+      toast.success('Notifications on');
     } else {
-      if (notificationPermission === 'granted') {
-        setNotificationsEnabled(true);
-        localStorage.setItem('rider_notifications', 'on');
-        if (swRegistrationRef.current?.active && rider) {
-          const activeIds = deliveries.filter(d => d.status !== 'delivered').map(d => d.id);
-          swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGIN', data: { riderId: rider.id, currentDeliveryIds: activeIds } });
-        }
-        toast.success('Notifications on');
-      } else { requestNotificationPermission(); }
+      void requestNotificationPermission();
     }
   }
 
   function updateMap() {
-    const activeDeliveries = deliveries.filter(d => d.status !== 'delivered' && d.customer_lat && d.customer_lng);
+    const latestByOrder = new Map<number, Delivery>();
+    deliveries.forEach((delivery) => {
+      const existing = latestByOrder.get(delivery.order_id);
+      if (!existing || Number(delivery.id) > Number(existing.id)) {
+        latestByOrder.set(delivery.order_id, delivery);
+      }
+    });
+
+    const activeDeliveries = Array.from(latestByOrder.values()).filter(
+      d =>
+        !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase()) &&
+        d.customer_lat &&
+        d.customer_lng
+    );
     if (activeDeliveries.length === 0) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     if (!mapContainerRef.current) return;
@@ -355,7 +453,7 @@ export default function RiderPanel() {
     if (!phone || !pin) { toast.error('Please enter phone and PIN'); return; }
     setLoginLoading(true);
     try {
-      const res = await client.apiCall.invoke({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
+      const res = await riderApi({ url: '/api/v1/rider/login', method: 'POST', data: { phone, pin } });
       if (res?.data?.success) {
         const riderData = res.data.rider;
         setRider(riderData);
@@ -365,11 +463,11 @@ export default function RiderPanel() {
         loadStats(riderData.id);
         loadFinance(riderData.id, 'today');
         loadCashSubmissions(riderData.id);
-        if ('Notification' in window && Notification.permission === 'default') {
+        if (browserNotificationsSupported && Notification.permission === 'default') {
           setTimeout(() => requestNotificationPermission(), 2000);
         }
       }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Invalid phone or PIN'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Invalid phone or PIN'); }
     finally { setLoginLoading(false); }
   }
 
@@ -389,7 +487,7 @@ export default function RiderPanel() {
 
   async function loadDeliveries(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/deliveries/${riderId}`, method: 'GET' });
       const items = res?.data?.items || [];
       setDeliveries(items);
       setLastRefresh(new Date());
@@ -401,37 +499,16 @@ export default function RiderPanel() {
 
   async function loadStats(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
+      const res = await riderApi({ url: `/api/v1/rider/stats/${riderId}`, method: 'GET' });
       if (res?.data) { setStats(res.data); }
     } catch (e) { console.error('Failed to load stats:', e); }
   }
 
   function getFinanceUrl(riderId: number, period: FinancePeriod) {
-    let apiPeriod = period as string;
-    let from = customFrom;
-    let to = customTo;
-
-    if (period === 'week' || period === 'thirty_days') {
-      const end = new Date();
-      const start = new Date(end);
-      start.setDate(start.getDate() - (period === 'week' ? 6 : 29));
-
-      const localDate = (value: Date) =>
-        [
-          value.getFullYear(),
-          String(value.getMonth() + 1).padStart(2, '0'),
-          String(value.getDate()).padStart(2, '0'),
-        ].join('-');
-
-      apiPeriod = 'custom';
-      from = localDate(start);
-      to = localDate(end);
-    }
-
-    const params = new URLSearchParams({ period: apiPeriod });
-    if (apiPeriod === 'custom') {
-      params.set('date_from', from);
-      params.set('date_to', to);
+    const params = new URLSearchParams({ period });
+    if (period === 'custom') {
+      params.set('date_from', customFrom);
+      params.set('date_to', customTo);
     }
     return `/api/v1/finance/rider/${riderId}/summary?${params.toString()}`;
   }
@@ -440,7 +517,7 @@ export default function RiderPanel() {
     if (period === 'custom' && (!customFrom || !customTo)) return;
     setFinanceLoading(true);
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: getFinanceUrl(riderId, period),
         method: 'GET',
         data: {},
@@ -448,8 +525,7 @@ export default function RiderPanel() {
       if (res?.data) setFinanceSummary(res.data);
     } catch (e: any) {
       console.error('Failed to load rider finance:', e);
-      // Auto-refresh runs frequently. Do not spam the Rider with the same
-      // finance error every few seconds; keep the last good summary visible.
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not load finance report');
     } finally {
       setFinanceLoading(false);
     }
@@ -457,7 +533,7 @@ export default function RiderPanel() {
 
   async function loadCashSubmissions(riderId: number) {
     try {
-      const res = await client.apiCall.invoke({
+      const res = await riderApi({
         url: `/api/v1/finance/rider/${riderId}/cash-submissions?limit=100`,
         method: 'GET',
         data: {},
@@ -484,7 +560,7 @@ export default function RiderPanel() {
 
     setSubmittingCash(true);
     try {
-      await client.apiCall.invoke({
+      await riderApi({
         url: `/api/v1/finance/rider/${rider.id}/cash-submissions`,
         method: 'POST',
         data: { amount, note: cashNote.trim() },
@@ -497,7 +573,7 @@ export default function RiderPanel() {
         loadCashSubmissions(rider.id),
       ]);
     } catch (e: any) {
-      toast.error(e?.data?.detail || 'Cash submission failed');
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Cash submission failed');
     } finally {
       setSubmittingCash(false);
     }
@@ -517,10 +593,10 @@ export default function RiderPanel() {
 
   async function updateStatus(assignmentId: number, newStatus: string) {
     try {
-      await client.apiCall.invoke({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
+      await riderApi({ url: `/api/v1/rider/deliveries/${assignmentId}/status`, method: 'PUT', data: { status: newStatus } });
       toast.success(`Status updated to ${newStatus.replace(/_/g, ' ')}`);
       if (rider) { loadDeliveries(rider.id); loadStats(rider.id); loadFinance(rider.id, financePeriod); loadCashSubmissions(rider.id); }
-    } catch (e: any) { toast.error(e?.data?.detail || 'Failed to update status'); }
+    } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed to update status'); }
   }
 
   function openInMaps(lat: number, lng: number) {
@@ -530,6 +606,8 @@ export default function RiderPanel() {
   function getStatusColor(status: string) {
     switch (status) {
       case 'assigned': return 'bg-blue-600/20 text-blue-400 border-blue-600/30';
+      case 'accepted': return 'bg-emerald-600/20 text-emerald-400 border-emerald-600/30';
+      case 'rejected': return 'bg-red-600/20 text-red-400 border-red-600/30';
       case 'picked_up': return 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30';
       case 'on_the_way': return 'bg-orange-600/20 text-orange-400 border-orange-600/30';
       case 'delivered': return 'bg-green-600/20 text-green-400 border-green-600/30';
@@ -539,10 +617,13 @@ export default function RiderPanel() {
 
   function getNextStatus(current: string): { label: string; value: string } | null {
     switch (current) {
-      case 'assigned': return { label: '🏪 Picked Up', value: 'picked_up' };
-      case 'picked_up': return { label: '🚗 On the Way', value: 'on_the_way' };
-      case 'on_the_way': return { label: '✅ Delivered', value: 'delivered' };
-      default: return null;
+      case 'accepted':
+        return { label: '🏪 Picked Up from Kitchen', value: 'picked_up' };
+      case 'picked_up':
+      case 'on_the_way':
+        return { label: '✅ Delivered to Customer', value: 'delivered' };
+      default:
+        return null;
     }
   }
 
@@ -556,7 +637,7 @@ export default function RiderPanel() {
               <Bike className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-white text-2xl font-bold">Rider Panel</h1>
-            <p className="text-gray-400 text-sm mt-1">Vita Napoli Delivery</p>
+            <p className="text-gray-400 text-sm mt-1">Fai Fai Juice Delivery</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -576,8 +657,21 @@ export default function RiderPanel() {
     );
   }
 
-  const activeDeliveries = deliveries.filter(d => d.status !== 'delivered');
-  const completedDeliveries = deliveries.filter(d => d.status === 'delivered');
+  const latestByOrder = new Map<number, Delivery>();
+  deliveries.forEach((delivery) => {
+    const existing = latestByOrder.get(delivery.order_id);
+    if (!existing || Number(delivery.id) > Number(existing.id)) {
+      latestByOrder.set(delivery.order_id, delivery);
+    }
+  });
+
+  const uniqueDeliveries = Array.from(latestByOrder.values());
+  const activeDeliveries = uniqueDeliveries.filter(
+    d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
+  );
+  const completedDeliveries = uniqueDeliveries.filter(
+    d => String(d.status || '').toLowerCase() === 'delivered'
+  );
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -623,7 +717,7 @@ export default function RiderPanel() {
         </div>
 
         {/* Notification Permission Banner */}
-        {notificationPermission === 'default' && (
+        {browserNotificationsSupported && notificationPermission === 'default' && (
           <div className="mb-4 p-3 rounded-xl bg-blue-600/10 border border-blue-600/30">
             <div className="flex items-center justify-between">
               <div>
@@ -634,7 +728,7 @@ export default function RiderPanel() {
             </div>
           </div>
         )}
-        {notificationPermission === 'denied' && (
+        {browserNotificationsSupported && notificationPermission === 'denied' && (
           <div className="mb-4 p-3 rounded-xl bg-red-600/10 border border-red-600/30">
             <p className="text-red-400 text-sm">⚠️ Notifications blocked. Enable in browser settings.</p>
           </div>
@@ -658,9 +752,9 @@ export default function RiderPanel() {
                 >
                   <option value="today">Today</option>
                   <option value="yesterday">Yesterday</option>
-                  <option value="week">Last 7 Days</option>
-                  <option value="thirty_days">Last 30 Days</option>
-                  
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="year">This Year</option>
                   <option value="all">All Time</option>
                   <option value="custom">Custom Date</option>
                 </select>
@@ -903,11 +997,40 @@ export default function RiderPanel() {
                                 <Navigation className="w-4 h-4 mr-1" /> Navigate
                               </Button>
                             )}
-                            {nextStatus && (
-                              <Button onClick={() => updateStatus(delivery.id, nextStatus.value)} className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer" size="sm">
+                            {delivery.status === 'assigned' ? (
+                              <>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'accepted')}
+                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ✅ Accept
+                                </Button>
+                                <Button
+                                  onClick={() => updateStatus(delivery.id, 'rejected')}
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                                  size="sm"
+                                >
+                                  ❌ Reject
+                                </Button>
+                              </>
+                            ) : delivery.status === 'accepted' && delivery.order_status !== 'ready' ? (
+                              <Button
+                                disabled
+                                className="flex-1 bg-gray-700 text-gray-300 cursor-not-allowed"
+                                size="sm"
+                              >
+                                Waiting for Kitchen Ready
+                              </Button>
+                            ) : nextStatus ? (
+                              <Button
+                                onClick={() => updateStatus(delivery.id, nextStatus.value)}
+                                className="flex-1 bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                                size="sm"
+                              >
                                 {nextStatus.label}
                               </Button>
-                            )}
+                            ) : null}
                           </div>
                         </Card>
                       );
