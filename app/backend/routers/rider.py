@@ -499,15 +499,17 @@ async def assign_delivery(
         if not rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        # Admin can select only a rider whose Rider app is currently live and
-        # sending fresh GPS. This matches the availability badge in AdminOrders.
-        live = require_live_rider(rider)
-
-        # Shop GPS is used only to calculate pickup distance. Manual assignment
-        # must still work if the shop coordinates have not been saved yet.
+        # Manual Admin assignment may use any ACTIVE rider.
+        # Auto Assign remains strict/live-only in services/rider_assignment.py.
+        live = rider_live_status(rider)
         shop_lat, shop_lng = await get_restaurant_location(db)
         pickup_distance = None
-        if shop_lat is not None and shop_lng is not None:
+        if (
+            shop_lat is not None
+            and shop_lng is not None
+            and live.get("lat") is not None
+            and live.get("lng") is not None
+        ):
             pickup_distance = haversine_km(
                 float(live["lat"]),
                 float(live["lng"]),
@@ -1116,10 +1118,16 @@ async def reassign_delivery(
         if not new_rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
-        live = require_live_rider(new_rider)
+        # Manual re-assignment may use any ACTIVE rider. Auto Assign stays live-only.
+        live = rider_live_status(new_rider)
         shop_lat, shop_lng = await get_restaurant_location(db)
         pickup_distance = None
-        if shop_lat is not None and shop_lng is not None:
+        if (
+            shop_lat is not None
+            and shop_lng is not None
+            and live.get("lat") is not None
+            and live.get("lng") is not None
+        ):
             pickup_distance = haversine_km(
                 float(live["lat"]),
                 float(live["lng"]),
