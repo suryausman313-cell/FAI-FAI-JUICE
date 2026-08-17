@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
-import { MapPin, Car, Tag, Navigation, CheckCircle } from 'lucide-react';
+import { MapPin, Car, Tag, Navigation, CheckCircle, X } from 'lucide-react';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client, CartItem, Offer, localizedMenuText } from '@/lib/api';
 import { getCart, getCartTotal, getCartOriginalTotal, getCartItemDiscountTotal, clearCart } from '@/lib/cart-store';
@@ -54,30 +54,127 @@ function formatScheduleTime(value: string, language: string): string {
 }
 
 type SavedDeliveryLocation = {
+  id: string;
+  name: string;
   lat: number;
   lng: number;
   address: string;
 };
 
-const SAVED_DELIVERY_LOCATION_KEY = 'vita_saved_delivery_location';
+const SAVED_DELIVERY_LOCATIONS_KEY = 'vita_saved_delivery_locations_v3';
+const OLD_SAVED_DELIVERY_LOCATIONS_KEY = 'vita_saved_delivery_locations_v2';
+const LEGACY_SAVED_DELIVERY_LOCATION_KEY = 'vita_saved_delivery_location';
+const MAX_SAVED_DELIVERY_LOCATIONS = 10;
 
-function readSavedDeliveryLocation(): SavedDeliveryLocation | null {
-  try {
-    const raw = localStorage.getItem(SAVED_DELIVERY_LOCATION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    const lat = Number(parsed?.lat);
-    const lng = Number(parsed?.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    return {
-      lat,
-      lng,
-      address: String(parsed?.address || ''),
-    };
-  } catch {
-    return null;
-  }
+function cleanSavedLocationName(value: unknown): string {
+  return String(value || '').trim().slice(0, 30);
 }
+
+function readSavedDeliveryLocations(): SavedDeliveryLocation[] {
+  try {
+    const raw = localStorage.getItem(SAVED_DELIVERY_LOCATIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item: any, index: number) => {
+            const lat = Number(item?.lat);
+            const lng = Number(item?.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            const name = cleanSavedLocationName(item?.name) || `Location ${index + 1}`;
+            return {
+              id: String(item?.id || `${Date.now()}-${index}`),
+              name,
+              lat,
+              lng,
+              address: String(item?.address || ''),
+            } as SavedDeliveryLocation;
+          })
+          .filter(Boolean)
+          .slice(0, MAX_SAVED_DELIVERY_LOCATIONS) as SavedDeliveryLocation[];
+      }
+    }
+
+    // Migrate the previous Home / Work / Other format.
+    const oldRaw = localStorage.getItem(OLD_SAVED_DELIVERY_LOCATIONS_KEY);
+    if (oldRaw) {
+      const parsed = JSON.parse(oldRaw) || {};
+      const migrated: SavedDeliveryLocation[] = [];
+      const labels: Record<string, string> = {
+        home: 'Home',
+        work: 'Work',
+        other: 'Other',
+      };
+
+      ['home', 'work', 'other'].forEach((slot, index) => {
+        const item = parsed?.[slot];
+        const lat = Number(item?.lat);
+        const lng = Number(item?.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          migrated.push({
+            id: `migrated-${slot}-${index}`,
+            name: labels[slot],
+            lat,
+            lng,
+            address: String(item?.address || ''),
+          });
+        }
+      });
+
+      if (migrated.length > 0) {
+        localStorage.setItem(
+          SAVED_DELIVERY_LOCATIONS_KEY,
+          JSON.stringify(migrated),
+        );
+        return migrated;
+      }
+    }
+
+    // Migrate the oldest one-location format into Home.
+    const legacyRaw = localStorage.getItem(LEGACY_SAVED_DELIVERY_LOCATION_KEY);
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw);
+      const lat = Number(legacy?.lat);
+      const lng = Number(legacy?.lng);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const migrated: SavedDeliveryLocation[] = [{
+          id: 'legacy-home',
+          name: 'Home',
+          lat,
+          lng,
+          address: String(legacy?.address || ''),
+        }];
+        localStorage.setItem(
+          SAVED_DELIVERY_LOCATIONS_KEY,
+          JSON.stringify(migrated),
+        );
+        return migrated;
+      }
+    }
+  } catch {
+    // Ignore invalid local storage data.
+  }
+
+  return [];
+}
+
+const CHECKOUT_EN: Record<string, string> = {
+  'checkout.saved_locations': 'Saved locations',
+  'checkout.save_location_optional': 'Save this location (optional)',
+  'checkout.location_name': 'Location name',
+  'checkout.location_name_placeholder': 'Home, Work, Office, etc.',
+  'checkout.home': 'Home',
+  'checkout.work': 'Work',
+  'checkout.other': 'Other',
+  'checkout.save': 'Save',
+  'checkout.cancel': 'Cancel',
+  'checkout.saved_as': 'Location saved as',
+  'checkout.use_saved_location': 'Use saved location',
+  'checkout.saved_limit': 'You can save up to 10 locations.',
+  'checkout.saved_limit_reached': 'Maximum 10 saved locations. Delete one to save another.',
+  'checkout.enter_location_name': 'Enter a name for this location.',
+  'checkout.delete_saved_location': 'Delete saved location',
+};
 
 const CHECKOUT_AR: Record<string, string> = {
   'checkout.login_signup': 'تسجيل الدخول / إنشاء حساب',
@@ -160,9 +257,25 @@ const CHECKOUT_AR: Record<string, string> = {
   'checkout.promo_validate_failed': 'تعذر التحقق من كود الخصم',
   'checkout.delivery_not_available_area': 'التوصيل غير متاح في منطقتك',
   'checkout.delivery_within': 'نقوم بالتوصيل ضمن',
+  'checkout.madha_province': 'محافظة مدحاء',
   'checkout.shop_closed_message': 'المطعم مغلق حالياً. يرجى المحاولة خلال ساعات العمل.',
   'checkout.shop_busy_message': 'نحن مشغولون حالياً. قد تستغرق الطلبات وقتاً أطول من المعتاد.',
   'checkout.save_delivery_location': 'حفظ موقع التوصيل',
+  'checkout.saved_locations': 'المواقع المحفوظة',
+  'checkout.save_location_optional': 'حفظ هذا الموقع (اختياري)',
+  'checkout.location_name': 'اسم الموقع',
+  'checkout.location_name_placeholder': 'المنزل، العمل، المكتب، إلخ',
+  'checkout.save': 'حفظ',
+  'checkout.cancel': 'إلغاء',
+  'checkout.saved_limit': 'يمكنك حفظ حتى 10 مواقع.',
+  'checkout.saved_limit_reached': 'الحد الأقصى 10 مواقع محفوظة. احذف موقعاً لحفظ موقع آخر.',
+  'checkout.enter_location_name': 'أدخل اسماً لهذا الموقع.',
+  'checkout.delete_saved_location': 'حذف الموقع المحفوظ',
+  'checkout.save_as': 'حفظ باسم',
+  'checkout.home': 'المنزل',
+  'checkout.work': 'العمل',
+  'checkout.other': 'أخرى',
+  'checkout.saved_as': 'تم حفظ الموقع باسم',
   'checkout.use_saved_location': 'استخدام الموقع المحفوظ',
   'checkout.saved_location_success': 'تم حفظ موقع التوصيل.',
   'checkout.saved_location_loaded': 'تم تحميل موقع التوصيل المحفوظ.',
@@ -183,7 +296,7 @@ const CHECKOUT_AR: Record<string, string> = {
 export default function Checkout() {
   const navigate = useNavigate();
   const { t: baseT, language } = useTranslation();
-  const t = (key: string) => language === 'ar' ? (CHECKOUT_AR[key] || baseT(key)) : baseT(key);
+  const t = (key: string) => language === 'ar' ? (CHECKOUT_AR[key] || baseT(key)) : (CHECKOUT_EN[key] || baseT(key));
   const { isLoggedIn } = useCustomerAuth();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -263,7 +376,9 @@ export default function Checkout() {
   const [calculatedDeliveryCharge, setCalculatedDeliveryCharge] = useState(0);
   const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
   const [gettingLocation, setGettingLocation] = useState(false);
-  const [hasSavedDeliveryLocation, setHasSavedDeliveryLocation] = useState(() => !!readSavedDeliveryLocation());
+  const [savedDeliveryLocations, setSavedDeliveryLocations] = useState<SavedDeliveryLocation[]>(() => readSavedDeliveryLocations());
+  const [showSaveLocationPanel, setShowSaveLocationPanel] = useState(false);
+  const [saveLocationName, setSaveLocationName] = useState('');
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -336,14 +451,15 @@ export default function Checkout() {
     return value;
   }
 
-  async function useSavedDeliveryLocation() {
-    const saved = readSavedDeliveryLocation();
-    if (!saved) {
-      setHasSavedDeliveryLocation(false);
-      toast.error(t('checkout.no_saved_location'));
-      return;
-    }
+  function localizedSavedLocationName(name: string): string {
+    const normalized = String(name || '').trim().toLowerCase();
+    if (normalized === 'home') return t('checkout.home');
+    if (normalized === 'work') return t('checkout.work');
+    if (normalized === 'other') return t('checkout.other');
+    return name;
+  }
 
+  async function useSavedDeliveryLocation(saved: SavedDeliveryLocation) {
     if (markerRef.current) {
       markerRef.current.setLatLng([saved.lat, saved.lng]);
     }
@@ -353,7 +469,7 @@ export default function Checkout() {
 
     setDeliveryAddress(saved.address || '');
     await handleLocationSelected(saved.lat, saved.lng);
-    toast.success(t('checkout.saved_location_loaded'));
+    toast.success(`${localizedSavedLocationName(saved.name)} — ${t('checkout.saved_location_loaded')}`);
   }
 
   function saveCurrentDeliveryLocation() {
@@ -362,16 +478,45 @@ export default function Checkout() {
       return;
     }
 
-    localStorage.setItem(
-      SAVED_DELIVERY_LOCATION_KEY,
-      JSON.stringify({
+    const name = cleanSavedLocationName(saveLocationName);
+    if (!name) {
+      toast.error(t('checkout.enter_location_name'));
+      return;
+    }
+
+    if (savedDeliveryLocations.length >= MAX_SAVED_DELIVERY_LOCATIONS) {
+      toast.error(t('checkout.saved_limit_reached'));
+      return;
+    }
+
+    const next: SavedDeliveryLocation[] = [
+      ...savedDeliveryLocations,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name,
         lat: customerLat,
         lng: customerLng,
         address: deliveryAddress.trim(),
-      }),
+      },
+    ];
+
+    localStorage.setItem(
+      SAVED_DELIVERY_LOCATIONS_KEY,
+      JSON.stringify(next),
     );
-    setHasSavedDeliveryLocation(true);
-    toast.success(t('checkout.saved_location_success'));
+    setSavedDeliveryLocations(next);
+    setSaveLocationName('');
+    setShowSaveLocationPanel(false);
+    toast.success(`${t('checkout.saved_as')} ${localizedSavedLocationName(name)}`);
+  }
+
+  function deleteSavedDeliveryLocation(id: string) {
+    const next = savedDeliveryLocations.filter((item) => item.id !== id);
+    localStorage.setItem(
+      SAVED_DELIVERY_LOCATIONS_KEY,
+      JSON.stringify(next),
+    );
+    setSavedDeliveryLocations(next);
   }
 
   function initMap() {
@@ -391,40 +536,6 @@ export default function Checkout() {
     L.marker([restaurantLat, restaurantLng], { icon: restaurantIcon }).addTo(map)
       .bindPopup('🥤 Fai Fai Juice');
 
-    // Draw delivery zones on map
-    const zoneColors = ['#22c55e', '#f59e0b', '#f97316', '#ef4444', '#8b5cf6'];
-    if (deliveryZones.length > 0) {
-      deliveryZones.forEach((zone, i) => {
-        const color = zoneColors[i % zoneColors.length];
-        L.circle([restaurantLat, restaurantLng], {
-          radius: zone.max_distance_km * 1000,
-          color,
-          fillColor: color,
-          fillOpacity: 0.03,
-          weight: 2,
-          dashArray: '5,5',
-        }).addTo(map);
-      });
-    } else {
-      // Fallback to legacy near/far zones
-      L.circle([restaurantLat, restaurantLng], {
-        radius: nearRadius * 1000,
-        color: '#22c55e',
-        fillColor: '#22c55e',
-        fillOpacity: 0.05,
-        weight: 2,
-        dashArray: '5,5',
-      }).addTo(map);
-
-      L.circle([restaurantLat, restaurantLng], {
-        radius: farRadius * 1000,
-        color: '#f59e0b',
-        fillColor: '#f59e0b',
-        fillOpacity: 0.03,
-        weight: 2,
-        dashArray: '5,5',
-      }).addTo(map);
-    }
 
     // Draggable customer marker
     const marker = L.marker([restaurantLat + 0.005, restaurantLng + 0.005], {
@@ -1211,17 +1322,40 @@ export default function Checkout() {
                     <p className="text-gray-500 text-xs flex-1">
                       {t('checkout.tap_drag_pin')}
                     </p>
-                    {hasSavedDeliveryLocation && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => void useSavedDeliveryLocation()}
-                        className="bg-gray-800 hover:bg-gray-700 text-white text-xs cursor-pointer"
-                      >
-                        <MapPin className="w-3 h-3 mr-1" /> {t('checkout.use_saved_location')}
-                      </Button>
+                    {savedDeliveryLocations.length > 0 && (
+                      <div className="w-full">
+                        <p className="text-gray-500 text-xs mb-2">
+                          {t('checkout.saved_locations')}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {savedDeliveryLocations.map((saved) => (
+                            <div
+                              key={saved.id}
+                              className="inline-flex items-center rounded-lg bg-gray-800 border border-gray-700 overflow-hidden"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => void useSavedDeliveryLocation(saved)}
+                                className="px-3 py-2 text-xs text-white hover:bg-gray-700 flex items-center gap-1"
+                              >
+                                <MapPin className="w-3 h-3" />
+                                {localizedSavedLocationName(saved.name)}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteSavedDeliveryLocation(saved.id)}
+                                className="px-2 py-2 text-gray-500 hover:text-red-400 hover:bg-gray-700"
+                                aria-label={t('checkout.delete_saved_location')}
+                                title={t('checkout.delete_saved_location')}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                    <Button
+<Button
                       type="button"
                       size="sm"
                       disabled={gettingLocation}
@@ -1271,21 +1405,6 @@ export default function Checkout() {
                     className="w-full h-[250px] rounded-xl overflow-hidden border border-gray-700"
                     style={{ zIndex: 1 }}
                   />
-                  {/* Zone legend */}
-                  <div className="flex flex-wrap gap-3 mt-2 text-xs">
-                    {deliveryZones.length > 0 ? (
-                      deliveryZones.map((z, i) => (
-                        <span key={i} className={`${i === 0 ? 'text-green-400' : i === 1 ? 'text-yellow-400' : 'text-orange-400'}`}>
-                          ● {displayZoneName(z.zone_name)} ({z.min_distance_km}-{z.max_distance_km} km = AED {z.charge})
-                        </span>
-                      ))
-                    ) : (
-                      <>
-                        <span className="text-green-400">● {t('checkout.near_zone')} (AED {nearCharge})</span>
-                        <span className="text-yellow-400">● {t('checkout.far_zone')} (AED {farCharge})</span>
-                      </>
-                    )}
-                  </div>
                   {/* Location permission denied - friendly guidance */}
                   {locationPermissionDenied && !locationShared && (
                     <div className="mt-2 p-3 rounded-lg bg-yellow-600/10 border border-yellow-600/30">
@@ -1340,19 +1459,84 @@ export default function Checkout() {
                     </div>
                   )}
                   {locationShared && !deliveryZoneError && (
-                    <div className="mt-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={saveCurrentDeliveryLocation}
-                        className="border-green-700 text-green-400 hover:bg-green-950/30"
-                      >
-                        <MapPin className="w-3 h-3 mr-1" /> {t('checkout.save_delivery_location')}
-                      </Button>
+                    <div className="mt-3">
+                      {!showSaveLocationPanel ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            if (savedDeliveryLocations.length >= MAX_SAVED_DELIVERY_LOCATIONS) {
+                              toast.error(t('checkout.saved_limit_reached'));
+                              return;
+                            }
+                            setShowSaveLocationPanel(true);
+                          }}
+                          className="border-green-700 text-green-400 hover:bg-green-950/30"
+                        >
+                          <MapPin className="w-3 h-3 mr-1" />
+                          {t('checkout.save_location_optional')}
+                        </Button>
+                      ) : (
+                        <div className="rounded-xl border border-green-900/60 bg-green-950/10 p-3">
+                          <p className="text-green-400 text-sm font-medium">
+                            {t('checkout.save_location_optional')}
+                          </p>
+                          <p className="text-gray-500 text-xs mt-1 mb-3">
+                            {t('checkout.saved_limit')} {savedDeliveryLocations.length}/10
+                          </p>
+
+                          <div className="flex flex-wrap gap-2 mb-2">
+                            {[t('checkout.home'), t('checkout.work'), t('checkout.other')].map((label) => (
+                              <button
+                                key={label}
+                                type="button"
+                                onClick={() => setSaveLocationName(label)}
+                                className="px-3 py-1.5 rounded-lg border border-gray-700 text-xs text-gray-300 hover:border-green-700 hover:text-green-400"
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+
+                          <Label className="text-gray-300 text-xs">
+                            {t('checkout.location_name')}
+                          </Label>
+                          <Input
+                            value={saveLocationName}
+                            onChange={(event) => setSaveLocationName(event.target.value)}
+                            maxLength={30}
+                            placeholder={t('checkout.location_name_placeholder')}
+                            className="bg-gray-900 border-gray-700 text-white mt-1"
+                          />
+
+                          <div className="flex gap-2 mt-3">
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={saveCurrentDeliveryLocation}
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                            >
+                              {t('checkout.save')}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setShowSaveLocationPanel(false);
+                                setSaveLocationName('');
+                              }}
+                              className="border-gray-700 text-gray-300"
+                            >
+                              {t('checkout.cancel')}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                  {deliveryZoneError && (
+{deliveryZoneError && (
                     <div className="mt-2 p-3 rounded-lg bg-red-600/10 border border-red-600/30">
                       <p className="text-red-400 text-sm">❌ {deliveryZoneError}</p>
                     </div>
