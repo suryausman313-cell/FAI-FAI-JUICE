@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff, ChevronDown } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,20 +16,20 @@ import {
 } from '@/lib/customer-push';
 
 const PICKUP_STEPS = [
-  { key: 'new', label: 'Order Placed', icon: Store },
-  { key: 'accepted', label: 'Accepted', icon: CheckCircle },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready!', icon: Package },
+  { key: 'new', labelKey: 'orders.status.placed', icon: Store },
+  { key: 'accepted', labelKey: 'orders.status.accepted', icon: CheckCircle },
+  { key: 'preparing', labelKey: 'orders.status.preparing', icon: ChefHat },
+  { key: 'ready', labelKey: 'orders.status.ready', icon: Package },
 ];
 
 const DELIVERY_STEPS = [
-  { key: 'new', label: 'Order Placed', icon: Store },
-  { key: 'accepted', label: 'Confirmed', icon: CheckCircle },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready', icon: Package },
-  { key: 'picked_up', label: 'Picked Up', icon: Bike },
-  { key: 'on_the_way', label: 'On the Way', icon: Navigation },
-  { key: 'delivered', label: 'Delivered', icon: CheckCircle },
+  { key: 'new', labelKey: 'orders.status.placed', icon: Store },
+  { key: 'accepted', labelKey: 'orders.status.confirmed', icon: CheckCircle },
+  { key: 'preparing', labelKey: 'orders.status.preparing', icon: ChefHat },
+  { key: 'ready', labelKey: 'orders.status.ready', icon: Package },
+  { key: 'picked_up', labelKey: 'orders.status.picked_up', icon: Bike },
+  { key: 'on_the_way', labelKey: 'orders.status.on_the_way', icon: Navigation },
+  { key: 'delivered', labelKey: 'orders.status.delivered', icon: CheckCircle },
 ];
 
 function getStepIndex(status: string, steps: typeof PICKUP_STEPS): number {
@@ -117,7 +117,7 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
             <Navigation className="w-5 h-5 text-blue-400 shrink-0 animate-pulse" />
             <div>
-              <p className="text-blue-300 font-bold text-sm">Rider on the way</p>
+              <p className="text-blue-300 font-bold text-sm">{t('orders.rider_on_the_way')}</p>
               <p className="text-blue-300/60 text-xs">{t('orders.eta_waiting_gps')}</p>
             </div>
           </div>
@@ -157,10 +157,10 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
                 <p className={`text-sm font-medium ${
                   isCompleted ? 'text-white' : 'text-gray-500'
                 } ${isCurrent ? 'text-green-400' : ''}`}>
-                  {step.label}
+                  {t(step.labelKey)}
                 </p>
                 {isCurrent && (
-                  <p className="text-green-400/60 text-xs mt-0.5">Current status</p>
+                  <p className="text-green-400/60 text-xs mt-0.5">{t('orders.current_status')}</p>
                 )}
               </div>
             </div>
@@ -180,8 +180,9 @@ function normalizeUaeWhatsAppNumber(phone: string): string {
 }
 
 function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderPhone: string }) {
+  const { t, language } = useTranslation();
   const waPhone = normalizeUaeWhatsAppNumber(riderPhone);
-  const message = encodeURIComponent(`Hello ${riderName}, I am contacting you about my Fai Fai Juice delivery.`);
+  const message = encodeURIComponent(language === 'ar' ? `مرحباً ${riderName}، أتواصل معك بخصوص طلب التوصيل من Fai Fai Juice.` : `Hello ${riderName}, I am contacting you about my Fai Fai Juice delivery.`);
   const whatsappUrl = `https://wa.me/${waPhone}?text=${message}`;
 
   return (
@@ -197,7 +198,7 @@ function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderP
           <Bike className="w-5 h-5 text-blue-400" />
         </div>
         <div>
-          <p className="text-blue-400 font-bold text-sm">Your Rider</p>
+          <p className="text-blue-400 font-bold text-sm">{t('orders.your_rider')}</p>
           <p className="text-white font-semibold">{riderName}</p>
           <p className="text-blue-300/70 text-xs">{riderPhone}</p>
         </div>
@@ -206,7 +207,7 @@ function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderP
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
             <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
           </svg>
-          WhatsApp Rider
+          {t('orders.whatsapp_rider')}
       </div>
     </a>
   );
@@ -235,8 +236,8 @@ function LiveDeliveryEta({ seconds, calculatedAt }: { seconds?: number | null; c
       <div>
         <p className="text-blue-300 font-bold text-sm">
           {remaining > 0
-            ? `Rider arriving in ${minutes}:${String(secs).padStart(2, '0')}`
-            : 'Rider arriving soon'}
+            ? `${t('orders.rider_arriving_in')} ${minutes}:${String(secs).padStart(2, '0')}`
+            : t('orders.rider_arriving_soon')}
         </p>
         <p className="text-blue-300/60 text-xs">{t('orders.eta_live_location')}</p>
       </div>
@@ -323,7 +324,7 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
               {t('orders.expired_title')}
             </p>
             <p className="text-red-400/70 text-xs mt-1">
-              {expireTimeout}+ minutes wait • Order auto-cancelled
+              {expireTimeout}+ {t('orders.expired_subtitle')}
             </p>
           </div>
         </div>
@@ -338,8 +339,10 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
         <Clock className="w-5 h-5 text-blue-400" />
       </div>
       <div>
-        <p className="text-blue-400 font-bold text-sm">Waiting for restaurant to accept</p>
-        <p className="text-blue-300/70 text-xs">{elapsedMinutes} min elapsed • Usually accepted within {acceptTimeout} min</p>
+        <p className="text-blue-400 font-bold text-sm">{t('orders.waiting_restaurant')}</p>
+        <p className="text-blue-300/70 text-xs">
+          {elapsedMinutes} {t('orders.minute_elapsed')} • {t('orders.usually_within')} {acceptTimeout} min
+        </p>
       </div>
     </div>
   );
@@ -452,7 +455,6 @@ export default function MyOrders() {
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
-  const [expandedPastOrderId, setExpandedPastOrderId] = useState<number | null>(null);
   const [notificationStatus, setNotificationStatus] = useState<
     'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
   >('checking');
@@ -708,7 +710,7 @@ export default function MyOrders() {
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-6 max-w-2xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-white text-2xl font-bold">My Orders</h1>
+          <h1 className="text-white text-2xl font-bold">{t('orders.title')}</h1>
           <Button
             variant="ghost"
             size="sm"
@@ -740,19 +742,19 @@ export default function MyOrders() {
             <div className="flex-1">
               <p className="text-white font-semibold text-sm">
                 {notificationStatus === 'enabled'
-                  ? 'Ready notifications enabled'
+                  ? t('orders.notifications_ready_enabled')
                   : notificationStatus === 'blocked'
-                    ? 'Notifications are blocked'
+                    ? t('orders.notifications_blocked')
                     : notificationStatus === 'unsupported'
-                      ? 'Notifications are not supported'
-                      : 'Get notified when your order is ready'}
+                      ? t('orders.notifications_unsupported')
+                      : t('orders.notifications_get_ready')}
               </p>
               <p className="text-gray-400 text-xs mt-1">
                 {notificationStatus === 'enabled'
-                  ? 'You will receive a phone alert when Kitchen marks your order Ready.'
+                  ? t('orders.notifications_enabled_desc')
                   : notificationStatus === 'blocked'
-                    ? 'Open browser settings and allow notifications for Fai Fai Juice.'
-                    : notificationMessage || 'Enable once to receive Ready alerts even when the app is in background.'}
+                    ? t('orders.notifications_blocked_desc')
+                    : notificationMessage || t('orders.notifications_enable_desc')}
               </p>
               {!['enabled', 'blocked', 'unsupported', 'checking'].includes(notificationStatus) && (
                 <Button
@@ -763,10 +765,10 @@ export default function MyOrders() {
                 >
                   <Bell className="w-4 h-4 mr-2" />
                   {notificationStatus === 'login_required'
-                    ? 'Login to Enable'
+                    ? t('orders.notifications_login')
                     : notificationStatus === 'enabling'
-                      ? 'Enabling...'
-                      : 'Enable Notifications'}
+                      ? t('orders.notifications_enabling')
+                      : t('orders.notifications_enable')}
                 </Button>
               )}
             </div>
@@ -776,15 +778,15 @@ export default function MyOrders() {
         {orders.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-5xl mb-4">🥤</div>
-            <p className="text-gray-400 text-lg font-medium">No orders yet</p>
-            <p className="text-gray-600 text-sm mt-2">Your orders will appear here after you place them</p>
+            <p className="text-gray-400 text-lg font-medium">{t('orders.no_orders')}</p>
+            <p className="text-gray-600 text-sm mt-2">{t('orders.no_orders_subtitle')}</p>
           </div>
         ) : (
           <div className="space-y-6">
             {/* Active Orders */}
             {activeOrders.length > 0 && (
               <div>
-                <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">Active Orders</h2>
+                <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">{t('orders.active_orders')}</h2>
                 <div className="space-y-4">
                   {activeOrders.map(order => {
                     let items: any[] = [];
@@ -797,21 +799,21 @@ export default function MyOrders() {
                       <Card key={order.id} className="bg-gray-900 border-green-600/20 border p-4">
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-white font-bold text-lg">Order #{order.id}</span>
+                            <span className="text-white font-bold text-lg">{t('orders.order')} #{order.id}</span>
                             {isDelivery && (
                               <Badge className="bg-blue-600/20 text-blue-400 border border-blue-600/30 text-xs">
-                                <Bike className="w-3 h-3 mr-1" /> Delivery
+                                <Bike className="w-3 h-3 mr-1" /> {t('orders.delivery')}
                               </Badge>
                             )}
                           </div>
                           <div className="flex flex-col items-end">
                             {order.delivery_charge > 0 && (
-                              <span className="text-[10px] text-gray-400">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
+                              <span className="text-[10px] text-gray-400">{t('orders.delivery_charge')}: {t('common.aed')} {order.delivery_charge?.toFixed(2)}</span>
                             )}
                             {order.tip_amount > 0 && (
-                              <span className="text-[10px] text-green-400">Tip: AED {order.tip_amount?.toFixed(2)}</span>
+                              <span className="text-[10px] text-green-400">{t('orders.tip')}: {t('common.aed')} {order.tip_amount?.toFixed(2)}</span>
                             )}
-                            <span className="text-red-400 font-bold">AED {order.total_amount?.toFixed(2)}</span>
+                            <span className="text-red-400 font-bold">{t('common.aed')} {order.total_amount?.toFixed(2)}</span>
                           </div>
                         </div>
                         <p className="text-gray-500 text-xs mb-3">
@@ -843,8 +845,8 @@ export default function MyOrders() {
                           >
                             <Navigation className="w-4 h-4 mr-2" />
                             {order.rider_lat != null && order.rider_lng != null
-                              ? 'Track Rider Live on Map'
-                              : 'Open Rider Tracking'}
+                              ? t('orders.track_rider_live')
+                              : t('orders.open_rider_tracking')}
                           </Button>
                         )}
 
@@ -861,7 +863,7 @@ export default function MyOrders() {
 
                         {/* Items */}
                         <div className="border-t border-gray-800 pt-3">
-                          <p className="text-gray-500 text-xs uppercase mb-2">Items</p>
+                          <p className="text-gray-500 text-xs uppercase mb-2">{t('orders.items')}</p>
                           {items.map((item: any, idx: number) => (
                             <div key={idx} className="flex justify-between text-sm py-0.5">
                               <span className="text-gray-300">{item.quantity}x {item.name} ({item.size})</span>
@@ -880,7 +882,7 @@ export default function MyOrders() {
                               className="border-red-600/50 text-red-400 hover:bg-red-600/10 hover:text-red-300 cursor-pointer w-full"
                             >
                               <XCircle className="w-4 h-4 mr-2" />
-                              Cancel Order
+                              {t('orders.cancel_order')}
                             </Button>
                           </div>
                         )}
@@ -894,238 +896,55 @@ export default function MyOrders() {
             {/* Past Orders */}
             {pastOrders.length > 0 && (
               <div>
-                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">
-                  Past Orders
-                </h2>
+                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">{t('orders.past_orders')}</h2>
                 <div className="space-y-3">
                   {pastOrders.map(order => {
                     let items: any[] = [];
-                    try {
-                      const parsed = JSON.parse(order.items_json);
-                      items = Array.isArray(parsed) ? parsed : [];
-                    } catch {
-                      items = [];
-                    }
-
+                    try { items = JSON.parse(order.items_json); } catch { /* */ }
                     const hasReviewed = reviewedOrders.has(order.id);
-                    const isExpanded = expandedPastOrderId === order.id;
-                    const completed =
-                      order.status === 'completed' ||
-                      order.delivery_status === 'delivered';
-                    const delivery = isDeliveryOrder(order);
 
                     return (
-                      <Card
-                        key={order.id}
-                        className={`bg-gray-900/50 border-gray-800 p-4 transition-colors ${
-                          isExpanded ? 'border-green-600/40 bg-gray-900' : ''
-                        }`}
-                      >
-                        {/* Tap this area to see what was ordered */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedPastOrderId(current =>
-                              current === order.id ? null : order.id
-                            )
-                          }
-                          className="w-full text-left cursor-pointer"
-                          aria-expanded={isExpanded}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-gray-300 font-medium">
-                                #{order.id}
-                              </span>
-                              <Badge
-                                className={`${
-                                  completed
-                                    ? 'bg-gray-700'
-                                    : 'bg-red-600/20 text-red-400 border border-red-600/30'
-                                } text-xs`}
-                              >
-                                {completed ? (
-                                  <>
-                                    <CheckCircle className="w-3 h-3 mr-1" />
-                                    Completed
-                                  </>
-                                ) : (
-                                  <>
-                                    <XCircle className="w-3 h-3 mr-1" />
-                                    Cancelled
-                                  </>
-                                )}
-                              </Badge>
-                            </div>
-
-                            <div className="flex items-center gap-3 pl-3">
-                              <div className="flex flex-col items-end">
-                                {order.delivery_charge > 0 && (
-                                  <span className="text-[10px] text-gray-500">
-                                    Delivery: AED {order.delivery_charge?.toFixed(2)}
-                                  </span>
-                                )}
-                                {order.tip_amount > 0 && (
-                                  <span className="text-[10px] text-green-500">
-                                    Tip: AED {order.tip_amount?.toFixed(2)}
-                                  </span>
-                                )}
-                                <span className="text-gray-300 font-semibold">
-                                  AED {order.total_amount?.toFixed(2)}
-                                </span>
-                              </div>
-
-                              <ChevronDown
-                                className={`w-5 h-5 text-gray-500 shrink-0 transition-transform ${
-                                  isExpanded ? 'rotate-180 text-green-400' : ''
-                                }`}
-                              />
-                            </div>
+                      <Card key={order.id} className="bg-gray-900/50 border-gray-800 p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-300 font-medium">#{order.id}</span>
+                            <Badge className={`${order.status === 'completed' || order.delivery_status === 'delivered' ? 'bg-gray-700' : 'bg-red-600/20 text-red-400 border border-red-600/30'} text-xs`}>
+                              {order.status === 'completed' || order.delivery_status === 'delivered' ? (
+                                <><CheckCircle className="w-3 h-3 mr-1" /> {t('orders.status.completed')}</>
+                              ) : (
+                                <><XCircle className="w-3 h-3 mr-1" /> {t('orders.status.cancelled')}</>
+                              )}
+                            </Badge>
                           </div>
-
-                          <div className="flex items-center justify-between mt-1 gap-3">
-                            <p className="text-gray-600 text-xs">
-                              {formatDateShort(order.created_at)} • {items.length} item
-                              {items.length > 1 ? 's' : ''}
-                            </p>
-                            <span className="text-green-500 text-xs shrink-0">
-                              {isExpanded ? 'Hide details' : 'View order'}
-                            </span>
-                          </div>
-                        </button>
-
-                        {/* Easy-to-read order details */}
-                        {isExpanded && (
-                          <div className="mt-4 pt-4 border-t border-gray-800">
-                            <div className="flex items-center justify-between mb-3">
-                              <div>
-                                <p className="text-white font-semibold">Order details</p>
-                                <p className="text-gray-500 text-xs mt-0.5">
-                                  {delivery ? 'Delivery order' : 'Pickup order'}
-                                </p>
-                              </div>
-                              <span className="text-gray-500 text-xs">
-                                {items.length} item{items.length !== 1 ? 's' : ''}
-                              </span>
-                            </div>
-
-                            {items.length > 0 ? (
-                              <div className="space-y-2">
-                                {items.map((item: any, index: number) => {
-                                  const quantity = Number(item.quantity || 1);
-                                  const itemPrice = Number(item.price || 0);
-                                  const extras = Array.isArray(item.extras)
-                                    ? item.extras
-                                        .map((extra: any) =>
-                                          typeof extra === 'string'
-                                            ? extra
-                                            : extra?.name || ''
-                                        )
-                                        .filter(Boolean)
-                                    : [];
-
-                                  return (
-                                    <div
-                                      key={`${order.id}-item-${index}`}
-                                      className="rounded-xl bg-black/40 border border-gray-800 px-3 py-3"
-                                    >
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                          <div className="flex items-start gap-2">
-                                            <span className="inline-flex min-w-7 h-7 items-center justify-center rounded-lg bg-green-600/15 text-green-400 text-xs font-bold px-2">
-                                              {quantity}×
-                                            </span>
-                                            <div>
-                                              <p className="text-white font-medium leading-6">
-                                                {item.name || 'Item'}
-                                              </p>
-                                              {item.size && (
-                                                <p className="text-gray-500 text-xs">
-                                                  Size: {item.size}
-                                                </p>
-                                              )}
-                                              {extras.length > 0 && (
-                                                <p className="text-gray-500 text-xs mt-1">
-                                                  Extras: {extras.join(', ')}
-                                                </p>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                        <span className="text-gray-300 font-medium shrink-0">
-                                          AED {itemPrice.toFixed(2)}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="rounded-xl bg-black/40 border border-gray-800 p-3 text-gray-500 text-sm">
-                                Item details are not available for this older order.
-                              </div>
+                          <div className="flex flex-col items-end">
+                            {order.delivery_charge > 0 && (
+                              <span className="text-[10px] text-gray-500">{t('orders.delivery_charge')}: {t('common.aed')} {order.delivery_charge?.toFixed(2)}</span>
                             )}
-
-                            <div className="mt-3 rounded-xl bg-black/30 border border-gray-800 px-3 py-3 space-y-2 text-sm">
-                              {Number(order.service_fee || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Service fee</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.service_fee || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.small_order_fee || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Small order fee</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.small_order_fee || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.delivery_charge || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Delivery</span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.delivery_charge || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {Number(order.tip_amount || 0) > 0 && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">
-                                    {String(order.tip_type || '').toLowerCase() === 'rider'
-                                      ? 'Rider tip'
-                                      : 'Tip'}
-                                  </span>
-                                  <span className="text-gray-300">
-                                    AED {Number(order.tip_amount || 0).toFixed(2)}
-                                  </span>
-                                </div>
-                              )}
-
-                              {'payment_method' in order && order.payment_method && (
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-gray-500">Payment</span>
-                                  <span className="text-gray-300 text-right">
-                                    {String(order.payment_method).replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                              )}
-
-                              <div className="flex justify-between gap-3 pt-2 border-t border-gray-800">
-                                <span className="text-white font-semibold">Total</span>
-                                <span className="text-green-400 font-bold">
-                                  AED {Number(order.total_amount || 0).toFixed(2)}
-                                </span>
-                              </div>
-                            </div>
+                            {order.tip_amount > 0 && (
+                              <span className="text-[10px] text-green-500">{t('orders.tip')}: {t('common.aed')} {order.tip_amount?.toFixed(2)}</span>
+                            )}
+                            <span className="text-gray-400 font-medium">{t('common.aed')} {order.total_amount?.toFixed(2)}</span>
                           </div>
-                        )}
-
+                        </div>
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-gray-600 text-xs">
+                            {formatDateShort(order.created_at)} • {items.length} {items.length === 1 ? t('orders.item_singular') : t('orders.item_plural')}
+                          </p>
+                          {(order.status === 'completed' || order.delivery_status === 'delivered') && (
+                            hasReviewed ? (
+                              <span className="text-green-500 text-xs flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3" /> {t('orders.reviewed')}
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => navigate(`/feedback?order=${order.id}`)}
+                                className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
+                              >
+                                <MessageSquare className="w-3 h-3" /> {t('orders.give_feedback')}
+                              </button>
+                            )
+                          )}
+                        </div>
                         {order.status === 'cancelled' && getCancellationInfo(order) && (
                           <div className="mt-3 rounded-xl border border-red-600/25 bg-red-600/10 px-3 py-2">
                             <p className="text-red-300 text-xs font-semibold">
@@ -1137,35 +956,15 @@ export default function MyOrders() {
                           </div>
                         )}
 
-                        {/* Feedback is separate from opening/closing the card */}
-                        {completed && (
-                          <div className="mt-3 flex justify-end">
-                            {hasReviewed ? (
-                              <span className="text-green-500 text-xs flex items-center gap-1">
-                                <CheckCircle className="w-3 h-3" /> Reviewed
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => navigate(`/feedback?order=${order.id}`)}
-                                className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
-                              >
-                                <MessageSquare className="w-3 h-3" /> Give Feedback
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Reorder stays obvious and separate */}
-                        {completed && (
+                        {/* Order Again button for completed orders */}
+                        {(order.status === 'completed' || order.delivery_status === 'delivered') && (
                           <div className="mt-3 pt-3 border-t border-gray-800">
                             <Button
                               onClick={() => handleOrderAgain(order)}
                               size="sm"
-                              className="w-full bg-green-600 hover:bg-green-700 text-white cursor-pointer"
+                              className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer"
                             >
-                              <ShoppingCart className="w-4 h-4 mr-2" />
-                              Order Again
+                              <ShoppingCart className="w-4 h-4 mr-2" /> {t('orders.order_again')}
                             </Button>
                           </div>
                         )}
