@@ -161,18 +161,9 @@ function parseItemExtras(
     }
   }
 
-  if (item.has_extras === false) return [];
-
-  // Old items used one global extras list. When Admin edits one of those items,
-  // preload the current global extras so they can immediately customize them.
-  return (legacyExtras || [])
-    .filter(extra => extra.is_active !== false)
-    .map(extra => ({
-      name: String(extra.name || '').trim(),
-      name_ar: String((extra as any).name_ar || '').trim(),
-      price: Math.max(0, Number(extra.price || 0)),
-    }))
-    .filter(extra => extra.name);
+  // Fai Fai uses extras saved directly under each menu item.
+  // Never copy the old global Pizza/Jalapeno extras into an item while editing.
+  return [];
 }
 
 function dateInputValue(value: unknown): string {
