@@ -6,12 +6,13 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from services.rider_auth import require_rider_id
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
@@ -577,8 +578,10 @@ async def get_rider_finance_summary(
     period: PeriodName = Query(default="today"),
     date_from: Optional[str] = Query(default=None),
     date_to: Optional[str] = Query(default=None),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
+    require_rider_id(authorization, rider_id)
     rider = (
         await db.execute(
             select(Riders).where(Riders.id == rider_id)
@@ -641,8 +644,10 @@ async def get_rider_finance_summary(
 async def submit_rider_cash(
     rider_id: int,
     data: CashSubmissionCreate,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
+    require_rider_id(authorization, rider_id)
     rider = (
         await db.execute(
             select(Riders).where(
@@ -719,7 +724,9 @@ async def get_rider_cash_submissions(
     rider_id: int,
     limit: int = Query(default=100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
 ):
+    require_rider_id(authorization, rider_id)
     result = await db.execute(
         select(Rider_cash_settlements)
         .where(

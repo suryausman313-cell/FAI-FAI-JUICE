@@ -137,56 +137,73 @@ async def place_order(
                             detail="Sorry, the restaurant is currently closed. Please try again during opening hours."
                         )
 
-        # ===== DELIVERY VALIDATION: BLOCKED AREA + ROAD DISTANCE + SERVER CHARGE =====
-        validated_delivery_charge = 0.0
-        validated_delivery_distance_km = None
-        validated_delivery_zone_name = ""
-        validated_delivery_area_name = ""
-        validated_delivery_country = ""
-
-        if str(data.order_type or "pickup").lower().strip() == "delivery":
+        # ===== DELIVERY ZONE VALIDATION =====
+        if data.order_type == "delivery":
+            # GPS coordinates are MANDATORY for delivery orders
             if data.customer_lat is None or data.customer_lng is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="Delivery location is required. Please select your location on the map.",
+                    detail="Delivery location is required. Please select your location on the map."
                 )
-
-            from routers.delivery_zones import (
-                CalculateChargeRequest,
-                evaluate_delivery_location,
-                reverse_delivery_area_name,
-            )
-
-            rest_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
-            rest_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
-            delivery_result = await evaluate_delivery_location(
-                CalculateChargeRequest(
-                    customer_lat=float(data.customer_lat),
-                    customer_lng=float(data.customer_lng),
-                    restaurant_lat=rest_lat,
-                    restaurant_lng=rest_lng,
-                ),
-                db,
-            )
-            if not delivery_result.get("available"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=delivery_result.get("message") or "Delivery is not available at this location.",
+            if True:  # Always validate when delivery
+                # Validate customer is within a delivery zone
+                from models.delivery_zones import Delivery_zones
+                zones_result = await db.execute(
+                    select(Delivery_zones).where(Delivery_zones.is_active == True)
                 )
+                zones = zones_result.scalars().all()
 
-            validated_delivery_charge = round(float(delivery_result.get("charge") or 0), 2)
-            validated_delivery_distance_km = delivery_result.get("distance_km")
-            validated_delivery_zone_name = str(delivery_result.get("zone_name") or "")
+                if zones:
+                    # Calculate distance from restaurant to customer
+                    import math
+                    rest_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
+                    rest_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
 
-            # One reverse lookup per final order, cached/throttled on the backend.
-            location_info = await reverse_delivery_area_name(
-                float(data.customer_lat),
-                float(data.customer_lng),
-            )
-            validated_delivery_area_name = str(location_info.get("area_name") or "Unknown Area")
-            validated_delivery_country = str(location_info.get("country") or "")
+                    def haversine_km(lat1, lon1, lat2, lon2):
+                        R = 6371
+                        dLat = math.radians(lat2 - lat1)
+                        dLon = math.radians(lon2 - lon1)
+                        a = math.sin(dLat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon / 2) ** 2
+                        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-        # ===== END DELIVERY VALIDATION =====
+                    distance_km = haversine_km(rest_lat, rest_lng, data.customer_lat, data.customer_lng)
+
+                    # Check if customer is within any active zone
+                    # Sort zones by max_distance ascending for gap-tolerant matching
+                    sorted_zones = sorted(zones, key=lambda z: z.max_distance_km)
+                    matched_zone = None
+
+                    # First pass: exact range match
+                    for zone in sorted_zones:
+                        if zone.min_distance_km <= distance_km <= zone.max_distance_km:
+                            matched_zone = zone
+                            break
+
+                    # Second pass: gap-tolerant - find first zone whose max covers the distance
+                    if not matched_zone:
+                        for zone in sorted_zones:
+                            if distance_km <= zone.max_distance_km:
+                                matched_zone = zone
+                                break
+
+                    if not matched_zone:
+                        max_zone_km = max(z.max_distance_km for z in zones)
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Delivery not available in your area ({distance_km:.1f} km away). We deliver within {max_zone_km:.0f} km."
+                        )
+
+                    # Verify that the matched zone has a valid charge > 0
+                    matched_zone_charge = matched_zone.charge or 0
+                    if matched_zone_charge <= 0:
+                        logging.warning(
+                            f"Delivery order rejected - zone charge is 0 for user {guest_user_id}, "
+                            f"distance={distance_km:.2f}km"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Unable to calculate delivery charge for your location. Please contact us or try again."
+                        )
 
         # ===== MENU ITEM VALIDATION - Reject fake orders =====
         calculated_subtotal = 0.0
@@ -413,12 +430,10 @@ async def place_order(
 
         service_fee = round(max(0.0, float(data.service_fee or 0)), 2)
         small_order_fee = round(max(0.0, float(data.small_order_fee or 0)), 2)
-        delivery_charge = (
-            round(validated_delivery_charge, 2)
-            if normalized_order_type == "delivery"
-            else 0.0
-        )
+        delivery_charge = round(max(0.0, float(data.delivery_charge or 0)), 2)
         tip_amount = round(max(0.0, float(data.tip_amount or 0)), 2)
+        if normalized_order_type == "pickup":
+            delivery_charge = 0.0
 
         tax_percent = max(0.0, min(100.0, float(getattr(settings, "tax_percent", 0) or 0)))
         taxable_amount = max(0.0, subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge)
@@ -486,10 +501,6 @@ async def place_order(
             customer_lat=data.customer_lat if normalized_order_type == "delivery" else None,
             customer_lng=data.customer_lng if normalized_order_type == "delivery" else None,
             customer_address=(data.customer_address or "").strip() if normalized_order_type == "delivery" else "",
-            delivery_area_name=validated_delivery_area_name if normalized_order_type == "delivery" else "",
-            delivery_country=validated_delivery_country if normalized_order_type == "delivery" else "",
-            delivery_distance_km=validated_delivery_distance_km if normalized_order_type == "delivery" else None,
-            delivery_zone_name=validated_delivery_zone_name if normalized_order_type == "delivery" else "",
             status="new",
             total_amount=server_total,
             subtotal_amount=subtotal_amount,
@@ -534,7 +545,7 @@ async def place_order(
 
 class CancelOrderRequest(BaseModel):
     session_id: str
-    reason: Optional[str] = ""
+    reason: str
 
 
 @router.post("/{order_id}/cancel")
@@ -548,11 +559,13 @@ async def cancel_order(
     try:
         customer_payload = decode_customer_token(get_bearer_token(authorization))
         customer_user_id = f"customer:{customer_payload.get('sub', '')}"
-        guest_user_id = get_guest_user_id(data.session_id)
+        # Strict privacy: cancellation is account-owned only.  Do not trust a
+        # browser/device session id here because another customer may later use
+        # the same device.
         result = await db.execute(
             select(Orders).where(
                 Orders.id == order_id,
-                Orders.user_id.in_([customer_user_id, guest_user_id]),
+                Orders.user_id == customer_user_id,
             )
         )
         order = result.scalar_one_or_none()
@@ -593,11 +606,27 @@ async def cancel_order(
                 detail=status_msg.get(order.status, f"Cannot cancel order in '{order.status}' status.")
             )
 
+        reason = ' '.join(str(data.reason or '').split()).strip()
+        if len(reason) < 2:
+            raise HTTPException(status_code=400, detail="Please select or enter a cancellation reason.")
+        if len(reason) > 300:
+            raise HTTPException(status_code=400, detail="Cancellation reason is too long.")
+
         order.status = 'cancelled'
-        # Append cancel reason to notes
-        if data.reason:
-            existing_notes = order.order_notes or ''
-            order.order_notes = f"{existing_notes} | Cancelled by customer: {data.reason}"
+        existing_notes = order.order_notes or ''
+        separator = ' | ' if existing_notes else ''
+        order.order_notes = f"{existing_notes}{separator}Cancelled by customer: {reason}"
+
+        # Any rider assignment for this cancelled order must disappear from the rider's active list.
+        from models.delivery_assignments import Delivery_assignments
+        assignment_rows = (await db.execute(
+            select(Delivery_assignments).where(
+                Delivery_assignments.order_id == order.id,
+                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
+            )
+        )).scalars().all()
+        for assignment in assignment_rows:
+            assignment.status = "rejected"
 
         await db.commit()
         return {"success": True, "message": "Order cancelled successfully"}
@@ -615,21 +644,38 @@ async def get_my_orders(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get orders owned by the logged-in account plus this device's older orders."""
+    """Get only orders belonging to the logged-in customer account."""
     try:
         customer_payload = decode_customer_token(get_bearer_token(authorization))
-        owner_ids = [f"customer:{customer_payload.get('sub', '')}"]
-        if session_id:
-            owner_ids.append(get_guest_user_id(session_id))
-        # Older deployments stored some orders against a previous account/session
-        # identifier. The phone comes from the verified JWT (never from the query),
-        # so it is safe to use it to recover those orders for the same customer.
+        customer_user_id = f"customer:{customer_payload.get('sub', '')}"
         account_phone = normalize_phone(str(customer_payload.get("phone") or ""))
-        ownership_filters = [Orders.user_id.in_(owner_ids)]
+
+        # Strict privacy: never include guest/device ownership in My Orders.
+        # A shared phone/tablet must not expose a previous customer's orders.
+        ownership_filters = [Orders.user_id == customer_user_id]
+
+        # Legacy recovery is allowed only by the phone stored in the signed
+        # customer JWT. Strip common formatting in SQL and compare exact digits;
+        # never use a partial/last-digits match.
         if account_phone:
-            ownership_filters.append(Orders.customer_phone == account_phone)
-            # Also support legacy rows that kept spaces or a local UAE prefix.
-            ownership_filters.append(Orders.customer_phone.ilike(f"%{account_phone[-9:]}"))
+            phone_digits = ''.join(ch for ch in account_phone if ch.isdigit())
+            safe_variants = [phone_digits]
+            if phone_digits.startswith('971') and len(phone_digits) >= 11:
+                safe_variants.append('0' + phone_digits[3:])
+            db_phone_digits = func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(
+                            func.replace(Orders.customer_phone, '+', ''),
+                            ' ', '',
+                        ),
+                        '-', '',
+                    ),
+                    '(', '',
+                ),
+                ')', '',
+            )
+            ownership_filters.append(db_phone_digits.in_(safe_variants))
         from models.delivery_assignments import Delivery_assignments
         from models.riders import Riders
 

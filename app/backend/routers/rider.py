@@ -1,10 +1,10 @@
 # @File: backend/routers/rider.py
 # @Desc: Rider panel API routes for delivery management
 import logging
-from fastapi import Query, APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, and_
+from sqlalchemy import select, desc, func, and_, or_
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
@@ -13,12 +13,16 @@ from models.riders import Riders
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
-from services.customer_push_service import notify_customer_order_update_safely
+from services.rider_auth import create_rider_token, require_rider_id
+from routers.customer_auth import decode_customer_token, get_bearer_token as get_customer_bearer_token, normalize_phone
 from services.rider_assignment import (
     auto_assign_order,
     auto_assign_unassigned_orders,
     get_auto_assign_enabled,
     set_auto_assign_enabled,
+    get_restaurant_location,
+    haversine_km,
+    rider_live_status,
 )
 
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
@@ -38,6 +42,24 @@ def is_delivery_order(order: Orders) -> bool:
     )
 
 
+def require_live_rider(rider: Riders) -> dict:
+    """Manual assignment is allowed only for an active rider with live heartbeat + fresh GPS."""
+    live = rider_live_status(rider)
+    if live["eligible_for_assignment"]:
+        return live
+
+    reason = live.get("reason")
+    if reason == "offline":
+        detail = "Rider is offline. Keep Rider app open and signed in."
+    elif reason == "gps_missing":
+        detail = "Rider GPS is unavailable. Enable precise location permission in Rider app."
+    elif reason == "gps_outdated":
+        detail = "Rider GPS is outdated. Keep Rider app open for a fresh location update."
+    else:
+        detail = "Rider is inactive or unavailable."
+    raise HTTPException(status_code=400, detail=detail)
+
+
 class RiderLoginRequest(BaseModel):
     phone: str
     pin: str
@@ -45,6 +67,7 @@ class RiderLoginRequest(BaseModel):
 
 class DeliveryStatusUpdate(BaseModel):
     status: str  # accepted, rejected, picked_up, on_the_way, delivered
+    reason: Optional[str] = None
 
 
 class AssignDeliveryRequest(BaseModel):
@@ -103,6 +126,8 @@ async def rider_login(
                 "name": rider.name,
                 "phone": rider.phone,
             },
+            "access_token": create_rider_token(rider.id, rider.phone, rider.name),
+            "token_type": "bearer",
         }
     except HTTPException:
         raise
@@ -114,9 +139,11 @@ async def rider_login(
 @router.post("/heartbeat/{rider_id}")
 async def rider_heartbeat(
     rider_id: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """Rider sends heartbeat every 15s to indicate they are online"""
+    require_rider_id(authorization, rider_id)
     try:
         result = await db.execute(select(Riders).where(Riders.id == rider_id))
         rider = result.scalar_one_or_none()
@@ -144,9 +171,11 @@ async def rider_heartbeat(
 @router.get("/deliveries/{rider_id}")
 async def get_rider_deliveries(
     rider_id: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get assigned deliveries for a rider"""
+    """Get only this logged-in rider's assigned deliveries."""
+    require_rider_id(authorization, rider_id)
     try:
         result = await db.execute(
             select(Delivery_assignments)
@@ -163,6 +192,11 @@ async def get_rider_deliveries(
                 select(Orders).where(Orders.id == a.order_id)
             )
             order = order_result.scalar_one_or_none()
+
+            # If Customer/Admin/Kitchen cancelled the order, it must disappear
+            # from the rider account even if an older assignment row is still active.
+            if order and str(order.status or '').lower().strip() in {"cancelled", "deleted", "expired"}:
+                continue
 
             items.append({
                 "id": a.id,
@@ -193,6 +227,7 @@ async def get_rider_deliveries(
 async def update_delivery_status(
     assignment_id: int,
     data: DeliveryStatusUpdate,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -205,6 +240,7 @@ async def update_delivery_status(
     - picked_up / on_the_way: order becomes out_for_delivery and appears in Kitchen Today as Delivery Pending
     - delivered: order becomes completed automatically
     """
+    logged_rider_id = require_rider_id(authorization)
     new_status = str(data.status or "").lower().strip()
     valid_statuses = [
         "assigned",
@@ -231,6 +267,8 @@ async def update_delivery_status(
 
         if not assignment:
             raise HTTPException(status_code=404, detail="Assignment not found")
+        if int(assignment.rider_id) != int(logged_rider_id):
+            raise HTTPException(status_code=403, detail="This delivery belongs to another rider")
 
         current_assignment_status = str(
             assignment.status or "assigned"
@@ -295,6 +333,18 @@ async def update_delivery_status(
                 detail="Order pehle Picked Up hona chahiye.",
             )
 
+        if new_status == "rejected":
+            reason = ' '.join(str(data.reason or '').split()).strip()
+            if len(reason) < 2:
+                raise HTTPException(status_code=400, detail="Please select or enter a rejection reason.")
+            if len(reason) > 300:
+                raise HTTPException(status_code=400, detail="Rejection reason is too long.")
+            rider_row = (await db.execute(select(Riders).where(Riders.id == logged_rider_id))).scalar_one_or_none()
+            rider_name = rider_row.name if rider_row else f"Rider {logged_rider_id}"
+            existing_notes = order.order_notes or ""
+            separator = " | " if existing_notes else ""
+            order.order_notes = f"{existing_notes}{separator}Rider {rider_name} rejected: {reason}"
+
         assignment.status = new_status
 
         if new_status in ("assigned", "accepted", "rejected"):
@@ -304,34 +354,13 @@ async def update_delivery_status(
         elif new_status in ("picked_up", "on_the_way"):
             # Kitchen work is finished, but the sale is not final yet.
             order.status = "out_for_delivery"
-            if new_status == "picked_up" and getattr(order, "rider_picked_up_at", None) is None:
-                order.rider_picked_up_at = datetime.now(timezone.utc)
         elif new_status == "delivered":
             # Only Rider Delivered finalizes a delivery sale.
             order.status = "completed"
-            if getattr(order, "delivered_at", None) is None:
-                order.delivered_at = datetime.now(timezone.utc)
 
         await db.commit()
         await db.refresh(assignment)
         await db.refresh(order)
-
-        rider_result = await db.execute(select(Riders).where(Riders.id == assignment.rider_id))
-        rider_for_push = rider_result.scalar_one_or_none()
-        if new_status != "rejected":
-            event_name = {
-                "accepted": "rider_accepted",
-                "picked_up": "picked_up",
-                "on_the_way": "on_the_way",
-                "delivered": "delivered",
-            }.get(new_status)
-            if event_name:
-                await notify_customer_order_update_safely(
-                    db,
-                    order,
-                    event_name,
-                    rider_name=rider_for_push.name if rider_for_push else "",
-                )
 
         auto_reassigned = None
         if new_status == "rejected":
@@ -470,6 +499,22 @@ async def assign_delivery(
         if not rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
+        # Admin can select only a rider whose Rider app is currently live and
+        # sending fresh GPS. This matches the availability badge in AdminOrders.
+        live = require_live_rider(rider)
+
+        # Shop GPS is used only to calculate pickup distance. Manual assignment
+        # must still work if the shop coordinates have not been saved yet.
+        shop_lat, shop_lng = await get_restaurant_location(db)
+        pickup_distance = None
+        if shop_lat is not None and shop_lng is not None:
+            pickup_distance = haversine_km(
+                float(live["lat"]),
+                float(live["lng"]),
+                shop_lat,
+                shop_lng,
+            )
+
         assignment = Delivery_assignments(
             order_id=data.order_id,
             rider_id=data.rider_id,
@@ -480,18 +525,12 @@ async def assign_delivery(
             customer_name=data.customer_name or "",
             customer_phone=data.customer_phone or "",
             delivery_charge=data.delivery_charge or 0,
-            distance_km=data.distance_km,
+            distance_km=(round(pickup_distance, 2) if pickup_distance is not None else data.distance_km),
             zone_name=data.zone_name,
         )
         db.add(assignment)
         await db.commit()
         await db.refresh(assignment)
-        await notify_customer_order_update_safely(
-            db,
-            order,
-            "rider_assigned",
-            rider_name=rider.name,
-        )
         return {
             "success": True,
             "already_assigned": False,
@@ -503,6 +542,7 @@ async def assign_delivery(
                 "rider_name": rider.name,
                 "rider_phone": rider.phone,
                 "status": assignment.status or "assigned",
+                "distance_to_shop_km": assignment.distance_km,
                 "created_at": assignment.created_at.isoformat() if assignment.created_at else None,
                 "updated_at": assignment.updated_at.isoformat() if assignment.updated_at else None,
             },
@@ -559,9 +599,11 @@ class UpdateLocationRequest(BaseModel):
 async def update_rider_location(
     rider_id: int,
     data: UpdateLocationRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """Rider sends their GPS location periodically"""
+    require_rider_id(authorization, rider_id)
     try:
         from datetime import datetime, timezone
         result = await db.execute(select(Riders).where(Riders.id == rider_id))
@@ -590,40 +632,92 @@ async def update_rider_location(
 async def get_rider_locations(
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin gets all active riders with their current locations"""
+    """Admin gets active riders with live/GPS eligibility and distance to the shop."""
     try:
-        result = await db.execute(
-            select(Riders).where(Riders.is_active == True)
-        )
+        result = await db.execute(select(Riders).where(Riders.is_active == True))
         riders = result.scalars().all()
 
-        # Also get active delivery counts per rider
-        from sqlalchemy import func
         delivery_counts = {}
         count_result = await db.execute(
             select(
                 Delivery_assignments.rider_id,
-                func.count(Delivery_assignments.id).label("count")
-            ).where(
-                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"])
-            ).group_by(Delivery_assignments.rider_id)
+                func.count(Delivery_assignments.id).label("count"),
+            )
+            .where(
+                Delivery_assignments.status.in_(
+                    ["assigned", "accepted", "picked_up", "on_the_way"]
+                )
+            )
+            .group_by(Delivery_assignments.rider_id)
         )
         for row in count_result:
-            delivery_counts[row[0]] = row[1]
+            delivery_counts[int(row[0])] = int(row[1])
 
+        shop_lat, shop_lng = await get_restaurant_location(db)
+        now = datetime.now(timezone.utc)
         items = []
-        for r in riders:
+
+        for rider in riders:
+            live = rider_live_status(rider, now)
+            distance_to_shop = None
+            if (
+                live["has_gps"]
+                and shop_lat is not None
+                and shop_lng is not None
+            ):
+                distance_to_shop = haversine_km(
+                    float(live["lat"]),
+                    float(live["lng"]),
+                    shop_lat,
+                    shop_lng,
+                )
+
             items.append({
-                "id": r.id,
-                "name": r.name,
-                "phone": r.phone,
-                "is_active": r.is_active,
-                "current_lat": r.current_lat,
-                "current_lng": r.current_lng,
-                "location_updated_at": r.location_updated_at.isoformat() if r.location_updated_at else None,
-                "active_deliveries": delivery_counts.get(r.id, 0),
+                "id": rider.id,
+                "name": rider.name,
+                "phone": rider.phone,
+                "is_active": rider.is_active,
+                "is_online": live["is_online"],
+                "has_gps": live["has_gps"],
+                "gps_fresh": live["gps_fresh"],
+                "eligible_for_assignment": live["eligible_for_assignment"],
+                "availability_reason": live["reason"],
+                "current_lat": live["lat"],
+                "current_lng": live["lng"],
+                "last_heartbeat": (
+                    rider.last_heartbeat.isoformat()
+                    if getattr(rider, "last_heartbeat", None)
+                    else None
+                ),
+                "location_updated_at": (
+                    rider.location_updated_at.isoformat()
+                    if rider.location_updated_at
+                    else None
+                ),
+                "heartbeat_age_seconds": live["heartbeat_age_seconds"],
+                "location_age_seconds": live["location_age_seconds"],
+                "active_deliveries": delivery_counts.get(rider.id, 0),
+                "distance_to_shop_km": (
+                    round(distance_to_shop, 2)
+                    if distance_to_shop is not None
+                    else None
+                ),
+                "shop_lat": shop_lat,
+                "shop_lng": shop_lng,
             })
-        return {"items": items}
+
+        items.sort(key=lambda item: (
+            not item["eligible_for_assignment"],
+            item["distance_to_shop_km"] if item["distance_to_shop_km"] is not None else float("inf"),
+            item["active_deliveries"],
+            item["id"],
+        ))
+        return {
+            "items": items,
+            "shop_lat": shop_lat,
+            "shop_lng": shop_lng,
+            "eligible_count": sum(1 for item in items if item["eligible_for_assignment"]),
+        }
     except Exception as e:
         logging.error(f"Failed to get rider locations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -735,9 +829,11 @@ async def delete_rider(
 @router.get("/stats/{rider_id}")
 async def get_rider_stats(
     rider_id: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get rider's delivery stats: today, week, month, earnings, cash/card breakdown"""
+    require_rider_id(authorization, rider_id)
     try:
         now = datetime.now(timezone.utc)
         # "Today" in Admin must follow UAE shop time, not UTC midnight.
@@ -751,40 +847,25 @@ async def get_rider_stats(
         week_start = today_start - timedelta(days=now.weekday())
         month_start = today_start.replace(day=1)
 
-        # Read all assignments once. We reconcile assignment status with the
-        # linked order status below so historical completed deliveries are not
-        # lost from Rider sales.
-        assignments_result = await db.execute(
+        # Get all delivered assignments for this rider
+        all_deliveries = await db.execute(
             select(Delivery_assignments).where(
                 Delivery_assignments.rider_id == rider_id,
+                Delivery_assignments.status == "delivered",
             )
         )
-        rider_assignments = assignments_result.scalars().all()
+        all_delivered = all_deliveries.scalars().all()
 
-        assignment_order_ids = list({a.order_id for a in rider_assignments})
-        orders_map = {}
-        if assignment_order_ids:
-            orders_result = await db.execute(
-                select(Orders).where(Orders.id.in_(assignment_order_ids))
+        # Get pending (non-delivered) assignments
+        pending_result = await db.execute(
+            select(Delivery_assignments).where(
+                Delivery_assignments.rider_id == rider_id,
+                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
             )
-            orders_map = {o.id: o for o in orders_result.scalars().all()}
+        )
+        pending_assignments = pending_result.scalars().all()
 
-        all_delivered = [
-            a for a in rider_assignments
-            if str(a.status or "").lower().strip() == "delivered"
-            or (
-                orders_map.get(a.order_id) is not None
-                and str(orders_map[a.order_id].status or "").lower().strip() == "completed"
-                and is_delivery_order(orders_map[a.order_id])
-            )
-        ]
-        delivered_ids = {a.id for a in all_delivered}
-        pending_assignments = [
-            a for a in rider_assignments
-            if a.id not in delivered_ids
-            and str(a.status or "").lower().strip() in ("assigned", "accepted", "picked_up", "on_the_way")
-        ]
-
+        # Collect order IDs for delivered
         delivered_order_ids = [a.order_id for a in all_delivered]
 
         # Get order details for earnings calculation
@@ -804,6 +885,11 @@ async def get_rider_stats(
         month_count = 0
 
         if delivered_order_ids:
+            orders_result = await db.execute(
+                select(Orders).where(Orders.id.in_(delivered_order_ids))
+            )
+            orders_map = {o.id: o for o in orders_result.scalars().all()}
+
             for assignment in all_delivered:
                 order = orders_map.get(assignment.order_id)
                 if not order:
@@ -812,7 +898,7 @@ async def get_rider_stats(
                 order_amount = order.total_amount or 0
                 total_earnings += order_amount
                 # Delivery charge earned = zone-based charge stored on assignment
-                assignment_delivery_charge = float(assignment.delivery_charge or getattr(order, 'delivery_charge', 0) or 0)
+                assignment_delivery_charge = assignment.delivery_charge or 0
                 delivery_charges_earned += assignment_delivery_charge
 
                 # Tips earned by rider
@@ -872,9 +958,6 @@ async def get_rider_stats(
 
 @router.get("/admin/reports")
 async def get_admin_rider_reports(
-    period: str = Query("today"),
-    date_from: str | None = Query(None),
-    date_to: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin gets complete report of all riders with stats"""
@@ -911,90 +994,11 @@ async def get_admin_rider_reports(
             microsecond=0,
         ).astimezone(timezone.utc)
 
-        def _uae_day_start(dt):
-            return dt.astimezone(timezone(timedelta(hours=4))).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ).astimezone(timezone.utc)
-
-        period_key = str(period or "today").lower().strip()
-        period_start = None
-        period_end = None
-
-        if period_key == "today":
-            period_start = today_start
-            period_end = today_start + timedelta(days=1)
-        elif period_key == "yesterday":
-            period_start = today_start - timedelta(days=1)
-            period_end = today_start
-        elif period_key == "week":
-            period_start = today_start - timedelta(days=6)
-            period_end = today_start + timedelta(days=1)
-        elif period_key == "thirty_days":
-            period_start = today_start - timedelta(days=29)
-            period_end = today_start + timedelta(days=1)
-        elif period_key == "custom":
-            if not date_from or not date_to:
-                raise HTTPException(status_code=400, detail="date_from and date_to are required")
-            try:
-                start_local = datetime.fromisoformat(date_from).replace(
-                    tzinfo=timezone(timedelta(hours=4))
-                )
-                end_local = datetime.fromisoformat(date_to).replace(
-                    tzinfo=timezone(timedelta(hours=4))
-                )
-                period_start = start_local.astimezone(timezone.utc)
-                period_end = (end_local + timedelta(days=1)).astimezone(timezone.utc)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid custom date")
-        elif period_key == "all":
-            period_start = None
-            period_end = None
-        else:
-            raise HTTPException(status_code=400, detail="Invalid rider report period")
-
-        def in_selected_period(value):
-            if value is None:
-                return False
-            if hasattr(value, "tzinfo") and value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-            if period_start is not None and value < period_start:
-                return False
-            if period_end is not None and value >= period_end:
-                return False
-            return True
-
         reports = []
         for rider in riders:
             rider_assignments = [a for a in all_assignments if a.rider_id == rider.id]
-
-            # A sale is final when the rider assignment is delivered OR the linked
-            # delivery order is already completed. The second condition repairs
-            # older/mismatched rows where order completion was saved but assignment
-            # status did not reach "delivered".
-            all_delivered = [
-                a for a in rider_assignments
-                if str(a.status or "").lower().strip() == "delivered"
-                or (
-                    orders_map.get(a.order_id) is not None
-                    and str(orders_map[a.order_id].status or "").lower().strip() == "completed"
-                    and is_delivery_order(orders_map[a.order_id])
-                )
-            ]
-
-            delivered = [
-                a for a in all_delivered
-                if in_selected_period(
-                    getattr(orders_map.get(a.order_id), "delivered_at", None)
-                    or a.updated_at
-                    or a.created_at
-                )
-            ]
-            delivered_ids = {a.id for a in all_delivered}
-            pending = [
-                a for a in rider_assignments
-                if a.id not in delivered_ids
-                and str(a.status or "").lower().strip() in ("assigned", "accepted", "picked_up", "on_the_way")
-            ]
+            delivered = [a for a in rider_assignments if a.status == "delivered"]
+            pending = [a for a in rider_assignments if a.status in ("assigned", "accepted", "picked_up", "on_the_way")]
 
             total_earnings = 0.0
             delivery_charges_earned = 0.0
@@ -1009,40 +1013,32 @@ async def get_admin_rider_reports(
                     continue
                 amount = order.total_amount or 0
                 total_earnings += amount
-                delivery_charges_earned += float(a.delivery_charge or getattr(order, 'delivery_charge', 0) or 0)
+                delivery_charges_earned += (a.delivery_charge or 0)
                 if order.payment_method and "cash" in order.payment_method.lower():
                     cash_collected += amount
                 else:
                     card_orders += 1
-                # Selected report period count/value
-                today_count += 1
-                today_order_value += amount
+                # Today count
+                a_time = a.updated_at or a.created_at
+                if a_time:
+                    if hasattr(a_time, 'tzinfo') and a_time.tzinfo is None:
+                        a_time = a_time.replace(tzinfo=timezone.utc)
+                    if a_time >= today_start:
+                        today_count += 1
+                        today_order_value += amount
 
             rider_settlements = [
                 item for item in all_settlements if item.rider_id == rider.id
             ]
-
-            # Cash figures on Rider Management must follow the selected period too.
-            # Approved cash uses reviewed_at (when Admin actually approved it).
-            # Pending/awaiting cash uses submitted_at.
             approved_cash = sum(
                 float(item.amount or 0)
                 for item in rider_settlements
                 if item.status == "approved"
-                and in_selected_period(
-                    getattr(item, "reviewed_at", None)
-                    or getattr(item, "updated_at", None)
-                    or getattr(item, "submitted_at", None)
-                )
             )
             awaiting_approval = sum(
                 float(item.amount or 0)
                 for item in rider_settlements
                 if item.status == "pending"
-                and in_selected_period(
-                    getattr(item, "submitted_at", None)
-                    or getattr(item, "created_at", None)
-                )
             )
             cash_pending = max(cash_collected - approved_cash, 0.0)
 
@@ -1083,12 +1079,7 @@ async def get_admin_rider_reports(
                 "shift_end": rider.shift_end,
             })
 
-        return {
-            "period": period_key,
-            "date_from": date_from,
-            "date_to": date_to,
-            "items": reports,
-        }
+        return {"items": reports}
     except Exception as e:
         logging.error(f"Failed to get admin rider reports: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1125,10 +1116,28 @@ async def reassign_delivery(
         if not new_rider:
             raise HTTPException(status_code=404, detail="Rider not found or inactive")
 
+        live = require_live_rider(new_rider)
+        shop_lat, shop_lng = await get_restaurant_location(db)
+        pickup_distance = None
+        if shop_lat is not None and shop_lng is not None:
+            pickup_distance = haversine_km(
+                float(live["lat"]),
+                float(live["lng"]),
+                shop_lat,
+                shop_lng,
+            )
+
         assignment.rider_id = data.new_rider_id
         assignment.status = "assigned"
+        if pickup_distance is not None:
+            assignment.distance_km = round(pickup_distance, 2)
         await db.commit()
-        return {"success": True, "new_rider_name": new_rider.name}
+        return {
+            "success": True,
+            "new_rider_name": new_rider.name,
+            "new_rider_phone": new_rider.phone,
+            "distance_to_shop_km": assignment.distance_km,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1142,11 +1151,51 @@ async def reassign_delivery(
 @router.get("/delivery-eta/{order_id}")
 async def get_delivery_eta(
     order_id: int,
+    session_id: Optional[str] = Query(default=None, min_length=8, max_length=120),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Customer gets ETA for their delivery order"""
+    """Customer gets ETA only for an order owned by their logged-in account."""
     try:
-        # Find assignment for this order
+        customer_payload = decode_customer_token(get_customer_bearer_token(authorization))
+        customer_user_id = f"customer:{customer_payload.get('sub', '')}"
+        ownership_filters = [Orders.user_id == customer_user_id]
+
+        # Strict privacy: a device/session id is never enough to expose rider
+        # tracking.  Legacy ownership can only be recovered from the exact phone
+        # contained in the signed customer JWT.
+        account_phone = normalize_phone(str(customer_payload.get("phone") or ""))
+        if account_phone:
+            phone_digits = ''.join(ch for ch in account_phone if ch.isdigit())
+            safe_variants = [phone_digits]
+            if phone_digits.startswith('971') and len(phone_digits) >= 11:
+                safe_variants.append('0' + phone_digits[3:])
+            db_phone_digits = func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(
+                            func.replace(Orders.customer_phone, '+', ''),
+                            ' ', '',
+                        ),
+                        '-', '',
+                    ),
+                    '(', '',
+                ),
+                ')', '',
+            )
+            ownership_filters.append(db_phone_digits.in_(safe_variants))
+
+        order_result = await db.execute(
+            select(Orders).where(
+                Orders.id == order_id,
+                or_(*ownership_filters),
+            )
+        )
+        order = order_result.scalar_one_or_none()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Find assignment for this owned order
         result = await db.execute(
             select(Delivery_assignments)
             .where(
@@ -1169,9 +1218,6 @@ async def get_delivery_eta(
             if delivered_result.scalar_one_or_none():
                 return {"status": "delivered", "eta_minutes": 0, "rider_name": None}
             return {"status": "no_rider", "eta_minutes": None, "rider_name": None}
-
-        order_result = await db.execute(select(Orders).where(Orders.id == order_id))
-        order = order_result.scalar_one_or_none()
 
         # Get rider info
         rider_result = await db.execute(
