@@ -319,6 +319,7 @@ export interface MenuItem {
   price_medium: number;
   price_large: number;
   sizes_json: string;
+  extras_json?: string;
   image_url: string;
   is_active: boolean;
   is_popular: boolean;
@@ -374,6 +375,27 @@ export function getItemExtras(
   availableExtras: Extra[] | null | undefined = [],
 ): Extra[] {
   if (!item || item.has_extras === false) return [];
+
+  // Prefer extras configured directly under this menu item in Admin.
+  // This prevents old/global pizza extras from appearing on unrelated items.
+  if (item.extras_json) {
+    try {
+      const parsed = JSON.parse(item.extras_json);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((extra: any, index: number) => ({
+            id: -(index + 1),
+            name: String(extra?.name || '').trim(),
+            name_ar: String(extra?.name_ar || '').trim(),
+            price: Math.max(0, Number(extra?.price || 0)),
+            is_active: true,
+          }))
+          .filter((extra: Extra) => Boolean(extra.name));
+      }
+    } catch {
+      // Invalid old JSON can still fall back to the legacy global extras list.
+    }
+  }
 
   return (Array.isArray(availableExtras) ? availableExtras : []).filter(
     (extra) => extra && extra.is_active !== false,
