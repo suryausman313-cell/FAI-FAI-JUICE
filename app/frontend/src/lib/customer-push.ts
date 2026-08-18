@@ -1,6 +1,8 @@
 import { getAPIBaseURL } from '@/lib/config';
 
 const VAPID_KEY_STORAGE = 'fai_fai_customer_vapid_public_key';
+const NOTIFICATION_PREF_STORAGE = 'fai_fai_customer_notifications_enabled';
+const NOTIFICATION_PROMPTED_STORAGE = 'fai_fai_customer_notifications_prompted';
 
 export interface CustomerPushState {
   supported: boolean;
@@ -19,6 +21,14 @@ function isSupported(): boolean {
 
 function apiUrl(path: string): string {
   return `${getAPIBaseURL()}${path}`;
+}
+
+function hasCustomerToken(): boolean {
+  return Boolean(localStorage.getItem('vita_customer_token'));
+}
+
+export function isCustomerPushPreferenceEnabled(): boolean {
+  return localStorage.getItem(NOTIFICATION_PREF_STORAGE) !== '0';
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -105,9 +115,60 @@ async function publicKey(): Promise<string> {
   return result.public_key;
 }
 
+async function subscribeWithoutPrompt(): Promise<CustomerPushState> {
+  if (!isSupported()) {
+    return { supported: false, permission: 'unsupported', subscribed: false };
+  }
+  if (Notification.permission !== 'granted') {
+    return { supported: true, permission: Notification.permission, subscribed: false };
+  }
+  if (!hasCustomerToken() || !isCustomerPushPreferenceEnabled()) {
+    return { supported: true, permission: Notification.permission, subscribed: false };
+  }
+
+  const registration = await getRegistration();
+  const key = await publicKey();
+  let subscription = await registration.pushManager.getSubscription();
+  const previousKey = localStorage.getItem(VAPID_KEY_STORAGE);
+
+  if (subscription && previousKey && previousKey !== key) {
+    await subscription.unsubscribe().catch(() => false);
+    subscription = null;
+  }
+
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+  }
+
+  try {
+    await sendSubscription(subscription);
+  } catch (firstError) {
+    // Repair a stale browser subscription once. This is silent because browser
+    // permission was already granted by the customer previously.
+    await subscription.unsubscribe().catch(() => false);
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+    try {
+      await sendSubscription(subscription);
+    } catch {
+      throw firstError;
+    }
+  }
+
+  localStorage.setItem(VAPID_KEY_STORAGE, key);
+  localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
+  return { supported: true, permission: 'granted', subscribed: true };
+}
+
 export async function requestCustomerPushPermissionOnLogin(): Promise<NotificationPermission | 'unsupported'> {
   if (!isSupported()) return 'unsupported';
   if (Notification.permission === 'default') {
+    localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
     return await Notification.requestPermission();
   }
   return Notification.permission;
@@ -122,59 +183,96 @@ export async function getCustomerPushState(): Promise<CustomerPushState> {
   return {
     supported: true,
     permission: Notification.permission,
-    subscribed: Boolean(subscription),
+    // App-level OFF must show as OFF even though browser permission remains granted.
+    subscribed: Boolean(subscription) && isCustomerPushPreferenceEnabled(),
   };
 }
 
 export async function enableCustomerPush(): Promise<CustomerPushState> {
   if (!isSupported()) throw new Error('This browser does not support notifications');
-  const permission = await Notification.requestPermission();
+
+  localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
+  const permission = Notification.permission === 'granted'
+    ? 'granted'
+    : await Notification.requestPermission();
+
   if (permission !== 'granted') {
     throw new Error('Please allow notifications in browser settings');
   }
 
-  const registration = await getRegistration();
-  const key = await publicKey();
-  let subscription = await registration.pushManager.getSubscription();
-  const previousKey = localStorage.getItem(VAPID_KEY_STORAGE);
-  if (subscription && previousKey && previousKey !== key) {
-    await subscription.unsubscribe();
-    subscription = null;
-  }
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key),
-    });
+  localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
+  return await subscribeWithoutPrompt();
+}
+
+export async function disableCustomerPush(): Promise<CustomerPushState> {
+  localStorage.setItem(NOTIFICATION_PREF_STORAGE, '0');
+
+  if (!isSupported()) {
+    return { supported: false, permission: 'unsupported', subscribed: false };
   }
 
-  try {
-    await sendSubscription(subscription);
-  } catch (firstError) {
-    // A browser may retain a subscription created with an older VAPID key or
-    // broken push-service endpoint. Recreate it once before showing an error.
-    if (subscription) await subscription.unsubscribe().catch(() => false);
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key),
-    });
-    try {
-      await sendSubscription(subscription);
-    } catch {
-      throw firstError;
+  const registration = await getRegistration();
+  const subscription = await registration.pushManager.getSubscription();
+  if (subscription) {
+    // Tell backend first so this endpoint is no longer used for this customer.
+    if (hasCustomerToken()) {
+      await apiRequest('/api/v1/customer-push/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      }).catch(() => undefined);
+    }
+    await subscription.unsubscribe().catch(() => false);
+  }
+
+  return { supported: true, permission: Notification.permission, subscribed: false };
+}
+
+/**
+ * Called on customer-app startup. Once browser permission is granted, this
+ * silently repairs/recreates the Push subscription on future opens instead of
+ * asking the customer to press Enable again.
+ *
+ * If permission is still "default", the browser permission prompt is attempted
+ * only once on this device. Browsers that require a user gesture may suppress
+ * that automatic prompt; the Account/My Orders Enable button remains available.
+ */
+export async function ensureCustomerPushOnAppOpen(): Promise<CustomerPushState> {
+  if (!isSupported()) {
+    return { supported: false, permission: 'unsupported', subscribed: false };
+  }
+  if (!hasCustomerToken() || !isCustomerPushPreferenceEnabled()) {
+    return await getCustomerPushState();
+  }
+
+  if (Notification.permission === 'granted') {
+    return await subscribeWithoutPrompt();
+  }
+
+  if (
+    Notification.permission === 'default' &&
+    localStorage.getItem(NOTIFICATION_PROMPTED_STORAGE) !== '1'
+  ) {
+    // Mark before requesting so closing/reopening the app never causes a prompt loop.
+    localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
+      return await subscribeWithoutPrompt();
     }
   }
-  localStorage.setItem(VAPID_KEY_STORAGE, key);
-  return { supported: true, permission, subscribed: true };
+
+  return await getCustomerPushState();
 }
 
 export async function syncCustomerPushIfAllowed(): Promise<CustomerPushState> {
   const state = await getCustomerPushState();
-  if (!state.supported || state.permission !== 'granted' || !state.subscribed) {
-    return state;
+  if (!state.supported || !isCustomerPushPreferenceEnabled()) {
+    return { ...state, subscribed: false };
   }
-  const registration = await getRegistration();
-  const subscription = await registration.pushManager.getSubscription();
-  if (subscription) await sendSubscription(subscription);
-  return { ...state, subscribed: true };
+  if (state.permission === 'granted') {
+    // Permission already exists: silently recreate a missing subscription rather
+    // than showing the customer an Enable button again.
+    return await subscribeWithoutPrompt();
+  }
+  return state;
 }

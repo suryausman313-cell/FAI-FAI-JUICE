@@ -13,9 +13,14 @@ export function getCart(): CartItem[] {
     // starts or expires correctly without requiring the customer to re-add it.
     const refreshed = items.map(item => {
       if (item.isDeal) return item;
+      const totals = calculateCartItemTotals(item.menuItem, item.size, item.extras || [], item.quantity);
       return {
         ...item,
-        ...calculateCartItemTotals(item.menuItem, item.size, item.extras || [], item.quantity),
+        size: totals.resolvedSize,
+        totalPrice: totals.totalPrice,
+        originalTotalPrice: totals.originalTotalPrice,
+        itemDiscountAmount: totals.itemDiscountAmount,
+        itemDiscountLabel: totals.itemDiscountLabel,
       };
     });
 
@@ -30,16 +35,39 @@ export function saveCart(items: CartItem[]): void {
   localStorage.setItem(CART_KEY, JSON.stringify(items));
 }
 
+function normalizeSizeKey(value: string): string {
+  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (key === 's' || key === 'small') return 'small';
+  if (key === 'm' || key === 'medium' || key === 'med') return 'medium';
+  if (key === 'l' || key === 'large') return 'large';
+  if (key === 'r' || key === 'regular' || key === 'one' || key === 'onesize') return 'regular';
+  return key;
+}
+
+function resolveCartSize(menuItem: MenuItem, requestedSize: string) {
+  const sizes = getItemSizes(menuItem);
+  const requestedKey = normalizeSizeKey(requestedSize);
+
+  const exact = sizes.find((option) =>
+    normalizeSizeKey(String(option.name || '')) === requestedKey,
+  );
+  if (exact && Number(exact.price || 0) > 0) return exact;
+
+  // Legacy menu rows can contain an old zero-price size. Never let a stale
+  // Order Again/cart line become AED 0 when this item still has a valid size.
+  const firstPriced = sizes.find((option) => Number(option.price || 0) > 0);
+  return firstPriced || exact || sizes[0];
+}
+
 function calculateCartItemTotals(
   menuItem: MenuItem,
   size: string,
   extras: Extra[],
   quantity: number,
 ) {
-  const sizes = getItemSizes(menuItem);
-  const sizeObj = sizes.find(s => s.name === size) || sizes[0];
-  const basePrice = Number(sizeObj?.price || 0);
-  const extrasPrice = extras.reduce((sum, extra) => sum + Number(extra.price || 0), 0);
+  const sizeObj = resolveCartSize(menuItem, size);
+  const basePrice = Math.max(0, Number(sizeObj?.price || 0));
+  const extrasPrice = extras.reduce((sum, extra) => sum + Math.max(0, Number(extra.price || 0)), 0);
   const breakdown = getItemPriceBreakdown(menuItem, basePrice);
 
   const originalTotalPrice = (basePrice + extrasPrice) * quantity;
@@ -47,6 +75,7 @@ function calculateCartItemTotals(
   const itemDiscountAmount = breakdown.saving * quantity;
 
   return {
+    resolvedSize: String(sizeObj?.name || size || 'Regular'),
     totalPrice,
     originalTotalPrice,
     itemDiscountAmount,
@@ -64,12 +93,15 @@ export function addToCart(
   const totals = calculateCartItemTotals(menuItem, size, extras, quantity);
 
   const newItem: CartItem = {
-    id: `${menuItem.id}-${size}-${extras.map(e => e.id).join(',')}-${Date.now()}`,
+    id: `${menuItem.id}-${totals.resolvedSize}-${extras.map(e => e.id).join(',')}-${Date.now()}`,
     menuItem,
-    size,
+    size: totals.resolvedSize,
     extras,
     quantity,
-    ...totals,
+    totalPrice: totals.totalPrice,
+    originalTotalPrice: totals.originalTotalPrice,
+    itemDiscountAmount: totals.itemDiscountAmount,
+    itemDiscountLabel: totals.itemDiscountLabel,
   };
 
   cart.push(newItem);
@@ -98,10 +130,15 @@ export function updateCartItemQuantity(itemId: string, quantity: number): CartIt
       };
     }
 
+    const totals = calculateCartItemTotals(item.menuItem, item.size, item.extras, quantity);
     return {
       ...item,
+      size: totals.resolvedSize,
       quantity,
-      ...calculateCartItemTotals(item.menuItem, item.size, item.extras, quantity),
+      totalPrice: totals.totalPrice,
+      originalTotalPrice: totals.originalTotalPrice,
+      itemDiscountAmount: totals.itemDiscountAmount,
+      itemDiscountLabel: totals.itemDiscountLabel,
     };
   });
 
