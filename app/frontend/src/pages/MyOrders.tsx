@@ -83,11 +83,8 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
   const currentStep = isDelivery
     ? getDeliveryStepIndex(status, deliveryStatus)
     : getStepIndex(status, steps);
-  const deliveryTravelStage = isDelivery && (
-    status === 'ready' ||
-    status === 'out_for_delivery' ||
-    ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''))
-  );
+  const deliveryTravelStage = isDelivery &&
+    ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''));
   
   if (status === 'completed' || status === 'cancelled') return null;
   if (isDelivery && deliveryStatus === 'delivered') return null;
@@ -636,17 +633,20 @@ export default function MyOrders() {
               method: 'GET',
             });
             const eta = etaRes?.data || {};
+            const etaStatus = eta.status === 'no_rider' ? order.delivery_status : eta.status;
+            const customerTrackingActive = ['picked_up', 'on_the_way'].includes(String(etaStatus || ''));
             return {
               ...order,
-              delivery_status: eta.status === 'no_rider' ? order.delivery_status : eta.status,
+              delivery_status: etaStatus,
               rider_name: eta.rider_name || order.rider_name,
               rider_phone: eta.rider_phone || order.rider_phone,
-              rider_lat: eta.rider_lat ?? order.rider_lat,
-              rider_lng: eta.rider_lng ?? order.rider_lng,
-              delivery_eta_seconds: Number(eta.eta_seconds || 0) || null,
-              delivery_eta_calculated_at: eta.calculated_at || null,
-              delivery_distance_km: Number(eta.customer_distance_km ?? eta.distance_km) || null,
-              rider_location_is_fresh: eta.rider_location_is_fresh === true,
+              // Never retain/expose old rider coordinates before Kitchen pickup.
+              rider_lat: customerTrackingActive ? (eta.rider_lat ?? null) : null,
+              rider_lng: customerTrackingActive ? (eta.rider_lng ?? null) : null,
+              delivery_eta_seconds: customerTrackingActive ? (Number(eta.eta_seconds || 0) || null) : null,
+              delivery_eta_calculated_at: customerTrackingActive ? (eta.calculated_at || null) : null,
+              delivery_distance_km: customerTrackingActive ? (Number(eta.customer_distance_km ?? eta.distance_km) || null) : null,
+              rider_location_is_fresh: customerTrackingActive && eta.rider_location_is_fresh === true,
             };
           } catch {
             return order;
@@ -950,7 +950,7 @@ export default function MyOrders() {
                     try { items = JSON.parse(order.items_json); } catch { /* */ }
                     const isDelivery = isDeliveryOrder(order);
                     const showRiderContact = isDelivery && order.rider_name && order.rider_phone &&
-                      !['rejected', 'delivered'].includes(String(order.delivery_status || ''));
+                      ['accepted', 'picked_up', 'on_the_way'].includes(String(order.delivery_status || ''));
 
                     return (
                       <Card key={order.id} className="bg-gray-900 border-green-600/20 border p-4">
@@ -994,7 +994,7 @@ export default function MyOrders() {
                         )}
 
                         {/* Track Live Button for delivery orders */}
-                        {isDelivery && order.delivery_status && order.delivery_status !== 'delivered' && (
+                        {isDelivery && ['picked_up', 'on_the_way'].includes(String(order.delivery_status || '')) && (
                           <Button
                             onClick={() => navigate(`/track/${order.id}`)}
                             className="w-full mb-3 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"

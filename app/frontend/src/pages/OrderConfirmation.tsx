@@ -1,4 +1,5 @@
-import { Link, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import CustomerLayout from '@/components/CustomerLayout';
@@ -7,7 +8,17 @@ import { useTranslation } from '@/lib/i18n';
 export default function OrderConfirmation() {
   const { t } = useTranslation();
   const location = useLocation();
+  const navigate = useNavigate();
   const orderId = location.state?.orderId;
+
+  // Keep the success screen visible briefly, then take the customer directly
+  // to the live order progress page without requiring another tap.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      navigate('/my-orders', { replace: true });
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [navigate]);
 
   return (
     <CustomerLayout>
@@ -24,13 +35,13 @@ export default function OrderConfirmation() {
         </p>
         <div className="flex gap-4">
           <Link to="/my-orders">
-            <Button className="bg-red-600 hover:bg-red-700 text-white cursor-pointer">
-              View My Orders
+            <Button className="bg-green-600 hover:bg-green-700 text-white cursor-pointer">
+              {t('confirmation.view_orders')}
             </Button>
           </Link>
           <Link to="/menu">
             <Button variant="outline" className="border-gray-600 text-gray-300 hover:bg-gray-800 cursor-pointer">
-              Order More
+              {t('confirmation.order_more')}
             </Button>
           </Link>
         </div>

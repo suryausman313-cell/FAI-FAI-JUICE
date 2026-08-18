@@ -202,9 +202,6 @@ export default function RiderPanel() {
   const [rejectDelivery, setRejectDelivery] = useState<Delivery | null>(null);
   const [rejectPreset, setRejectPreset] = useState('');
   const [rejectOtherReason, setRejectOtherReason] = useState('');
-  const [cancelDelivery, setCancelDelivery] = useState<Delivery | null>(null);
-  const [cancelPreset, setCancelPreset] = useState('');
-  const [cancelOtherReason, setCancelOtherReason] = useState('');
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -257,44 +254,83 @@ export default function RiderPanel() {
     loadFinance(rider.id, financePeriod);
   }, [financePeriod, rider]);
 
-  // Heartbeat to keep rider online status synced (every 15s)
+  // Keep Admin presence fresh while the Rider app is open, and refresh
+  // immediately whenever the app returns from background. watchPosition is
+  // more reliable than repeatedly asking for one-shot GPS while foregrounded.
   useEffect(() => {
     if (!rider) return;
-    function sendHeartbeat() {
+
+    let watchId: number | null = null;
+    let lastLocationSentAt = 0;
+
+    const handleAuthError = (error: any) => {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        handleRiderAuthFailure('Rider login required. Please login once again.');
+      }
+    };
+
+    const sendHeartbeat = () => {
       riderApi({
         url: `/api/v1/rider/heartbeat/${rider.id}`,
         method: 'POST',
         data: {},
-      }).catch((error: any) => {
-        if (error?.response?.status === 401 || error?.response?.status === 403) handleRiderAuthFailure('Rider login required. Please login once again.');
-      });
-    }
-    sendHeartbeat(); // Send immediately on login
-    const heartbeatInterval = setInterval(sendHeartbeat, 15000);
-    return () => clearInterval(heartbeatInterval);
-  }, [rider]);
+      }).catch(handleAuthError);
+    };
 
-  useEffect(() => {
-    if (!rider) return;
-    function sendLocation() {
+    const sendCoords = (lat: number, lng: number, force = false) => {
+      const now = Date.now();
+      if (!force && now - lastLocationSentAt < 10000) return;
+      lastLocationSentAt = now;
+      riderApi({
+        url: `/api/v1/rider/location/${rider.id}`,
+        method: 'POST',
+        data: { lat, lng },
+      }).catch(handleAuthError);
+    };
+
+    const requestFreshLocation = () => {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          riderApi({
-            url: `/api/v1/rider/location/${rider.id}`,
-            method: 'POST',
-            data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
-          }).catch((error: any) => {
-            if (error?.response?.status === 401 || error?.response?.status === 403) handleRiderAuthFailure('Rider login required. Please login once again.');
-          });
-        },
+        (pos) => sendCoords(pos.coords.latitude, pos.coords.longitude, true),
         () => {},
-        { enableHighAccuracy: true, timeout: 10000 }
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 },
+      );
+    };
+
+    const syncPresenceNow = () => {
+      sendHeartbeat();
+      requestFreshLocation();
+    };
+
+    syncPresenceNow();
+    const heartbeatInterval = window.setInterval(sendHeartbeat, 15000);
+
+    if (navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => sendCoords(pos.coords.latitude, pos.coords.longitude),
+        () => {},
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
       );
     }
-    sendLocation();
-    const locationInterval = setInterval(sendLocation, 30000);
-    return () => clearInterval(locationInterval);
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') syncPresenceNow();
+    };
+    const onResume = () => syncPresenceNow();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onResume);
+    window.addEventListener('pageshow', onResume);
+    window.addEventListener('online', onResume);
+
+    return () => {
+      window.clearInterval(heartbeatInterval);
+      if (watchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onResume);
+      window.removeEventListener('pageshow', onResume);
+      window.removeEventListener('online', onResume);
+    };
   }, [rider]);
 
   useEffect(() => {
@@ -688,7 +724,7 @@ export default function RiderPanel() {
         method: 'PUT',
         data: { status: newStatus, reason: reason || undefined },
       });
-      toast.success(newStatus === 'rejected' ? `Delivery rejected — ${reason}` : newStatus === 'cancelled' ? `Order cancelled — ${reason}` : `Status updated to ${newStatus.replace(/_/g, ' ')}`);
+      toast.success(newStatus === 'rejected' ? `Delivery rejected — ${reason}` : `Status updated to ${newStatus.replace(/_/g, ' ')}`);
       if (rider) {
         await Promise.all([
           loadDeliveries(rider.id),
@@ -808,35 +844,6 @@ export default function RiderPanel() {
                 setRejectDelivery(null); setRejectPreset(''); setRejectOtherReason('');
                 void updateStatus(target.id, 'rejected', reason);
               }} className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm Reject</Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {cancelDelivery && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-red-800/50 bg-gray-900 p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-white">Cancel Order #{cancelDelivery.order_id}</h3>
-              <button type="button" onClick={() => { setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason(''); }} className="text-gray-400 hover:text-white">✕</button>
-            </div>
-            <p className="mb-3 text-sm text-gray-400">This cancels the customer order, not just your assignment. A reason is required.</p>
-            <div className="grid grid-cols-1 gap-2">
-              {['Customer requested cancellation', 'Customer unreachable', 'Wrong / unreachable address', 'Unable to complete delivery', 'Other'].map(reason => (
-                <button key={reason} type="button" onClick={() => { setCancelPreset(reason); if (reason !== 'Other') setCancelOtherReason(''); }} className={`rounded-xl border px-3 py-2.5 text-left text-sm ${cancelPreset === reason ? 'border-red-500 bg-red-600/15 text-red-300' : 'border-gray-700 bg-gray-800 text-gray-300'}`}>{reason}</button>
-              ))}
-            </div>
-            {cancelPreset === 'Other' && (
-              <textarea value={cancelOtherReason} onChange={e => setCancelOtherReason(e.target.value)} maxLength={300} placeholder="Write cancellation reason..." className="mt-3 w-full rounded-xl border border-gray-700 bg-gray-800 p-3 text-sm text-white" rows={2} />
-            )}
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <Button variant="outline" onClick={() => { setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason(''); }} className="border-gray-700 text-gray-300">Back</Button>
-              <Button disabled={!cancelPreset || (cancelPreset === 'Other' && !cancelOtherReason.trim())} onClick={() => {
-                const target = cancelDelivery;
-                const reason = cancelPreset === 'Other' ? cancelOtherReason.trim() : cancelPreset;
-                if (!reason) return;
-                setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason('');
-                void updateStatus(target.id, 'cancelled', reason);
-              }} className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm Cancel</Button>
             </div>
           </div>
         </div>
@@ -1236,16 +1243,6 @@ export default function RiderPanel() {
                               </Button>
                             ) : null}
                           </div>
-                          {['accepted', 'picked_up', 'on_the_way'].includes(String(delivery.status || '').toLowerCase()) && (
-                            <Button
-                              onClick={() => { setCancelPreset(''); setCancelOtherReason(''); setCancelDelivery(delivery); }}
-                              variant="outline"
-                              className="mt-2 w-full border-red-700/50 text-red-400 hover:bg-red-950/40 hover:text-red-300 cursor-pointer"
-                              size="sm"
-                            >
-                              Cancel Order
-                            </Button>
-                          )}
                         </Card>
                       );
                     })}

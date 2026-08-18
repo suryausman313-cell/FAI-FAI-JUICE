@@ -57,6 +57,8 @@ const COPY = {
     liveTracking: 'Live delivery tracking',
     preparingTitle: 'Preparing Your Order',
     preparingText: 'A rider will be assigned shortly. Check back soon!',
+    waitingPickupTitle: 'Live tracking starts after pickup',
+    waitingPickupText: 'Kitchen is preparing your order. Rider location stays private until the rider picks it up.',
     deliveredTitle: 'Order Delivered!',
     deliveredText: 'Enjoy your order 🥤',
     cancelledTitle: 'Order Cancelled',
@@ -91,6 +93,8 @@ const COPY = {
     liveTracking: 'تتبع التوصيل المباشر',
     preparingTitle: 'جارٍ تجهيز طلبك',
     preparingText: 'سيتم تعيين سائق لطلبك قريباً. يرجى التحقق بعد قليل.',
+    waitingPickupTitle: 'يبدأ التتبع المباشر بعد استلام السائق',
+    waitingPickupText: 'المطبخ يجهز طلبك. لن يظهر موقع السائق للعميل قبل استلام الطلب.',
     deliveredTitle: 'تم توصيل الطلب!',
     deliveredText: 'نتمنى لك تجربة ممتعة 🥤',
     cancelledTitle: 'تم إلغاء الطلب',
@@ -335,7 +339,9 @@ export default function DeliveryTracking() {
     remainingEtaSeconds % 60,
   ).padStart(2, '0')}`;
 
+  const trackingStarted = ['picked_up', 'on_the_way'].includes(String(eta?.status || ''));
   const hasLiveCoords =
+    trackingStarted &&
     eta?.rider_lat != null &&
     eta?.rider_lng != null &&
     eta?.rider_location_is_fresh === true;
@@ -402,33 +408,45 @@ export default function DeliveryTracking() {
 
         {eta && eta.status !== 'no_rider' && eta.status !== 'delivered' && eta.status !== 'cancelled' && (
           <>
-            <Card className="bg-gray-900 border-gray-800 p-5 mb-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className={language === 'ar' ? 'text-right' : 'text-left'}>
-                  <p className="text-gray-500 text-xs uppercase tracking-wider">
-                    {c.estimatedArrival}
-                  </p>
+            {trackingStarted ? (
+              <Card className="bg-gray-900 border-gray-800 p-5 mb-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className={language === 'ar' ? 'text-right' : 'text-left'}>
+                    <p className="text-gray-500 text-xs uppercase tracking-wider">
+                      {c.estimatedArrival}
+                    </p>
 
-                  <p className="text-white text-3xl font-bold mt-1">
-                    {etaDurationMs > 0
-                      ? isRiderNearby
-                        ? `${c.nearby} · ${etaClock}`
-                        : remainingEtaSeconds > 0
-                          ? etaClock
-                          : c.arrivingSoon
-                      : c.etaUpdating}
-                  </p>
+                    <p className="text-white text-3xl font-bold mt-1">
+                      {etaDurationMs > 0
+                        ? isRiderNearby
+                          ? `${c.nearby} · ${etaClock}`
+                          : remainingEtaSeconds > 0
+                            ? etaClock
+                            : c.arrivingSoon
+                        : c.etaUpdating}
+                    </p>
 
-                  <p className="text-blue-400/70 text-xs mt-1">
-                    {etaDurationMs > 0 ? c.liveRiderEta : c.waitingGps}
-                  </p>
+                    <p className="text-blue-400/70 text-xs mt-1">
+                      {etaDurationMs > 0 ? c.liveRiderEta : c.waitingGps}
+                    </p>
+                  </div>
+
+                  <div className="w-16 h-16 bg-green-600/20 rounded-full flex items-center justify-center shrink-0">
+                    <Clock className="w-8 h-8 text-green-400" />
+                  </div>
                 </div>
-
-                <div className="w-16 h-16 bg-green-600/20 rounded-full flex items-center justify-center shrink-0">
-                  <Clock className="w-8 h-8 text-green-400" />
+              </Card>
+            ) : (
+              <Card className="bg-blue-600/10 border-blue-600/30 p-5 mb-4">
+                <div className="flex items-center gap-3">
+                  <Package className="w-8 h-8 text-blue-400 shrink-0" />
+                  <div className={language === 'ar' ? 'text-right' : 'text-left'}>
+                    <p className="text-blue-300 font-bold">{c.waitingPickupTitle}</p>
+                    <p className="text-blue-300/70 text-sm mt-1">{c.waitingPickupText}</p>
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            )}
 
             {eta.rider_name &&
               (() => {
@@ -487,7 +505,7 @@ export default function DeliveryTracking() {
               />
             )}
 
-            {eta.rider_name && !hasLiveCoords && (
+            {trackingStarted && eta.rider_name && !hasLiveCoords && (
               <Card className="bg-amber-950/30 border-amber-700/40 p-4 mb-4 text-amber-300 text-sm">
                 {c.gpsWaiting}
               </Card>
