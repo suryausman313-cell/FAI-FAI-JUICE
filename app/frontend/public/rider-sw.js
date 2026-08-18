@@ -1,6 +1,6 @@
 // Fai Fai Rider Service Worker - final combined delivery flow.
 // Background polling is best effort; the open Rider page handles the repeating alarm.
-const CACHE_NAME = 'fai-fai-rider-final-combined-v1';
+const CACHE_NAME = 'fai-fai-rider-presence-v2';
 let riderId = null;
 let apiBaseUrl = '';
 let riderToken = '';
@@ -61,6 +61,19 @@ async function checkForNewDeliveries() {
   if (!riderId || !apiBaseUrl || !riderToken) return;
 
   try {
+    // Best-effort background presence. A service worker may be suspended by the
+    // browser/OS, but whenever it is awake we refresh the rider heartbeat so Admin
+    // does not incorrectly show an active signed-in rider as offline.
+    try {
+      await fetch(`${apiBaseUrl}/api/v1/rider/heartbeat/${riderId}`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${riderToken}` },
+        cache: 'no-store',
+      });
+    } catch {
+      // Presence is best effort and must never block delivery polling.
+    }
+
     const response = await fetch(`${apiBaseUrl}/api/v1/rider/deliveries/${riderId}`, {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${riderToken}` },
