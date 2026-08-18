@@ -19,6 +19,8 @@ import 'leaflet/dist/leaflet.css';
 type AdminOrder = Order & {
   order_type?: string;
   delivery_charge?: number;
+  delivery_distance_km?: number | null;
+  delivery_zone_name?: string;
   tip_amount?: number;
   tip_type?: string;
 };
@@ -125,6 +127,34 @@ function displayEstimatedTime(value?: string | null): string {
   return raw.split('|')[0].trim();
 }
 
+function finiteNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function orderCoordinates(order: AdminOrder): { lat: number | null; lng: number | null } {
+  let lat = finiteNumber(order.customer_lat);
+  let lng = finiteNumber(order.customer_lng);
+  if (lat != null && lng != null) return { lat, lng };
+
+  const gpsMatch = String(order.order_notes || '').match(/GPS:\s*([-\d.]+)\s*,\s*([-\d.]+)/i);
+  if (gpsMatch) {
+    lat = finiteNumber(gpsMatch[1]);
+    lng = finiteNumber(gpsMatch[2]);
+  }
+  return { lat, lng };
+}
+
+function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const radius = 6371;
+  const toRad = (value: number) => value * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+}
+
 export default function AdminOrders() {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<AdminOrder[]>([]);
@@ -139,6 +169,8 @@ export default function AdminOrders() {
   const [riders, setRiders] = useState<RiderInfo[]>([]);
   const [assigningOrder, setAssigningOrder] = useState<number | null>(null);
   const [selectedRider, setSelectedRider] = useState<string>('');
+  const [batchOrderIds, setBatchOrderIds] = useState<number[]>([]);
+  const [shopLocation, setShopLocation] = useState<{ lat: number | null; lng: number | null }>({ lat: null, lng: null });
   const [deletingOrder, setDeletingOrder] = useState<number | null>(null);
   const [noteOrder, setNoteOrder] = useState<number | null>(null);
   const [staffNote, setStaffNote] = useState('');
@@ -229,7 +261,7 @@ export default function AdminOrders() {
 
   useEffect(() => {
     renderRiderMap();
-  }, [riders, loading]);
+  }, [riders, loading, assigningOrder, orders]);
 
   useEffect(() => {
     return () => {
@@ -241,10 +273,14 @@ export default function AdminOrders() {
 
   async function loadRiders() {
     try {
-      const payload = await adminRequest<{ items?: RiderInfo[] }>(
+      const payload = await adminRequest<{ items?: RiderInfo[]; shop_lat?: number | null; shop_lng?: number | null }>(
         '/api/v1/rider/admin/locations',
       );
       setRiders(Array.isArray(payload?.items) ? payload.items : []);
+      setShopLocation({
+        lat: finiteNumber(payload?.shop_lat),
+        lng: finiteNumber(payload?.shop_lng),
+      });
     } catch (error) {
       console.error('Failed to load live rider locations:', error);
       // Do not fall back to a basic list because it has no reliable online/GPS status.
@@ -282,7 +318,7 @@ export default function AdminOrders() {
         toast.success(
           assignedCount > 0
             ? `Auto Assign ON — ${assignedCount} delivery order rider ko assign ho gaya`
-            : 'Auto Assign ON — new delivery order nearest available rider ko jayega',
+            : 'Auto Assign ON — har rider ko ek active order; next order next available rider ko jayega',
         );
       } else {
         toast.success('Auto Assign OFF — Admin manually rider assign karega');
@@ -300,7 +336,7 @@ export default function AdminOrders() {
     }
   }
 
-  async function assignToRider(order: Order) {
+  async function assignToRider(order: AdminOrder) {
     if (!selectedRider) {
       toast.error('Please select a rider');
       return;
@@ -312,43 +348,61 @@ export default function AdminOrders() {
     }
     if (!selected.eligible_for_assignment) {
       const proceed = window.confirm(
-        `${selected.name} abhi live/fresh GPS par nahi hai. Phir bhi manually assign karna hai?`
+        `${selected.name} abhi fresh GPS par nahi hai. Manual assignment phir bhi karna hai?`
       );
       if (!proceed) return;
     }
-    // Parse GPS from order notes
-    let lat: number | null = null;
-    let lng: number | null = null;
-    const gpsMatch = order.order_notes?.match(/GPS:\s*([-\d.]+),([-\d.]+)/);
-    if (gpsMatch) {
-      lat = parseFloat(gpsMatch[1]);
-      lng = parseFloat(gpsMatch[2]);
-    }
-    // Parse address from order notes
-    let address = '';
-    const addrMatch = order.order_notes?.match(/Delivery Address:\s*([^|]+)/);
-    if (addrMatch) address = addrMatch[1].trim();
+
+    const requestedIds = Array.from(new Set([order.id, ...batchOrderIds]));
+    const targetOrders = requestedIds
+      .map(id => orders.find(item => item.id === id))
+      .filter((item): item is AdminOrder => Boolean(item))
+      .filter(item => isDeliveryOrder(item) && !['completed', 'cancelled'].includes(String(item.status || '').toLowerCase()));
+
+    let assignedCount = 0;
+    let alreadyAssignedCount = 0;
 
     try {
-      await adminRequest(
-        '/api/v1/rider/admin/assign',
-        'POST',
-        {
-          order_id: order.id,
-          rider_id: Number(selectedRider),
-          customer_lat: lat,
-          customer_lng: lng,
-          customer_address: address,
-          customer_name: order.customer_name,
-          customer_phone: order.customer_phone,
-          delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
-        },
+      for (const target of targetOrders) {
+        const { lat, lng } = orderCoordinates(target);
+        let address = String(target.customer_address || '').trim();
+        if (!address) {
+          const addrMatch = String(target.order_notes || '').match(/Delivery Address:\s*([^|]+)/i);
+          if (addrMatch) address = addrMatch[1].trim();
+        }
+
+        const payload = await adminRequest<{ already_assigned?: boolean }>(
+          '/api/v1/rider/admin/assign',
+          'POST',
+          {
+            order_id: target.id,
+            rider_id: Number(selectedRider),
+            customer_lat: lat,
+            customer_lng: lng,
+            customer_address: address,
+            customer_name: target.customer_name,
+            customer_phone: target.customer_phone,
+            delivery_charge: Number(target.delivery_charge || 0),
+            distance_km: finiteNumber(target.delivery_distance_km),
+            zone_name: target.delivery_zone_name || '',
+          },
+        );
+
+        if (payload?.already_assigned) alreadyAssignedCount += 1;
+        else assignedCount += 1;
+      }
+
+      const distanceText = selected.distance_to_shop_km != null
+        ? ` • Rider ${Number(selected.distance_to_shop_km).toFixed(2)} km from shop`
+        : '';
+      toast.success(
+        `${assignedCount} order${assignedCount === 1 ? '' : 's'} ${selected.name} ko assign ho gaye${distanceText}`
+        + (alreadyAssignedCount ? ` • ${alreadyAssignedCount} already assigned` : ''),
       );
-      toast.success(`Order #${order.id} ${selected.name} ko assign ho gaya${selected.distance_to_shop_km != null ? ` • ${Number(selected.distance_to_shop_km).toFixed(2)} km from shop` : ''}`);
       setAssigningOrder(null);
       setSelectedRider('');
-      await loadRiders();
-      await loadOrders();
+      setBatchOrderIds([]);
+      await Promise.all([loadRiders(), loadOrders()]);
     } catch (e: any) {
       toast.error(
         e?.response?.data?.detail ||
@@ -544,8 +598,8 @@ export default function AdminOrders() {
     const ridersWithGps = riders.filter(
       rider => rider.current_lat != null && rider.current_lng != null,
     );
-    const shopLat = riders.find(rider => rider.shop_lat != null)?.shop_lat ?? null;
-    const shopLng = riders.find(rider => rider.shop_lng != null)?.shop_lng ?? null;
+    const shopLat = shopLocation.lat ?? riders.find(rider => rider.shop_lat != null)?.shop_lat ?? null;
+    const shopLng = shopLocation.lng ?? riders.find(rider => rider.shop_lng != null)?.shop_lng ?? null;
     const firstPoint =
       shopLat != null && shopLng != null
         ? ([shopLat, shopLng] as [number, number])
@@ -580,6 +634,32 @@ export default function AdminOrders() {
         .addTo(layer)
         .bindPopup('<strong>Fai Fai Juice</strong><br>Pickup shop');
       bounds.push([shopLat, shopLng]);
+    }
+
+    const selectedOrder = assigningOrder != null
+      ? orders.find(order => order.id === assigningOrder)
+      : null;
+    if (selectedOrder) {
+      const customer = orderCoordinates(selectedOrder);
+      if (customer.lat != null && customer.lng != null) {
+        const customerIcon = L.divIcon({
+          html: '<div style="width:34px;height:34px;border-radius:50%;background:#2563eb;border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);font-size:17px">📍</div>',
+          className: '',
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+        });
+        const shopDistance = selectedOrder.delivery_distance_km != null
+          ? Number(selectedOrder.delivery_distance_km)
+          : shopLat != null && shopLng != null
+            ? distanceKm(shopLat, shopLng, customer.lat, customer.lng)
+            : null;
+        L.marker([customer.lat, customer.lng], { icon: customerIcon })
+          .addTo(layer)
+          .bindPopup(
+            `<strong>Order #${selectedOrder.id} Customer</strong><br>${selectedOrder.customer_name}<br>${shopDistance != null ? `${shopDistance.toFixed(2)} km from shop<br>` : ''}${customer.lat.toFixed(6)}, ${customer.lng.toFixed(6)}`,
+          );
+        bounds.push([customer.lat, customer.lng]);
+      }
     }
 
     ridersWithGps.forEach(rider => {
@@ -731,6 +811,34 @@ export default function AdminOrders() {
             let items: any[] = [];
             try { items = JSON.parse(order.items_json); } catch { /* parse error */ }
 
+            const customerCoords = orderCoordinates(order);
+            const customerShopDistance = order.delivery_distance_km != null
+              ? Number(order.delivery_distance_km)
+              : customerCoords.lat != null && customerCoords.lng != null && shopLocation.lat != null && shopLocation.lng != null
+                ? distanceKm(shopLocation.lat, shopLocation.lng, customerCoords.lat, customerCoords.lng)
+                : null;
+
+            const nearbyDeliveryOrders = orders
+              .filter(candidate =>
+                candidate.id !== order.id
+                && isDeliveryOrder(candidate)
+                && !['completed', 'cancelled'].includes(String(candidate.status || '').toLowerCase()),
+              )
+              .map(candidate => {
+                const candidateCoords = orderCoordinates(candidate);
+                const betweenCustomers = customerCoords.lat != null && customerCoords.lng != null
+                  && candidateCoords.lat != null && candidateCoords.lng != null
+                  ? distanceKm(customerCoords.lat, customerCoords.lng, candidateCoords.lat, candidateCoords.lng)
+                  : null;
+                const candidateShopDistance = candidate.delivery_distance_km != null
+                  ? Number(candidate.delivery_distance_km)
+                  : candidateCoords.lat != null && candidateCoords.lng != null && shopLocation.lat != null && shopLocation.lng != null
+                    ? distanceKm(shopLocation.lat, shopLocation.lng, candidateCoords.lat, candidateCoords.lng)
+                    : null;
+                return { candidate, betweenCustomers, candidateShopDistance };
+              })
+              .sort((a, b) => (a.betweenCustomers ?? 99999) - (b.betweenCustomers ?? 99999));
+
             return (
               <Card key={order.id} className="bg-gray-900 border-gray-800 p-4">
                 <div className="flex items-start justify-between mb-3">
@@ -758,6 +866,38 @@ export default function AdminOrders() {
                     <Printer className="w-4 h-4" />
                   </Button>
                 </div>
+
+                {isDeliveryOrder(order) && (
+                  <div className="mb-3 rounded-lg border border-blue-600/25 bg-blue-600/10 px-3 py-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-blue-300 text-xs font-semibold flex items-center gap-1">
+                          <MapPin className="w-3.5 h-3.5" /> Customer Location
+                        </p>
+                        <p className="text-gray-300 text-xs mt-1">
+                          {customerShopDistance != null ? `${customerShopDistance.toFixed(2)} km from shop` : 'Distance from shop unavailable'}
+                          {order.delivery_zone_name ? ` • ${order.delivery_zone_name}` : ''}
+                        </p>
+                        {customerCoords.lat != null && customerCoords.lng != null && (
+                          <p className="text-gray-500 text-[11px] mt-0.5">
+                            {customerCoords.lat.toFixed(6)}, {customerCoords.lng.toFixed(6)}
+                          </p>
+                        )}
+                      </div>
+                      {customerCoords.lat != null && customerCoords.lng != null && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${customerCoords.lat},${customerCoords.lng}`, '_blank')}
+                          className="h-8 border-blue-600/30 text-blue-300 hover:bg-blue-600/10"
+                        >
+                          Map
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-1 mb-3">
                   {items.map((item: any, idx: number) => (
@@ -797,6 +937,52 @@ export default function AdminOrders() {
                   assigningOrder === order.id ? (
                     <div className="bg-gray-800 rounded-lg p-3 mb-3 border border-blue-600/30">
                       <p className="text-blue-400 text-sm font-medium mb-2">Assign to Rider:</p>
+
+                      <div className="mb-3 rounded-lg border border-gray-700 bg-gray-900/60 p-2.5">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div>
+                            <p className="text-white text-xs font-semibold">Manual multi-order assignment</p>
+                            <p className="text-gray-500 text-[11px]">Admin ek rider ko 2/3/4/5 orders de sakta hai. Auto Assign ek rider ko sirf 1 active order dega.</p>
+                          </div>
+                          <Badge className="bg-blue-600/20 text-blue-300 border border-blue-600/30 text-[10px]">
+                            {Array.from(new Set([order.id, ...batchOrderIds])).length} selected
+                          </Badge>
+                        </div>
+
+                        <label className="flex items-center gap-2 rounded-md border border-blue-600/30 bg-blue-600/10 px-2 py-1.5 text-xs text-blue-200">
+                          <input type="checkbox" checked readOnly className="accent-blue-500" />
+                          <span>Order #{order.id} • current order</span>
+                          {customerShopDistance != null && <span className="ml-auto text-gray-400">{customerShopDistance.toFixed(2)} km from shop</span>}
+                        </label>
+
+                        {nearbyDeliveryOrders.length > 0 && (
+                          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                            {nearbyDeliveryOrders.slice(0, 12).map(({ candidate, betweenCustomers, candidateShopDistance }) => {
+                              const checked = batchOrderIds.includes(candidate.id);
+                              return (
+                                <label key={candidate.id} className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs cursor-pointer ${checked ? 'border-green-600/40 bg-green-600/10 text-green-200' : 'border-gray-700 bg-gray-800/70 text-gray-300'}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => setBatchOrderIds(current =>
+                                      current.includes(candidate.id)
+                                        ? current.filter(id => id !== candidate.id)
+                                        : [...current, candidate.id],
+                                    )}
+                                    className="accent-green-500"
+                                  />
+                                  <span>#{candidate.id} • {candidate.customer_name} • {String(candidate.status || '').replace(/_/g, ' ')}</span>
+                                  <span className="ml-auto text-right text-[10px] text-gray-500">
+                                    {betweenCustomers != null ? `${betweenCustomers.toFixed(2)} km nearby` : 'distance ?'}
+                                    {candidateShopDistance != null ? ` • shop ${candidateShopDistance.toFixed(2)} km` : ''}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
                       {/* Rider cards sorted by nearest shop distance */}
                       <div className="space-y-2 mb-3 max-h-64 overflow-y-auto">
                         {riders.filter(rider => rider.is_active).map(rider => {
@@ -807,6 +993,10 @@ export default function AdminOrders() {
                           const gpsCoordinates = rider.current_lat != null && rider.current_lng != null
                             ? `${Number(rider.current_lat).toFixed(6)}, ${Number(rider.current_lng).toFixed(6)}`
                             : '';
+                          const riderToCustomer = rider.current_lat != null && rider.current_lng != null
+                            && customerCoords.lat != null && customerCoords.lng != null
+                            ? distanceKm(Number(rider.current_lat), Number(rider.current_lng), customerCoords.lat, customerCoords.lng)
+                            : null;
                           return (
                             <button
                               type="button"
@@ -849,6 +1039,8 @@ export default function AdminOrders() {
                               </div>
                               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
                                 <span>Shop: {rider.distance_to_shop_km != null ? `${Number(rider.distance_to_shop_km).toFixed(2)} km away` : 'distance unavailable'}</span>
+                                <span>Customer: {customerShopDistance != null ? `${customerShopDistance.toFixed(2)} km from shop` : 'distance unavailable'}</span>
+                                {riderToCustomer != null && <span>Rider → customer: {riderToCustomer.toFixed(2)} km</span>}
                                 <span>GPS time: {gpsTime ? `${gpsTime} UAE` : 'not available'}</span>
                                 {gpsCoordinates && <span>Location: {gpsCoordinates}</span>}
                               </div>
@@ -863,9 +1055,9 @@ export default function AdminOrders() {
                           disabled={!selectedRider}
                           className="bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex-1 disabled:opacity-50"
                         >
-                          Assign Selected Rider
+                          Assign {Array.from(new Set([order.id, ...batchOrderIds])).length} Order{Array.from(new Set([order.id, ...batchOrderIds])).length === 1 ? '' : 's'} to Rider
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setAssigningOrder(null)} className="text-gray-400 cursor-pointer">
+                        <Button size="sm" variant="ghost" onClick={() => { setAssigningOrder(null); setBatchOrderIds([]); }} className="text-gray-400 cursor-pointer">
                           ✕
                         </Button>
                       </div>
@@ -879,7 +1071,7 @@ export default function AdminOrders() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); loadRiders(); }}
+                      onClick={() => { setAssigningOrder(order.id); setSelectedRider(''); setBatchOrderIds([order.id]); loadRiders(); }}
                       className="mb-3 border-blue-600/30 text-blue-400 hover:bg-blue-600/10 cursor-pointer"
                     >
                       <Bike className="w-3 h-3 mr-1" /> Assign Rider
