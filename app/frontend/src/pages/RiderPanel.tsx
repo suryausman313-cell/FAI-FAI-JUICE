@@ -202,6 +202,8 @@ export default function RiderPanel() {
   const [rejectDelivery, setRejectDelivery] = useState<Delivery | null>(null);
   const [rejectPreset, setRejectPreset] = useState('');
   const [rejectOtherReason, setRejectOtherReason] = useState('');
+  const [gpsState, setGpsState] = useState<'checking' | 'live' | 'denied' | 'error' | 'unsupported'>('checking');
+  const [gpsUpdatedAt, setGpsUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -285,14 +287,26 @@ export default function RiderPanel() {
         url: `/api/v1/rider/location/${rider.id}`,
         method: 'POST',
         data: { lat, lng },
-      }).catch(handleAuthError);
+      }).then(() => {
+        setGpsState('live');
+        setGpsUpdatedAt(new Date());
+      }).catch((error) => {
+        setGpsState('error');
+        handleAuthError(error);
+      });
     };
 
     const requestFreshLocation = () => {
-      if (!navigator.geolocation) return;
+      if (!navigator.geolocation) {
+        setGpsState('unsupported');
+        return;
+      }
+      setGpsState(current => current === 'live' ? current : 'checking');
       navigator.geolocation.getCurrentPosition(
         (pos) => sendCoords(pos.coords.latitude, pos.coords.longitude, true),
-        () => {},
+        (error) => {
+          setGpsState(error.code === 1 ? 'denied' : 'error');
+        },
         { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 },
       );
     };
@@ -304,11 +318,15 @@ export default function RiderPanel() {
 
     syncPresenceNow();
     const heartbeatInterval = window.setInterval(sendHeartbeat, 15000);
+    // watchPosition may stay silent while a rider is stationary. Force a fresh
+    // one-shot GPS update every 30 seconds so Admin/customer tracking does not
+    // incorrectly age an open Rider app into "GPS outdated".
+    const gpsRefreshInterval = window.setInterval(requestFreshLocation, 30000);
 
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
         (pos) => sendCoords(pos.coords.latitude, pos.coords.longitude),
-        () => {},
+        (error) => setGpsState(error.code === 1 ? 'denied' : 'error'),
         { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
       );
     }
@@ -325,6 +343,7 @@ export default function RiderPanel() {
 
     return () => {
       window.clearInterval(heartbeatInterval);
+      window.clearInterval(gpsRefreshInterval);
       if (watchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onResume);
@@ -711,7 +730,52 @@ export default function RiderPanel() {
     return formatUaeDateTime(value);
   }
 
+  async function pushFreshGpsNow(): Promise<boolean> {
+    if (!rider || !navigator.geolocation) {
+      setGpsState('unsupported');
+      return false;
+    }
+
+    setGpsState('checking');
+    return await new Promise<boolean>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            await riderApi({
+              url: `/api/v1/rider/location/${rider.id}`,
+              method: 'POST',
+              data: { lat: pos.coords.latitude, lng: pos.coords.longitude },
+            });
+            setGpsState('live');
+            setGpsUpdatedAt(new Date());
+            resolve(true);
+          } catch (error: any) {
+            setGpsState('error');
+            if (error?.response?.status === 401 || error?.response?.status === 403) {
+              handleRiderAuthFailure('Rider login required. Please login once again.');
+            }
+            resolve(false);
+          }
+        },
+        (error) => {
+          setGpsState(error.code === 1 ? 'denied' : 'error');
+          resolve(false);
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 3000 },
+      );
+    });
+  }
+
   async function updateStatus(assignmentId: number, newStatus: string, reason?: string) {
+    // Customer live tracking begins after Picked Up. Push a fresh GPS fix first
+    // so the customer does not land on "ETA updating / waiting for fresh GPS".
+    if (newStatus === 'picked_up') {
+      const gpsReady = await pushFreshGpsNow();
+      if (!gpsReady) {
+        toast.warning('Order picked up, but live GPS is not available. Please allow Location for customer tracking.');
+      }
+    }
+
     const previous = deliveries;
     if (newStatus === 'accepted' || newStatus === 'rejected') {
       stopRiderRingNow(assignmentId);
@@ -858,6 +922,17 @@ export default function RiderPanel() {
             <div>
               <h1 className="text-white font-bold">{rider.name}</h1>
               <p className="text-gray-500 text-xs">Auto-refresh • {formatUaeTime(lastRefresh)} UAE</p>
+              <p className={`text-[11px] mt-0.5 ${gpsState === 'live' ? 'text-green-400' : gpsState === 'checking' ? 'text-amber-400' : 'text-red-400'}`}>
+                {gpsState === 'live'
+                  ? `GPS live${gpsUpdatedAt ? ` • ${formatUaeTime(gpsUpdatedAt)} UAE` : ''}`
+                  : gpsState === 'checking'
+                    ? 'GPS checking…'
+                    : gpsState === 'denied'
+                      ? 'GPS permission blocked — allow Location'
+                      : gpsState === 'unsupported'
+                        ? 'GPS unavailable on this device'
+                        : 'GPS update failed — check Location'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
