@@ -509,6 +509,34 @@ export default function KitchenOrders() {
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
   const loadInProgressRef = useRef(false);
+  const lateVoiceAnnouncedRef = useRef<Set<string>>(new Set());
+  const speechUnlockedRef = useRef(false);
+
+  // Mobile Chrome/PWA may block speech until the page has received a real user
+  // interaction. Prime the speech engine on the first tap/key press (PIN login,
+  // Accept, Start Preparing, etc.) so the late-order announcement can speak later.
+  useEffect(() => {
+    const unlockSpeech = () => {
+      if (speechUnlockedRef.current || !('speechSynthesis' in window)) return;
+      try {
+        const utterance = new SpeechSynthesisUtterance('.');
+        utterance.lang = 'en-US';
+        utterance.volume = 0.01;
+        utterance.rate = 1;
+        window.speechSynthesis.speak(utterance);
+        speechUnlockedRef.current = true;
+      } catch {
+        // A later user interaction will try again.
+      }
+    };
+
+    window.addEventListener('pointerdown', unlockSpeech, { passive: true });
+    window.addEventListener('keydown', unlockSpeech);
+    return () => {
+      window.removeEventListener('pointerdown', unlockSpeech);
+      window.removeEventListener('keydown', unlockSpeech);
+    };
+  }, []);
 
   const kitchenPin = useCallback(() => localStorage.getItem('kitchen_pin') || '', []);
 
@@ -857,26 +885,62 @@ export default function KitchenOrders() {
   );
 
   const announceLateOrder = useCallback((order: KitchenOrder) => {
-    const key = `kitchen_late_voice_${order.id}_${order.promised_ready_at || 'deadline'}`;
-    if (localStorage.getItem(key) === '1') return;
-    localStorage.setItem(key, '1');
+    const key = `${order.id}_${order.promised_ready_at || 'deadline'}`;
+    if (lateVoiceAnnouncedRef.current.has(key)) return;
 
-    toast.warning(`Order #${order.id} time finished — please mark it Ready.`, { duration: 10000 });
+    // Mark once for this live Kitchen session. Do not store it permanently in
+    // localStorage: if a browser blocks one speech attempt, future sessions must
+    // still be able to announce the late order.
+    lateVoiceAnnouncedRef.current.add(key);
+    toast.warning(`Order #${order.id} is late — please make it Ready.`, { duration: 10000 });
 
+    // Native Kitchen bridge gives an audible fallback even if browser TTS is
+    // unavailable. The voice below then says the actual order number.
     try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
+      window.VitaPrinter?.startOrderAlarm?.(1);
+      window.setTimeout(() => window.VitaPrinter?.stopOrderAlarm?.(), 2500);
+    } catch { /* optional Android bridge */ }
+
+    const speak = (attempt = 0) => {
+      try {
+        if (!('speechSynthesis' in window)) return;
+        const synth = window.speechSynthesis;
+
         const message = new SpeechSynthesisUtterance(
-          `Order number ${order.id}. Time is finished. Please make it ready.`,
+          `Order number ${order.id} is late. Time is finished. Please make order number ${order.id} ready.`,
         );
         message.lang = 'en-US';
-        message.rate = 0.95;
+        message.rate = 0.9;
+        message.pitch = 1;
         message.volume = 1;
-        window.speechSynthesis.speak(message);
+
+        const voices = synth.getVoices();
+        const englishVoice = voices.find((voice) => /^en(-|_)/i.test(voice.lang)) || voices[0];
+        if (englishVoice) message.voice = englishVoice;
+
+        message.onstart = () => {
+          speechUnlockedRef.current = true;
+        };
+        message.onerror = () => {
+          // Some mobile/PWA engines need a short retry after voices are loaded.
+          if (attempt < 2) window.setTimeout(() => speak(attempt + 1), 500 + attempt * 500);
+        };
+
+        synth.speak(message);
+
+        // Android Chrome occasionally queues an utterance without starting it.
+        // Retry shortly if it is neither speaking nor pending.
+        if (attempt < 2) {
+          window.setTimeout(() => {
+            if (!synth.speaking && !synth.pending) speak(attempt + 1);
+          }, 800 + attempt * 500);
+        }
+      } catch {
+        if (attempt < 2) window.setTimeout(() => speak(attempt + 1), 700);
       }
-    } catch {
-      // Voice alert is helpful but must never break the Kitchen screen.
-    }
+    };
+
+    speak();
   }, []);
 
   function renderOrderDetail(order: KitchenOrder) {
