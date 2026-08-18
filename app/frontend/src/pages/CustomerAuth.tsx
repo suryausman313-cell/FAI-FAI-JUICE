@@ -3,8 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   ArrowLeft,
+  Bell,
+  BellOff,
   Home,
   KeyRound,
+  Loader2,
   LogOut,
   MessageCircle,
   Phone,
@@ -19,6 +22,12 @@ import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
+import {
+  disableCustomerPush,
+  enableCustomerPush,
+  getCustomerPushState,
+  isCustomerPushPreferenceEnabled,
+} from '@/lib/customer-push';
 
 type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
 
@@ -226,6 +235,10 @@ export default function CustomerAuth() {
     Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
   );
   const [activeCustomer, setActiveCustomer] = useState<CustomerData | null>(null);
+  const [pushStatus, setPushStatus] = useState<
+    'checking' | 'on' | 'off' | 'blocked' | 'unsupported' | 'error'
+  >('checking');
+  const [pushBusy, setPushBusy] = useState(false);
 
   const [loginPhone, setLoginPhone] = useState(rememberedPhone);
   const [loginPin, setLoginPin] = useState('');
@@ -304,6 +317,54 @@ export default function CustomerAuth() {
       return () => window.clearTimeout(timer);
     }
   }, [manageMode, sessionChecking, activeCustomer, mode]);
+
+  async function refreshPushStatus(): Promise<void> {
+    if (!activeCustomer) return;
+    try {
+      const state = await getCustomerPushState();
+      if (!state.supported) {
+        setPushStatus('unsupported');
+      } else if (state.permission === 'denied') {
+        setPushStatus('blocked');
+      } else if (state.subscribed && isCustomerPushPreferenceEnabled()) {
+        setPushStatus('on');
+      } else {
+        setPushStatus('off');
+      }
+    } catch {
+      setPushStatus('error');
+    }
+  }
+
+  useEffect(() => {
+    if (activeCustomer) {
+      void refreshPushStatus();
+    }
+    // refreshPushStatus intentionally depends on current customer session only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCustomer]);
+
+  async function toggleCustomerNotifications(): Promise<void> {
+    if (pushBusy || pushStatus === 'unsupported' || pushStatus === 'blocked') return;
+    setPushBusy(true);
+    try {
+      if (pushStatus === 'on') {
+        await disableCustomerPush();
+        setPushStatus('off');
+        toast.success('Order notifications turned off');
+      } else {
+        await enableCustomerPush();
+        setPushStatus('on');
+        toast.success('Order notifications enabled');
+      }
+    } catch (error) {
+      const message = getErrorMessage(error, 'Could not change notification setting');
+      toast.error(message);
+      await refreshPushStatus();
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
@@ -572,6 +633,49 @@ export default function CustomerAuth() {
               <ShoppingBag className="mr-2 h-4 w-4" />
               My Orders
             </Button>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                    pushStatus === 'on' ? 'bg-green-600/15 text-green-400' : 'bg-slate-800 text-gray-400'
+                  }`}>
+                    {pushStatus === 'on' ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-white">Order Notifications</p>
+                    <p className="mt-1 text-xs text-gray-400">
+                      {pushStatus === 'on'
+                        ? 'ON — you will keep receiving order updates on this device.'
+                        : pushStatus === 'blocked'
+                          ? 'Blocked by browser/device settings.'
+                          : pushStatus === 'unsupported'
+                            ? 'Notifications are not supported on this browser.'
+                            : 'OFF — tap Enable to receive order updates.'}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void toggleCustomerNotifications()}
+                  disabled={pushBusy || pushStatus === 'checking' || pushStatus === 'blocked' || pushStatus === 'unsupported'}
+                  className={pushStatus === 'on'
+                    ? 'shrink-0 bg-slate-700 text-white hover:bg-slate-600'
+                    : 'shrink-0 bg-green-600 text-white hover:bg-green-700'}
+                >
+                  {pushBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : pushStatus === 'on' ? (
+                    'Turn Off'
+                  ) : pushStatus === 'blocked' ? (
+                    'Blocked'
+                  ) : (
+                    'Enable'
+                  )}
+                </Button>
+              </div>
+            </div>
 
             <Button
               type="button"

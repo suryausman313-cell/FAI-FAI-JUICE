@@ -470,6 +470,42 @@ type ReorderDraftItem = {
   unavailableReason?: string;
 };
 
+function normalizeReorderSizeKey(value: unknown): string {
+  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (key === 's' || key === 'small') return 'small';
+  if (key === 'm' || key === 'medium' || key === 'med') return 'medium';
+  if (key === 'l' || key === 'large') return 'large';
+  if (key === 'r' || key === 'regular' || key === 'one' || key === 'onesize') return 'regular';
+  return key;
+}
+
+function hasCurrentOrderablePrice(item: MenuItem | null | undefined): boolean {
+  if (!item) return false;
+  return getItemSizes(item).some((size) => Number(size.price || 0) > 0);
+}
+
+function resolveReorderSize(item: MenuItem, requestedSize: unknown): { name: string; price: number } | null {
+  const sizes = getItemSizes(item).filter((size) => Number(size.price || 0) > 0);
+  if (sizes.length === 0) return null;
+
+  const requestedKey = normalizeReorderSizeKey(requestedSize);
+  if (requestedKey) {
+    const match = sizes.find((size) => normalizeReorderSizeKey(size.name) === requestedKey);
+    if (match) return { name: String(match.name), price: Number(match.price) };
+  }
+
+  // Old orders may store M/Medium differently. If there is only one current
+  // valid size, it is safe to use that instead of creating an AED 0 cart line.
+  if (sizes.length === 1) {
+    return { name: String(sizes[0].name), price: Number(sizes[0].price) };
+  }
+
+  // For legacy orders with a missing/renamed size, prefer the first currently
+  // saleable size rather than a stale zero-price option. The review popup shows
+  // the resolved size before the customer confirms.
+  return { name: String(sizes[0].name), price: Number(sizes[0].price) };
+}
+
 export default function MyOrders() {
   const navigate = useNavigate();
   const { t, language } = useTranslation();
@@ -710,8 +746,19 @@ export default function MyOrders() {
           };
         }
 
-        const menuItem = menuItems.find((item) => Number(item.id) === sourceId)
-          || menuItems.find((item) => String(item.name || '').trim().toLowerCase() === sourceName.toLowerCase())
+        const idCandidate = menuItems.find((item) => Number(item.id) === sourceId) || null;
+        const sameNameCandidates = menuItems.filter(
+          (item) => String(item.name || '').trim().toLowerCase() === sourceName.toLowerCase(),
+        );
+
+        // Prefer the original ID only when it still has a real current price.
+        // This fixes old duplicate menu rows where the historical ID is still
+        // active but contains AED 0 while the current item with the same name
+        // has the proper price.
+        const menuItem = (hasCurrentOrderablePrice(idCandidate) ? idCandidate : null)
+          || sameNameCandidates.find((item) => hasCurrentOrderablePrice(item))
+          || idCandidate
+          || sameNameCandidates[0]
           || null;
 
         if (!menuItem) {
@@ -726,12 +773,21 @@ export default function MyOrders() {
           };
         }
 
-        const sizes = getItemSizes(menuItem);
-        const requestedSize = String(source?.size || '').trim();
-        const selectedSize = sizes.find((size) => size.name.toLowerCase() === requestedSize.toLowerCase())?.name
-          || sizes[0]?.name
-          || requestedSize
-          || 'Regular';
+        const resolvedSize = resolveReorderSize(menuItem, source?.size);
+        if (!resolvedSize || resolvedSize.price <= 0) {
+          return {
+            key: `${order.id}-${index}`,
+            sourceName,
+            menuItem: null,
+            size: String(source?.size || ''),
+            extras: [],
+            quantity: 0,
+            unavailableReason: language === 'ar'
+              ? 'السعر الحالي لهذا الصنف غير متوفر'
+              : 'Current price for this item is not available',
+          };
+        }
+        const selectedSize = resolvedSize.name;
 
         const availableExtras = getItemExtras(menuItem, []);
         const oldExtraNames = Array.isArray(source?.extras)
