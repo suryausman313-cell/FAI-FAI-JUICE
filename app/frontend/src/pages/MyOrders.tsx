@@ -1,15 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff, Minus, Plus } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Order, CartItem } from '@/lib/api';
+import { client, Order, MenuItem, Extra, getItemSizes, getItemExtras } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
-import { getCart, saveCart } from '@/lib/cart-store';
+import { addToCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
+import { formatUaeDate, formatUaeDateTime, parseApiDate } from '@/lib/uae-time';
 import {
   enableCustomerPush,
   syncCustomerPushIfAllowed,
@@ -48,40 +49,27 @@ function getDeliveryStepIndex(orderStatus: string, deliveryStatus: string | null
   return -1;
 }
 
-/** Format date safely - handles 1970/epoch dates */
+/** Format all customer order dates in UAE time, independent of device timezone. */
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return 'Date unavailable';
-  try {
-    const date = new Date(dateStr);
-    // Check for epoch/1970 dates (before year 2000)
-    if (date.getFullYear() < 2000 || isNaN(date.getTime())) {
-      return 'Date unavailable';
-    }
-    return date.toLocaleString();
-  } catch {
-    return 'Date unavailable';
-  }
+  const date = parseApiDate(dateStr);
+  if (date.getUTCFullYear() < 2000 || Number.isNaN(date.getTime())) return 'Date unavailable';
+  return `${formatUaeDateTime(dateStr)} UAE`;
 }
 
 /** Format date for past orders (short format) */
 function formatDateShort(dateStr: string | null | undefined): string {
   if (!dateStr) return 'Date unavailable';
-  try {
-    const date = new Date(dateStr);
-    if (date.getFullYear() < 2000 || isNaN(date.getTime())) {
-      return 'Date unavailable';
-    }
-    return date.toLocaleDateString();
-  } catch {
-    return 'Date unavailable';
-  }
+  const date = parseApiDate(dateStr);
+  if (date.getUTCFullYear() < 2000 || Number.isNaN(date.getTime())) return 'Date unavailable';
+  return formatUaeDate(dateStr);
 }
 
 /** Calculate elapsed minutes since order was placed */
 function getElapsedMinutes(createdAt: string | null | undefined): number {
   if (!createdAt) return 0;
   try {
-    const date = new Date(createdAt);
+    const date = parseApiDate(createdAt);
     if (date.getFullYear() < 2000 || isNaN(date.getTime())) return 0;
     return Math.floor((Date.now() - date.getTime()) / 60000);
   } catch {
@@ -89,8 +77,8 @@ function getElapsedMinutes(createdAt: string | null | undefined): number {
   }
 }
 
-function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery, deliveryStatus, deliveryEtaSeconds, deliveryEtaCalculatedAt }: { status: string; estimatedTime: string; referenceTime?: string; isDelivery: boolean; deliveryStatus: string | null; deliveryEtaSeconds?: number | null; deliveryEtaCalculatedAt?: string | null }) {
-  const { t } = useTranslation();
+function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery, deliveryStatus, deliveryEtaSeconds, deliveryEtaCalculatedAt, deliveryDistanceKm, riderLocationIsFresh }: { status: string; estimatedTime: string; referenceTime?: string; isDelivery: boolean; deliveryStatus: string | null; deliveryEtaSeconds?: number | null; deliveryEtaCalculatedAt?: string | null; deliveryDistanceKm?: number | null; riderLocationIsFresh?: boolean }) {
+  const { t, language } = useTranslation();
   const steps = isDelivery ? DELIVERY_STEPS : PICKUP_STEPS;
   const currentStep = isDelivery
     ? getDeliveryStepIndex(status, deliveryStatus)
@@ -108,10 +96,23 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
     <div className="py-4">
       {/* Live countdown. Zero does not mean ready until Kitchen marks it Ready. */}
       {deliveryTravelStage ? (
-        deliveryEtaSeconds ? (
+        deliveryStatus === 'assigned' ? (
+          <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
+            <Bike className="w-5 h-5 text-blue-400 shrink-0" />
+            <div>
+              <p className="text-blue-300 font-bold text-sm">
+                {language === 'ar' ? 'تم اختيار السائق' : 'Rider selected'}
+              </p>
+              <p className="text-blue-300/60 text-xs">
+                {language === 'ar' ? 'بانتظار قبول السائق للطلب' : 'Waiting for the rider to accept the delivery'}
+              </p>
+            </div>
+          </div>
+        ) : deliveryEtaSeconds ? (
           <LiveDeliveryEta
             seconds={deliveryEtaSeconds}
             calculatedAt={deliveryEtaCalculatedAt}
+            nearby={riderLocationIsFresh === true && deliveryDistanceKm != null && Number(deliveryDistanceKm) <= 0.5 && ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''))}
           />
         ) : (
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
@@ -213,8 +214,8 @@ function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderP
   );
 }
 
-function LiveDeliveryEta({ seconds, calculatedAt }: { seconds?: number | null; calculatedAt?: string | null }) {
-  const { t } = useTranslation();
+function LiveDeliveryEta({ seconds, calculatedAt, nearby }: { seconds?: number | null; calculatedAt?: string | null; nearby?: boolean }) {
+  const { t, language } = useTranslation();
   const [now, setNow] = useState(Date.now());
   const baseMs = calculatedAt ? new Date(calculatedAt).getTime() : Date.now();
   const deadlineMs = baseMs + Math.max(0, Number(seconds || 0)) * 1000;
@@ -229,17 +230,21 @@ function LiveDeliveryEta({ seconds, calculatedAt }: { seconds?: number | null; c
   const remaining = Math.max(0, Math.floor((deadlineMs - now) / 1000));
   const minutes = Math.floor(remaining / 60);
   const secs = remaining % 60;
+  const nearbyLabel = language === 'ar' ? 'السائق قريب منك' : 'Rider nearby';
+  const liveLabel = language === 'ar' ? 'يتم تحديث الوقت من موقع السائق المباشر' : 'Updates from the rider’s live location';
 
   return (
     <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
       <Navigation className="w-5 h-5 text-blue-400 shrink-0" />
       <div>
         <p className="text-blue-300 font-bold text-sm">
-          {remaining > 0
-            ? `${t('orders.rider_arriving_in')} ${minutes}:${String(secs).padStart(2, '0')}`
-            : t('orders.rider_arriving_soon')}
+          {nearby
+            ? `${nearbyLabel} · ${minutes}:${String(secs).padStart(2, '0')}`
+            : remaining > 0
+              ? `${t('orders.rider_arriving_in')} ${minutes}:${String(secs).padStart(2, '0')}`
+              : t('orders.rider_arriving_soon')}
         </p>
-        <p className="text-blue-300/60 text-xs">{t('orders.eta_live_location')}</p>
+        <p className="text-blue-300/60 text-xs">{liveLabel}</p>
       </div>
     </div>
   );
@@ -350,11 +355,17 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
 
 function getCancellationInfo(order: OrderWithDelivery): { by: string; reason: string } | null {
   const notes = String(order.order_notes || '');
-  const match = notes.match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  const match = notes.match(/Cancelled by\s+(customer|admin|kitchen|rider(?:\s+[^:|]+)?)\s*:\s*([^|]+)/i);
   if (!match) return null;
   const actor = match[1].toLowerCase();
   return {
-    by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen',
+    by: actor.startsWith('rider ')
+      ? `Rider ${match[1].trim().slice(6)}`
+      : actor === 'customer'
+        ? 'Customer'
+        : actor === 'admin'
+          ? 'Admin'
+          : 'Kitchen',
     reason: match[2].trim(),
   };
 }
@@ -445,7 +456,19 @@ interface OrderWithDelivery extends Order {
   rider_lng?: number | null;
   delivery_eta_seconds?: number | null;
   delivery_eta_calculated_at?: string | null;
+  delivery_distance_km?: number | null;
+  rider_location_is_fresh?: boolean;
 }
+
+type ReorderDraftItem = {
+  key: string;
+  sourceName: string;
+  menuItem: MenuItem | null;
+  size: string;
+  extras: Extra[];
+  quantity: number;
+  unavailableReason?: string;
+};
 
 export default function MyOrders() {
   const navigate = useNavigate();
@@ -455,6 +478,9 @@ export default function MyOrders() {
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
+  const [reorderOrder, setReorderOrder] = useState<OrderWithDelivery | null>(null);
+  const [reorderItems, setReorderItems] = useState<ReorderDraftItem[]>([]);
+  const [reorderLoading, setReorderLoading] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState<
     'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
   >('checking');
@@ -583,6 +609,8 @@ export default function MyOrders() {
               rider_lng: eta.rider_lng ?? order.rider_lng,
               delivery_eta_seconds: Number(eta.eta_seconds || 0) || null,
               delivery_eta_calculated_at: eta.calculated_at || null,
+              delivery_distance_km: Number(eta.customer_distance_km ?? eta.distance_km) || null,
+              rider_location_is_fresh: eta.rider_location_is_fresh === true,
             };
           } catch {
             return order;
@@ -639,46 +667,119 @@ export default function MyOrders() {
     return false;
   }
 
-  /** Order Again - adds items from a past order back to cart */
-  function handleOrderAgain(order: OrderWithDelivery) {
-    try {
-      let items: any[] = [];
-      try { items = JSON.parse(order.items_json); } catch { return; }
-      if (items.length === 0) return;
+  /** Order Again - review past items first, then choose quantities before adding to cart. */
+  async function handleOrderAgain(order: OrderWithDelivery) {
+    setReorderOrder(order);
+    setReorderItems([]);
+    setReorderLoading(true);
 
-      const cart = getCart();
-      for (const item of items) {
-        const unitPrice = item.price / (item.quantity || 1);
-        const newCartItem: CartItem = {
-          id: `reorder-${order.id}-${item.name}-${item.size}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          menuItem: {
-            id: 0,
-            category_id: 0,
-            name: item.name,
-            description: '',
-            price: unitPrice,
-            image_url: '',
-            is_active: true,
-            has_extras: false,
-            sort_order: 0,
-          } as any,
-          size: item.size || 'Regular',
-          extras: (item.extras || []).map((eName: string, idx: number) => ({
-            id: idx,
-            name: eName,
-            price: 0,
-          })),
-          quantity: item.quantity || 1,
-          totalPrice: item.price,
-        };
-        cart.push(newCartItem);
+    try {
+      let sourceItems: any[] = [];
+      try {
+        sourceItems = JSON.parse(order.items_json);
+      } catch {
+        sourceItems = [];
       }
-      saveCart(cart);
-      window.dispatchEvent(new Event('cart-updated'));
-      navigate('/cart');
-    } catch (e) {
-      console.error('Failed to reorder:', e);
+
+      if (!Array.isArray(sourceItems) || sourceItems.length === 0) {
+        setReorderItems([]);
+        return;
+      }
+
+      const menuResponse = await client.entities.menu_items.query({
+        query: { is_active: true },
+        sort: 'sort_order',
+        limit: 500,
+      });
+      const menuItems = (menuResponse?.data?.items || []) as MenuItem[];
+
+      const drafts: ReorderDraftItem[] = sourceItems.map((source, index) => {
+        const sourceName = String(source?.name || 'Item').trim();
+        const sourceId = Number(source?.menu_item_id || source?.menuItem?.id || 0);
+        const isDeal = source?.is_deal === true || source?.deal_id;
+
+        if (isDeal) {
+          return {
+            key: `${order.id}-${index}`,
+            sourceName,
+            menuItem: null,
+            size: String(source?.size || 'Deal'),
+            extras: [],
+            quantity: 0,
+            unavailableReason: language === 'ar' ? 'أعد اختيار العرض من صفحة العروض' : 'Please rebuild this deal from the Deals page',
+          };
+        }
+
+        const menuItem = menuItems.find((item) => Number(item.id) === sourceId)
+          || menuItems.find((item) => String(item.name || '').trim().toLowerCase() === sourceName.toLowerCase())
+          || null;
+
+        if (!menuItem) {
+          return {
+            key: `${order.id}-${index}`,
+            sourceName,
+            menuItem: null,
+            size: String(source?.size || ''),
+            extras: [],
+            quantity: 0,
+            unavailableReason: language === 'ar' ? 'هذا الصنف غير متوفر الآن' : 'This item is not available now',
+          };
+        }
+
+        const sizes = getItemSizes(menuItem);
+        const requestedSize = String(source?.size || '').trim();
+        const selectedSize = sizes.find((size) => size.name.toLowerCase() === requestedSize.toLowerCase())?.name
+          || sizes[0]?.name
+          || requestedSize
+          || 'Regular';
+
+        const availableExtras = getItemExtras(menuItem, []);
+        const oldExtraNames = Array.isArray(source?.extras)
+          ? source.extras.map((extra: any) => typeof extra === 'string' ? extra : String(extra?.name || '')).filter(Boolean)
+          : [];
+        const selectedExtras = availableExtras.filter((extra) =>
+          oldExtraNames.some((name: string) => name.trim().toLowerCase() === String(extra.name || '').trim().toLowerCase()),
+        );
+
+        return {
+          key: `${order.id}-${index}`,
+          sourceName,
+          menuItem,
+          size: selectedSize,
+          extras: selectedExtras,
+          quantity: Math.max(1, Number(source?.quantity || 1)),
+        };
+      });
+
+      setReorderItems(drafts);
+    } catch (error) {
+      console.error('Failed to prepare reorder:', error);
+      setReorderItems([]);
+    } finally {
+      setReorderLoading(false);
     }
+  }
+
+  function updateReorderQuantity(key: string, delta: number) {
+    setReorderItems((items) => items.map((item) =>
+      item.key === key
+        ? { ...item, quantity: Math.max(0, Math.min(99, item.quantity + delta)) }
+        : item,
+    ));
+  }
+
+  function confirmOrderAgain() {
+    const selected = reorderItems.filter((item) => item.menuItem && item.quantity > 0);
+    if (selected.length === 0) return;
+
+    for (const item of selected) {
+      addToCart(item.menuItem!, item.size, item.extras, item.quantity);
+    }
+
+    window.dispatchEvent(new Event('cart-updated'));
+    setReorderOrder(null);
+    setReorderItems([]);
+    navigate('/cart');
   }
 
   if (loading) {
@@ -859,6 +960,8 @@ export default function MyOrders() {
                           deliveryStatus={order.delivery_status || null}
                           deliveryEtaSeconds={order.delivery_eta_seconds}
                           deliveryEtaCalculatedAt={order.delivery_eta_calculated_at}
+                          deliveryDistanceKm={order.delivery_distance_km}
+                          riderLocationIsFresh={order.rider_location_is_fresh}
                         />
 
                         {/* Items */}
@@ -974,6 +1077,89 @@ export default function MyOrders() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Order Again review: customer chooses which old items/quantities to add. */}
+        {reorderOrder && (
+          <div className="fixed inset-0 z-[100] bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="w-full sm:max-w-lg max-h-[88vh] overflow-y-auto bg-gray-950 border border-gray-800 rounded-t-3xl sm:rounded-3xl p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-white text-xl font-bold">
+                    {language === 'ar' ? `إعادة الطلب #${reorderOrder.id}` : `Order Again #${reorderOrder.id}`}
+                  </h3>
+                  <p className="text-gray-500 text-sm">
+                    {language === 'ar' ? 'اختر الأصناف والكمية قبل إضافتها إلى السلة' : 'Choose the items and quantity before adding to cart'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setReorderOrder(null); setReorderItems([]); }}
+                  className="w-10 h-10 rounded-full bg-gray-900 text-gray-400 flex items-center justify-center"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {reorderLoading ? (
+                <div className="py-10 text-center text-gray-400">
+                  {language === 'ar' ? 'جارٍ تحميل الأصناف...' : 'Loading current menu items...'}
+                </div>
+              ) : reorderItems.length === 0 ? (
+                <div className="py-10 text-center text-gray-500">
+                  {language === 'ar' ? 'لا توجد أصناف متاحة لإعادة الطلب' : 'No items available to reorder'}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {reorderItems.map((item) => (
+                    <div key={item.key} className={`rounded-2xl border p-4 ${item.menuItem ? 'border-gray-800 bg-gray-900' : 'border-red-900/50 bg-red-950/20'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-white font-semibold truncate">{item.sourceName}</p>
+                          {item.size && <p className="text-gray-500 text-xs mt-1">{item.size}</p>}
+                          {item.extras.length > 0 && (
+                            <p className="text-gray-500 text-xs mt-1">
+                              {language === 'ar' ? 'إضافات' : 'Extras'}: {item.extras.map((extra) => extra.name).join(', ')}
+                            </p>
+                          )}
+                          {item.unavailableReason && <p className="text-red-400 text-xs mt-2">{item.unavailableReason}</p>}
+                        </div>
+
+                        {item.menuItem && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => updateReorderQuantity(item.key, -1)}
+                              className="w-9 h-9 rounded-full bg-gray-800 text-white flex items-center justify-center"
+                            >
+                              <Minus className="w-4 h-4" />
+                            </button>
+                            <span className="w-7 text-center text-white font-bold">{item.quantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateReorderQuantity(item.key, 1)}
+                              className="w-9 h-9 rounded-full bg-green-600 text-white flex items-center justify-center"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Button
+                onClick={confirmOrderAgain}
+                disabled={reorderLoading || !reorderItems.some((item) => item.menuItem && item.quantity > 0)}
+                className="w-full mt-5 h-12 bg-green-600 hover:bg-green-700 text-white disabled:opacity-40"
+              >
+                <ShoppingCart className="w-4 h-4 mr-2" />
+                {language === 'ar' ? 'إضافة المحدد إلى السلة' : 'Add Selected to Cart'}
+              </Button>
+            </div>
           </div>
         )}
 

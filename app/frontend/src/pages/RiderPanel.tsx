@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { getAPIBaseURL } from '@/lib/config';
+import { formatUaeDateTime, formatUaeTime } from '@/lib/uae-time';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -201,6 +202,9 @@ export default function RiderPanel() {
   const [rejectDelivery, setRejectDelivery] = useState<Delivery | null>(null);
   const [rejectPreset, setRejectPreset] = useState('');
   const [rejectOtherReason, setRejectOtherReason] = useState('');
+  const [cancelDelivery, setCancelDelivery] = useState<Delivery | null>(null);
+  const [cancelPreset, setCancelPreset] = useState('');
+  const [cancelOtherReason, setCancelOtherReason] = useState('');
 
   useEffect(() => {
     const savedRider = localStorage.getItem('rider_auth');
@@ -668,15 +672,7 @@ export default function RiderPanel() {
   }
 
   function formatDateTime(value: string | null) {
-    if (!value) return '-';
-    try {
-      return new Date(value).toLocaleString('en-AE', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      });
-    } catch {
-      return value;
-    }
+    return formatUaeDateTime(value);
   }
 
   async function updateStatus(assignmentId: number, newStatus: string, reason?: string) {
@@ -692,7 +688,7 @@ export default function RiderPanel() {
         method: 'PUT',
         data: { status: newStatus, reason: reason || undefined },
       });
-      toast.success(newStatus === 'rejected' ? `Delivery rejected — ${reason}` : `Status updated to ${newStatus.replace(/_/g, ' ')}`);
+      toast.success(newStatus === 'rejected' ? `Delivery rejected — ${reason}` : newStatus === 'cancelled' ? `Order cancelled — ${reason}` : `Status updated to ${newStatus.replace(/_/g, ' ')}`);
       if (rider) {
         await Promise.all([
           loadDeliveries(rider.id),
@@ -788,7 +784,10 @@ export default function RiderPanel() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
           <div className="w-full max-w-sm rounded-2xl border border-gray-700 bg-gray-900 p-5">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-white">Reject Order #{rejectDelivery.order_id}</h3>
+              <div>
+                <h3 className="text-lg font-bold text-white">Reject Assignment #{rejectDelivery.order_id}</h3>
+                <p className="mt-1 text-xs text-gray-400">Before Accept: this only rejects your assignment. Admin sees the reason; the customer order is not cancelled.</p>
+              </div>
               <button type="button" onClick={() => { ringSuppressedRef.current.delete(rejectDelivery.id); setRejectDelivery(null); setDeliveries(current => [...current]); }} className="text-gray-400 hover:text-white">✕</button>
             </div>
             <p className="mb-3 text-sm text-gray-400">Select why you cannot take this delivery. A reason is required.</p>
@@ -813,6 +812,35 @@ export default function RiderPanel() {
           </div>
         </div>
       )}
+      {cancelDelivery && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-red-800/50 bg-gray-900 p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">Cancel Order #{cancelDelivery.order_id}</h3>
+              <button type="button" onClick={() => { setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason(''); }} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <p className="mb-3 text-sm text-gray-400">This cancels the customer order, not just your assignment. A reason is required.</p>
+            <div className="grid grid-cols-1 gap-2">
+              {['Customer requested cancellation', 'Customer unreachable', 'Wrong / unreachable address', 'Unable to complete delivery', 'Other'].map(reason => (
+                <button key={reason} type="button" onClick={() => { setCancelPreset(reason); if (reason !== 'Other') setCancelOtherReason(''); }} className={`rounded-xl border px-3 py-2.5 text-left text-sm ${cancelPreset === reason ? 'border-red-500 bg-red-600/15 text-red-300' : 'border-gray-700 bg-gray-800 text-gray-300'}`}>{reason}</button>
+              ))}
+            </div>
+            {cancelPreset === 'Other' && (
+              <textarea value={cancelOtherReason} onChange={e => setCancelOtherReason(e.target.value)} maxLength={300} placeholder="Write cancellation reason..." className="mt-3 w-full rounded-xl border border-gray-700 bg-gray-800 p-3 text-sm text-white" rows={2} />
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => { setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason(''); }} className="border-gray-700 text-gray-300">Back</Button>
+              <Button disabled={!cancelPreset || (cancelPreset === 'Other' && !cancelOtherReason.trim())} onClick={() => {
+                const target = cancelDelivery;
+                const reason = cancelPreset === 'Other' ? cancelOtherReason.trim() : cancelPreset;
+                if (!reason) return;
+                setCancelDelivery(null); setCancelPreset(''); setCancelOtherReason('');
+                void updateStatus(target.id, 'cancelled', reason);
+              }} className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="w-full max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
@@ -822,7 +850,7 @@ export default function RiderPanel() {
             </div>
             <div>
               <h1 className="text-white font-bold">{rider.name}</h1>
-              <p className="text-gray-500 text-xs">Auto-refresh • {lastRefresh.toLocaleTimeString()}</p>
+              <p className="text-gray-500 text-xs">Auto-refresh • {formatUaeTime(lastRefresh)} UAE</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -1124,8 +1152,11 @@ export default function RiderPanel() {
                       const nextStatus = getNextStatus(delivery.status);
                       return (
                         <Card key={delivery.id} className="bg-gray-900 border-gray-800 p-4">
-                          <div className="flex items-center justify-between mb-3">
-                            <span className="text-white font-semibold">Order #{delivery.order_id}</span>
+                          <div className="flex items-start justify-between gap-3 mb-3">
+                            <div>
+                              <span className="text-white font-semibold">Order #{delivery.order_id}</span>
+                              <p className="mt-0.5 text-[11px] text-gray-500">Assigned: {formatUaeDateTime(delivery.created_at)} UAE</p>
+                            </div>
                             <Badge className={`${getStatusColor(delivery.status)} border text-xs`}>
                               {delivery.status.replace(/_/g, ' ')}
                             </Badge>
@@ -1205,6 +1236,16 @@ export default function RiderPanel() {
                               </Button>
                             ) : null}
                           </div>
+                          {['accepted', 'picked_up', 'on_the_way'].includes(String(delivery.status || '').toLowerCase()) && (
+                            <Button
+                              onClick={() => { setCancelPreset(''); setCancelOtherReason(''); setCancelDelivery(delivery); }}
+                              variant="outline"
+                              className="mt-2 w-full border-red-700/50 text-red-400 hover:bg-red-950/40 hover:text-red-300 cursor-pointer"
+                              size="sm"
+                            >
+                              Cancel Order
+                            </Button>
+                          )}
                         </Card>
                       );
                     })}

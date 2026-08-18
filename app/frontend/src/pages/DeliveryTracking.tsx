@@ -33,6 +33,8 @@ interface ETAData {
   eta_seconds?: number | null;
   calculated_at?: string | null;
   distance_km?: number | null;
+  customer_distance_km?: number | null;
+  distance_to_shop_km?: number | null;
   rider_name: string | null;
   rider_phone: string | null;
   rider_lat: number | null;
@@ -41,6 +43,8 @@ interface ETAData {
   rider_location_is_fresh?: boolean;
   rider_location_age_seconds?: number | null;
   rider_location_updated_at?: string | null;
+  cancelled_by?: string | null;
+  cancellation_reason?: string | null;
 }
 
 const COPY = {
@@ -55,10 +59,14 @@ const COPY = {
     preparingText: 'A rider will be assigned shortly. Check back soon!',
     deliveredTitle: 'Order Delivered!',
     deliveredText: 'Enjoy your order 🥤',
+    cancelledTitle: 'Order Cancelled',
+    cancelledBy: 'Cancelled by',
+    cancellationReason: 'Reason',
     estimatedArrival: 'Estimated Arrival',
     arrivingSoon: 'Arriving soon',
     etaUpdating: 'ETA updating',
     liveRiderEta: 'Live rider ETA',
+    nearby: 'Rider nearby',
     waitingGps: 'Waiting for fresh rider GPS',
     whatsapp: 'Tap to WhatsApp rider',
     gpsWaiting:
@@ -85,10 +93,14 @@ const COPY = {
     preparingText: 'سيتم تعيين سائق لطلبك قريباً. يرجى التحقق بعد قليل.',
     deliveredTitle: 'تم توصيل الطلب!',
     deliveredText: 'نتمنى لك تجربة ممتعة 🥤',
+    cancelledTitle: 'تم إلغاء الطلب',
+    cancelledBy: 'تم الإلغاء بواسطة',
+    cancellationReason: 'السبب',
     estimatedArrival: 'الوقت المتوقع للوصول',
     arrivingSoon: 'سيصل قريباً',
     etaUpdating: 'جارٍ تحديث وقت الوصول',
     liveRiderEta: 'وقت الوصول المباشر للسائق',
+    nearby: 'السائق قريب منك',
     waitingGps: 'بانتظار موقع GPS الجديد للسائق',
     whatsapp: 'اضغط للتواصل مع السائق عبر واتساب',
     gpsWaiting:
@@ -326,7 +338,12 @@ export default function DeliveryTracking() {
   const hasLiveCoords =
     eta?.rider_lat != null &&
     eta?.rider_lng != null &&
-    eta?.rider_location_is_fresh !== false;
+    eta?.rider_location_is_fresh === true;
+  const isRiderNearby =
+    eta?.rider_location_is_fresh === true &&
+    eta?.customer_distance_km != null &&
+    Number(eta.customer_distance_km) <= 0.5 &&
+    ['picked_up', 'on_the_way'].includes(String(eta.status || ''));
 
   return (
     <div dir={dir} className="min-h-screen bg-gray-950 px-4 py-6">
@@ -360,6 +377,19 @@ export default function DeliveryTracking() {
           </Card>
         )}
 
+        {eta?.status === 'cancelled' && (
+          <Card className="bg-red-600/10 border-red-600/30 p-6 text-center">
+            <div className="text-red-400 text-4xl mb-3">✕</div>
+            <h2 className="text-red-400 font-semibold text-lg mb-2">{c.cancelledTitle}</h2>
+            {eta.cancelled_by && (
+              <p className="text-red-300 text-sm">{c.cancelledBy}: {eta.cancelled_by}</p>
+            )}
+            {eta.cancellation_reason && (
+              <p className="text-gray-300 text-sm mt-1">{c.cancellationReason}: {eta.cancellation_reason}</p>
+            )}
+          </Card>
+        )}
+
         {eta?.status === 'delivered' && (
           <Card className="bg-green-600/10 border-green-600/30 p-6 text-center">
             <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-3" />
@@ -370,7 +400,7 @@ export default function DeliveryTracking() {
           </Card>
         )}
 
-        {eta && eta.status !== 'no_rider' && eta.status !== 'delivered' && (
+        {eta && eta.status !== 'no_rider' && eta.status !== 'delivered' && eta.status !== 'cancelled' && (
           <>
             <Card className="bg-gray-900 border-gray-800 p-5 mb-4">
               <div className="flex items-center justify-between gap-4">
@@ -381,9 +411,11 @@ export default function DeliveryTracking() {
 
                   <p className="text-white text-3xl font-bold mt-1">
                     {etaDurationMs > 0
-                      ? remainingEtaSeconds > 0
-                        ? etaClock
-                        : c.arrivingSoon
+                      ? isRiderNearby
+                        ? `${c.nearby} · ${etaClock}`
+                        : remainingEtaSeconds > 0
+                          ? etaClock
+                          : c.arrivingSoon
                       : c.etaUpdating}
                   </p>
 
