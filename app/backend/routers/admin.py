@@ -233,6 +233,14 @@ async def update_kitchen_order_status(
                 ),
             )
 
+        if new_status == "cancelled":
+            reason = ' '.join(str(data.cancel_reason or '').split()).strip()
+            if len(reason) < 2:
+                raise HTTPException(status_code=400, detail="Cancellation reason is required.")
+            if len(reason) > 300:
+                raise HTTPException(status_code=400, detail="Cancellation reason is too long.")
+            data.cancel_reason = reason
+
         order.status = new_status
 
         if data.estimated_minutes is not None:
@@ -384,6 +392,14 @@ async def update_order_status(
                 detail=f"Cannot transition from '{current_status}' to '{new_status}'. Allowed: {', '.join(allowed_next) if allowed_next else 'none'}"
             )
 
+        if new_status == "cancelled":
+            reason = ' '.join(str(data.cancel_reason or '').split()).strip()
+            if len(reason) < 2:
+                raise HTTPException(status_code=400, detail="Cancellation reason is required.")
+            if len(reason) > 300:
+                raise HTTPException(status_code=400, detail="Cancellation reason is too long.")
+            data.cancel_reason = reason
+
         order.status = new_status
         if data.estimated_minutes is not None:
             safe_minutes = max(1, min(240, int(data.estimated_minutes)))
@@ -394,10 +410,12 @@ async def update_order_status(
             existing_notes = order.order_notes or ''
             order.order_notes = f"{existing_notes} | Cancelled by admin: {data.cancel_reason}"
         await db.commit()
+        await db.refresh(order)
 
         if new_status == "ready":
-            await db.refresh(order)
             await notify_customer_order_ready_safely(db, order)
+        elif new_status == "cancelled":
+            await notify_customer_order_update_safely(db, order, "cancelled")
 
         return {"success": True, "status": new_status, "estimated_minutes": data.estimated_minutes}
     except HTTPException:
