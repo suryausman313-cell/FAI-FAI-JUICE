@@ -176,7 +176,7 @@ async def update_kitchen_order_status(
 
     transitions = {
         "new": {"accepted", "preparing", "cancelled"},
-        "accepted": {"preparing", "ready", "cancelled"},
+        "accepted": {"preparing", "cancelled"},
         "preparing": {"ready", "cancelled"},
         "ready": {"completed", "cancelled"},
         "out_for_delivery": {"cancelled"},

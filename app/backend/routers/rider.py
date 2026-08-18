@@ -14,7 +14,6 @@ from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
 from services.rider_auth import create_rider_token, require_rider_id
-from services.customer_push_service import notify_customer_order_update_safely
 from routers.customer_auth import decode_customer_token, get_bearer_token as get_customer_bearer_token, normalize_phone
 from services.rider_assignment import (
     auto_assign_order,
@@ -67,7 +66,7 @@ class RiderLoginRequest(BaseModel):
 
 
 class DeliveryStatusUpdate(BaseModel):
-    status: str  # accepted, rejected, picked_up, on_the_way, delivered, cancelled
+    status: str  # accepted, rejected, picked_up, on_the_way, delivered
     reason: Optional[str] = None
 
 
@@ -250,7 +249,6 @@ async def update_delivery_status(
         "picked_up",
         "on_the_way",
         "delivered",
-        "cancelled",
     ]
 
     if new_status not in valid_statuses:
@@ -278,9 +276,9 @@ async def update_delivery_status(
 
         transitions = {
             "assigned": {"accepted", "rejected"},
-            "accepted": {"picked_up", "rejected", "cancelled"},
-            "picked_up": {"on_the_way", "delivered", "cancelled"},
-            "on_the_way": {"delivered", "cancelled"},
+            "accepted": {"picked_up"},
+            "picked_up": {"on_the_way", "delivered"},
+            "on_the_way": {"delivered"},
             "rejected": set(),
             "delivered": set(),
         }
@@ -347,29 +345,12 @@ async def update_delivery_status(
             separator = " | " if existing_notes else ""
             order.order_notes = f"{existing_notes}{separator}Rider {rider_name} rejected: {reason}"
 
-        if new_status == "cancelled":
-            reason = ' '.join(str(data.reason or '').split()).strip()
-            if len(reason) < 2:
-                raise HTTPException(status_code=400, detail="Please select or enter a cancellation reason.")
-            if len(reason) > 300:
-                raise HTTPException(status_code=400, detail="Cancellation reason is too long.")
-            rider_row = (await db.execute(select(Riders).where(Riders.id == logged_rider_id))).scalar_one_or_none()
-            rider_name = rider_row.name if rider_row else f"Rider {logged_rider_id}"
-            existing_notes = order.order_notes or ""
-            separator = " | " if existing_notes else ""
-            order.order_notes = f"{existing_notes}{separator}Cancelled by rider {rider_name}: {reason}"
-
-        # A rider cancellation ends the assignment and the actual customer order.
-        # Internally mark the assignment rejected so existing active-delivery queries
-        # keep excluding it without changing the delivery-assignment schema.
-        assignment.status = "rejected" if new_status == "cancelled" else new_status
+        assignment.status = new_status
 
         if new_status in ("assigned", "accepted", "rejected"):
             # Accept/Reject only changes the assignment. The kitchen order keeps
             # its current status; a rejected Ready order can be assigned again.
             pass
-        elif new_status == "cancelled":
-            order.status = "cancelled"
         elif new_status in ("picked_up", "on_the_way"):
             # Kitchen work is finished, but the sale is not final yet.
             order.status = "out_for_delivery"
@@ -380,9 +361,6 @@ async def update_delivery_status(
         await db.commit()
         await db.refresh(assignment)
         await db.refresh(order)
-
-        if new_status == "cancelled":
-            await notify_customer_order_update_safely(db, order, "cancelled")
 
         auto_reassigned = None
         if new_status == "rejected":
@@ -398,7 +376,7 @@ async def update_delivery_status(
 
         return {
             "success": True,
-            "status": "cancelled" if new_status == "cancelled" else assignment.status,
+            "status": assignment.status,
             "order_status": order.status,
             "order_id": order.id,
             "auto_reassigned": auto_reassigned,
@@ -1311,13 +1289,11 @@ async def get_delivery_eta(
         )
         rider = rider_result.scalar_one_or_none()
 
-        # Live ETA uses only a fresh rider GPS fix. Before pickup, the rider-to-shop
-        # leg and Kitchen preparation happen in parallel; after pickup, only the
-        # rider-to-customer leg remains. This avoids showing a stale 89/90 minute ETA.
+        # Customer live ETA starts only after Rider Picked Up. Before pickup,
+        # Kitchen preparation/Ready remains the source of truth for the customer.
         import math
 
         normalized_status = str(assignment.status or "assigned").lower()
-        order_status = str(getattr(order, "status", "") or "").lower()
         live = rider_live_status(rider) if rider else {
             "is_online": False,
             "gps_fresh": False,
@@ -1330,10 +1306,7 @@ async def get_delivery_eta(
         rider_lng = live.get("lng")
         customer_lat = assignment.customer_lat
         customer_lng = assignment.customer_lng
-        shop_lat, shop_lng = await get_restaurant_location(db)
-
         customer_distance_km = None
-        distance_to_shop_km = None
         route_distance_km = None
         eta_seconds = None
 
@@ -1345,8 +1318,14 @@ async def get_delivery_eta(
             moving = int((road_km / 32.0) * 3600)
             return max(60, moving + stop_buffer)
 
+        tracking_active = normalized_status in {"picked_up", "on_the_way"}
+
+        # Customer privacy + clearer UX: live rider coordinates and ETA are exposed
+        # only after the rider has actually picked up the order from the Kitchen.
+        # Before pickup the customer continues to see Kitchen preparation / Ready.
         if (
-            live.get("gps_fresh")
+            tracking_active
+            and live.get("gps_fresh")
             and live.get("is_online")
             and rider_lat is not None
             and rider_lng is not None
@@ -1359,67 +1338,13 @@ async def get_delivery_eta(
                 float(customer_lat),
                 float(customer_lng),
             )
-
-            # Once the rider has the order, live ETA is rider -> customer.
-            if normalized_status in {"picked_up", "on_the_way"}:
-                route_distance_km = customer_distance_km
-                eta_seconds = travel_seconds(route_distance_km, stop_buffer=30)
-            elif normalized_status == "accepted":
-                # Rider accepted but has not picked up yet: rider -> shop and
-                # shop -> customer are both included.
-                if shop_lat is not None and shop_lng is not None:
-                    distance_to_shop_km = haversine_km(
-                        float(rider_lat),
-                        float(rider_lng),
-                        float(shop_lat),
-                        float(shop_lng),
-                    )
-                    shop_to_customer_km = haversine_km(
-                        float(shop_lat),
-                        float(shop_lng),
-                        float(customer_lat),
-                        float(customer_lng),
-                    )
-                    to_shop_seconds = travel_seconds(distance_to_shop_km, stop_buffer=20) or 0
-                    delivery_seconds = travel_seconds(shop_to_customer_km, stop_buffer=45) or 0
-                    route_distance_km = distance_to_shop_km + shop_to_customer_km
-
-                    remaining_prep_seconds = 0
-                    if order_status not in ("ready", "out_for_delivery", "completed"):
-                        raw_ready_time = str(getattr(order, "pickup_time", "") or "")
-                        label, separator, deadline_text = raw_ready_time.partition("|")
-                        if separator and deadline_text:
-                            try:
-                                deadline = datetime.fromisoformat(deadline_text.replace("Z", "+00:00"))
-                                if deadline.tzinfo is None:
-                                    deadline = deadline.replace(tzinfo=timezone.utc)
-                                remaining_prep_seconds = max(
-                                    0,
-                                    int((deadline - datetime.now(timezone.utc)).total_seconds()),
-                                )
-                            except (TypeError, ValueError):
-                                remaining_prep_seconds = 0
-                        elif label:
-                            import re
-                            match = re.search(r"(\d+)", label)
-                            if match and getattr(order, "accepted_at", None):
-                                deadline = order.accepted_at
-                                if deadline.tzinfo is None:
-                                    deadline = deadline.replace(tzinfo=timezone.utc)
-                                deadline += timedelta(minutes=int(match.group(1)))
-                                remaining_prep_seconds = max(
-                                    0,
-                                    int((deadline - datetime.now(timezone.utc)).total_seconds()),
-                                )
-
-                    eta_seconds = max(to_shop_seconds, remaining_prep_seconds) + 60 + delivery_seconds
+            route_distance_km = customer_distance_km
+            eta_seconds = travel_seconds(route_distance_km, stop_buffer=30)
 
         if normalized_status == "delivered":
             eta_seconds = 0
 
-        # A rider who has only been selected by Admin has not accepted the job yet,
-        # so do not present a misleading travel ETA to the customer.
-        if normalized_status == "assigned":
+        if not tracking_active and normalized_status != "delivered":
             eta_seconds = None
 
         eta_minutes = (
@@ -1436,15 +1361,15 @@ async def get_delivery_eta(
             "calculated_at": calculated_at,
             "distance_km": round(route_distance_km, 2) if route_distance_km is not None else None,
             "customer_distance_km": round(customer_distance_km, 2) if customer_distance_km is not None else None,
-            "distance_to_shop_km": round(distance_to_shop_km, 2) if distance_to_shop_km is not None else None,
-            "gps_available": bool(live.get("gps_fresh") and live.get("is_online")),
+            "distance_to_shop_km": None,
+            "gps_available": bool(tracking_active and live.get("gps_fresh") and live.get("is_online")),
             "rider_is_online": bool(live.get("is_online")),
-            "rider_location_is_fresh": bool(live.get("gps_fresh") and live.get("is_online")),
+            "rider_location_is_fresh": bool(tracking_active and live.get("gps_fresh") and live.get("is_online")),
             "rider_location_age_seconds": live.get("location_age_seconds"),
             "rider_name": rider.name if rider else None,
             "rider_phone": rider.phone if rider else None,
-            "rider_lat": rider_lat if live.get("gps_fresh") and live.get("is_online") else None,
-            "rider_lng": rider_lng if live.get("gps_fresh") and live.get("is_online") else None,
+            "rider_lat": rider_lat if tracking_active and live.get("gps_fresh") and live.get("is_online") else None,
+            "rider_lng": rider_lng if tracking_active and live.get("gps_fresh") and live.get("is_online") else None,
             "rider_location_updated_at": (
                 rider.location_updated_at.isoformat()
                 if rider and rider.location_updated_at
