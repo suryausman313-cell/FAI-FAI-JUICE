@@ -24,6 +24,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.menu': 'Menu',
     'nav.cart': 'Cart',
     'nav.orders': 'Orders',
+    'nav.account': 'Account',
     'nav.feedback': 'Feedback',
     'nav.contact': 'Contact',
     'nav.reviews': 'Reviews',
@@ -136,6 +137,12 @@ const translations: Record<Language, Record<string, string>> = {
     'checkout.login_required': 'Please login to place your order',
     'checkout.order_success': 'Order placed successfully!',
 
+    // Order confirmation
+    'confirmation.title': 'Order Confirmed!',
+    'confirmation.message': 'Your order was placed successfully. Opening live order progress…',
+    'confirmation.view_orders': 'View My Orders',
+    'confirmation.order_more': 'Order More',
+
     // Orders
     'orders.title': 'My Orders',
     'orders.no_orders': 'No orders yet',
@@ -212,6 +219,13 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.usually_within': 'Usually accepted within',
     'orders.item_singular': 'item',
     'orders.item_plural': 'items',
+    'orders.ready_in': 'Ready in {time}',
+    'orders.expected_around': 'Expected around {time}',
+    'orders.eta_waiting_gps': 'Live ETA will appear after the rider picks up your order.',
+    'orders.ready_confirmed_title': 'Order is Ready',
+    'orders.ready_confirmed_subtitle': 'Waiting for rider pickup.',
+    'orders.estimated_time_passed': 'Preparation time finished',
+    'orders.ready_waiting_update': 'Kitchen is finishing your order. Status will update automatically.',
 
     // Feedback
     'feedback.title': 'Leave Feedback',
@@ -254,6 +268,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.menu': 'القائمة',
     'nav.cart': 'السلة',
     'nav.orders': 'الطلبات',
+    'nav.account': 'الحساب',
     'nav.feedback': 'التقييم',
     'nav.contact': 'اتصل بنا',
     'nav.reviews': 'المراجعات',
@@ -366,6 +381,12 @@ const translations: Record<Language, Record<string, string>> = {
     'checkout.login_required': 'يرجى تسجيل الدخول لتقديم الطلب',
     'checkout.order_success': 'تم تقديم الطلب بنجاح!',
 
+    // Order confirmation
+    'confirmation.title': 'تم تأكيد الطلب!',
+    'confirmation.message': 'تم تقديم طلبك بنجاح. سيتم فتح متابعة الطلب الآن…',
+    'confirmation.view_orders': 'عرض طلباتي',
+    'confirmation.order_more': 'طلب المزيد',
+
     // Orders
     'orders.title': 'طلباتي',
     'orders.no_orders': 'لا توجد طلبات بعد',
@@ -442,6 +463,13 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.usually_within': 'عادةً يتم القبول خلال',
     'orders.item_singular': 'صنف',
     'orders.item_plural': 'أصناف',
+    'orders.ready_in': 'سيكون جاهزاً خلال {time}',
+    'orders.expected_around': 'متوقع حوالي {time}',
+    'orders.eta_waiting_gps': 'سيظهر وقت الوصول المباشر بعد استلام السائق للطلب.',
+    'orders.ready_confirmed_title': 'الطلب جاهز',
+    'orders.ready_confirmed_subtitle': 'بانتظار استلام السائق.',
+    'orders.estimated_time_passed': 'انتهى وقت التحضير',
+    'orders.ready_waiting_update': 'المطبخ ينهي طلبك وسيتم تحديث الحالة تلقائياً.',
 
     // Feedback
     'feedback.title': 'اترك تقييمك',
@@ -484,6 +512,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.menu': 'مینو',
     'nav.cart': 'کارٹ',
     'nav.orders': 'آرڈرز',
+    'nav.account': 'اکاؤنٹ',
     'nav.feedback': 'رائے',
     'nav.contact': 'رابطہ',
     'nav.reviews': 'جائزے',
@@ -596,6 +625,12 @@ const translations: Record<Language, Record<string, string>> = {
     'checkout.login_required': 'آرڈر دینے کے لیے لاگ اِن کریں',
     'checkout.order_success': 'آرڈر کامیابی سے دے دیا گیا!',
 
+    // Order confirmation
+    'confirmation.title': 'آرڈر کنفرم ہوگیا!',
+    'confirmation.message': 'آپ کا آرڈر کامیابی سے ہو گیا۔ اب لائیو آرڈر پراگریس کھل رہی ہے…',
+    'confirmation.view_orders': 'میرے آرڈرز دیکھیں',
+    'confirmation.order_more': 'مزید آرڈر کریں',
+
     // Orders
     'orders.title': 'میرے آرڈرز',
     'orders.no_orders': 'ابھی کوئی آرڈر نہیں',
@@ -672,6 +707,13 @@ const translations: Record<Language, Record<string, string>> = {
     'orders.usually_within': 'عام طور پر اتنے وقت میں قبول ہوتا ہے',
     'orders.item_singular': 'آئٹم',
     'orders.item_plural': 'آئٹمز',
+    'orders.ready_in': '{time} میں تیار',
+    'orders.expected_around': 'تقریباً {time} تک',
+    'orders.eta_waiting_gps': 'رائیڈر آرڈر پک اپ کرنے کے بعد لائیو وقت نظر آئے گا۔',
+    'orders.ready_confirmed_title': 'آرڈر تیار ہے',
+    'orders.ready_confirmed_subtitle': 'رائیڈر کے پک اپ کا انتظار ہے۔',
+    'orders.estimated_time_passed': 'تیاری کا وقت ختم ہوگیا',
+    'orders.ready_waiting_update': 'کچن آپ کا آرڈر مکمل کر رہا ہے، اسٹیٹس خود اپ ڈیٹ ہوگا۔',
 
     // Feedback
     'feedback.title': 'اپنی رائے دیں',
