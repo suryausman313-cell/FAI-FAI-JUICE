@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import { formatUaeDateTime, formatUaeTime, uaeAge } from '@/lib/uae-time';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -58,10 +59,13 @@ function isDeliveryOrder(order: AdminOrder): boolean {
 }
 
 function getCancelInfo(order: AdminOrder): { by: string; reason: string } | null {
-  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen|rider(?:\s+[^:|]+)?)\s*:\s*([^|]+)/i);
   if (!match) return null;
   const actor = match[1].toLowerCase();
-  return { by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen', reason: match[2].trim() };
+  return {
+    by: actor.startsWith('rider ') ? `Rider ${match[1].trim().slice(6)}` : actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen',
+    reason: match[2].trim(),
+  };
 }
 
 function getLatestRiderReject(order: AdminOrder): { rider: string; reason: string } | null {
@@ -340,7 +344,7 @@ export default function AdminOrders() {
           delivery_charge: Number((order as AdminOrder).delivery_charge || 0),
         },
       );
-      toast.success(`Order #${order.id} rider ko assign ho gaya`);
+      toast.success(`Order #${order.id} ${selected.name} ko assign ho gaya${selected.distance_to_shop_km != null ? ` • ${Number(selected.distance_to_shop_km).toFixed(2)} km from shop` : ''}`);
       setAssigningOrder(null);
       setSelectedRider('');
       await loadRiders();
@@ -592,11 +596,16 @@ export default function AdminOrders() {
       const distance = rider.distance_to_shop_km != null
         ? `${Number(rider.distance_to_shop_km).toFixed(2)} km from shop`
         : 'Shop distance unavailable';
-      const lastGps = getLocationAge(rider.location_updated_at) || 'No GPS update';
+      const lastGps = rider.location_updated_at
+        ? `${formatUaeDateTime(rider.location_updated_at)} UAE (${uaeAge(rider.location_updated_at)})`
+        : 'No GPS update';
+      const coordinates = Number.isFinite(lat) && Number.isFinite(lng)
+        ? `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+        : 'Unavailable';
       L.marker([lat, lng], { icon })
         .addTo(layer)
         .bindPopup(
-          `<strong>${rider.name}</strong><br>${rider.phone}<br>${getRiderAvailability(rider)}<br>${distance}<br>Pending: ${rider.active_deliveries ?? 0}<br>GPS: ${lastGps}`,
+          `<strong>${rider.name}</strong><br>${rider.phone}<br>${getRiderAvailability(rider)}<br>${distance}<br>Pending: ${rider.active_deliveries ?? 0}<br>GPS: ${lastGps}<br>Location: ${coordinates}`,
         );
       bounds.push([lat, lng]);
     });
@@ -609,15 +618,9 @@ export default function AdminOrders() {
     setTimeout(() => map.invalidateSize(), 0);
   }
 
-  // Get human-readable time since last location update
+  // Human-readable age uses the same UTC parsing as the UAE clock formatter.
   function getLocationAge(updatedAt: string | null | undefined): string {
-    if (!updatedAt) return '';
-    const diff = Date.now() - new Date(updatedAt).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    return `${hours}h ago`;
+    return uaeAge(updatedAt);
   }
 
   if (loading) {
@@ -638,7 +641,7 @@ export default function AdminOrders() {
           <div className="flex-1">
             <h1 className="text-white text-2xl font-bold">Order Management <span className="text-xs text-green-400">SAFE LIVE RIDER</span></h1>
             <p className="text-gray-500 text-xs mt-0.5">
-              Auto-refreshes every 15s • Last: {lastRefresh.toLocaleTimeString()}
+              Auto-refreshes every 15s • Last: {formatUaeTime(lastRefresh)} UAE
             </p>
           </div>
           <Button
@@ -778,7 +781,7 @@ export default function AdminOrders() {
                 )}
                 {getLatestRiderReject(order) && order.status !== 'cancelled' && (
                   <div className="mb-3 rounded-lg border border-orange-600/30 bg-orange-600/10 px-3 py-2">
-                    <p className="text-orange-300 text-xs font-semibold">Rider {getLatestRiderReject(order)!.rider} rejected delivery</p>
+                    <p className="text-orange-300 text-xs font-semibold">Rider {getLatestRiderReject(order)!.rider} rejected assignment before Accept</p>
                     <p className="text-gray-300 text-xs mt-1">Reason: {getLatestRiderReject(order)!.reason}</p>
                   </div>
                 )}
@@ -800,6 +803,10 @@ export default function AdminOrders() {
                           const isSelected = selectedRider === String(rider.id);
                           const eligible = rider.eligible_for_assignment === true;
                           const locationAge = getLocationAge(rider.location_updated_at);
+                          const gpsTime = rider.location_updated_at ? formatUaeTime(rider.location_updated_at) : '';
+                          const gpsCoordinates = rider.current_lat != null && rider.current_lng != null
+                            ? `${Number(rider.current_lat).toFixed(6)}, ${Number(rider.current_lng).toFixed(6)}`
+                            : '';
                           return (
                             <button
                               type="button"
@@ -839,6 +846,11 @@ export default function AdminOrders() {
                                   <MapPin className={`w-3 h-3 ${rider.gps_fresh ? 'text-green-500' : 'text-gray-600'}`} />
                                   {locationAge || 'No GPS update'}
                                 </span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+                                <span>Shop: {rider.distance_to_shop_km != null ? `${Number(rider.distance_to_shop_km).toFixed(2)} km away` : 'distance unavailable'}</span>
+                                <span>GPS time: {gpsTime ? `${gpsTime} UAE` : 'not available'}</span>
+                                {gpsCoordinates && <span>Location: {gpsCoordinates}</span>}
                               </div>
                             </button>
                           );
@@ -1018,7 +1030,7 @@ export default function AdminOrders() {
                   <div className="text-sm text-gray-500">
                     {order.payment_method}
                     <br />
-                    {new Date(order.created_at).toLocaleString()}
+                    {formatUaeDateTime(order.created_at)} UAE
                   </div>
                   <div className="flex flex-col items-end gap-0.5">
                     {order.delivery_charge > 0 && (

@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/dialog';
 import { getAPIBaseURL } from '@/lib/config';
 import type { Order } from '@/lib/api';
+import { formatUaeTime as formatUaeClockTime } from '@/lib/uae-time';
 import { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
 import KitchenMenuPanel from './KitchenMenuPanel';
 
@@ -89,6 +90,12 @@ type AssignmentInfo = {
   rider_name: string;
   rider_phone?: string;
   status: string;
+  rider_is_online?: boolean;
+  rider_location_is_fresh?: boolean;
+  rider_location_age_seconds?: number | null;
+  rider_lat?: number | null;
+  rider_lng?: number | null;
+  distance_to_shop_km?: number | null;
 };
 
 type RestaurantStatus = 'open' | 'busy' | 'closed';
@@ -108,17 +115,13 @@ const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
 const DELIVERY_PENDING_STATUSES = new Set(['out_for_delivery', 'picked_up', 'on_the_way']);
 
 function getCancelInfo(order: KitchenOrder): { by: string; reason: string } | null {
-  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen)\s*:\s*([^|]+)/i);
+  const match = String(order.order_notes || '').match(/Cancelled by\s+(customer|admin|kitchen|rider(?:\s+[^:|]+)?)\s*:\s*([^|]+)/i);
   if (!match) return null;
   const actor = match[1].toLowerCase();
-  return { by: actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen', reason: match[2].trim() };
-}
-
-function getLatestRiderReject(order: KitchenOrder): { rider: string; reason: string } | null {
-  const matches = Array.from(String(order.order_notes || '').matchAll(/Rider\s+([^|:]+?)\s+rejected\s*:\s*([^|]+)/gi));
-  if (!matches.length) return null;
-  const match = matches[matches.length - 1];
-  return { rider: match[1].trim(), reason: match[2].trim() };
+  return {
+    by: actor.startsWith('rider ') ? `Rider ${match[1].trim().slice(6)}` : actor === 'customer' ? 'Customer' : actor === 'admin' ? 'Admin' : 'Kitchen',
+    reason: match[2].trim(),
+  };
 }
 
 function money(value: unknown): string {
@@ -210,14 +213,67 @@ function isDeliveryOrder(order: KitchenOrder): boolean {
   return String(order.order_notes || '').toLowerCase().includes('delivery');
 }
 
+function customerKitchenNotes(rawNotes: unknown): string {
+  const systemPrefixes = [
+    'delivery address:',
+    'delivery fee:',
+    'zone:',
+    'gps:',
+    'promo:',
+    'order type:',
+  ];
+
+  return String(rawNotes || '')
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => {
+      const lower = part.toLowerCase();
+      if (systemPrefixes.some((prefix) => lower.startsWith(prefix))) return false;
+      if (lower.startsWith('cancelled by ')) return false;
+      if (/^rider\s+.+?\s+rejected\s*:/i.test(part)) return false;
+      return true;
+    })
+    .join(' | ');
+}
+
+function riderAcceptedAssignment(assignment?: AssignmentInfo): AssignmentInfo | null {
+  if (!assignment) return null;
+  const status = String(assignment.status || '').toLowerCase();
+  return ['accepted', 'picked_up', 'on_the_way'].includes(status) ? assignment : null;
+}
+
+function riderKitchenLabel(assignment?: AssignmentInfo): string {
+  const accepted = riderAcceptedAssignment(assignment);
+  if (!accepted) return '';
+  const status = String(accepted.status || '').toLowerCase();
+  if (status === 'picked_up') return `${accepted.rider_name} picked up`;
+  if (status === 'on_the_way') return `${accepted.rider_name} is on the way`;
+
+  const distance = Number(accepted.distance_to_shop_km);
+  if (accepted.rider_location_is_fresh && Number.isFinite(distance) && distance <= 0.5) {
+    return `${accepted.rider_name} nearby`;
+  }
+  if (accepted.rider_location_is_fresh && Number.isFinite(distance)) {
+    return `${accepted.rider_name} is on the way`;
+  }
+  return `${accepted.rider_name} accepted`;
+}
+
+function kitchenCardStatus(order: KitchenOrder, assignment?: AssignmentInfo): string {
+  const riderText = riderKitchenLabel(assignment);
+  if (order.status === 'new') return 'New order';
+  if (order.status === 'accepted') return riderText ? `Accepted · ${riderText}` : 'Accepted';
+  if (order.status === 'preparing') return riderText ? `Preparing · ${riderText}` : 'Preparing';
+  if (order.status === 'ready') {
+    if (!isDeliveryOrder(order)) return 'Ready for pickup';
+    return riderText ? `Ready for delivery · ${riderText}` : 'Ready for delivery · Waiting rider';
+  }
+  return String(order.status || '').replaceAll('_', ' ');
+}
+
 function formatUaeTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--:--';
-  return date.toLocaleTimeString('en-AE', {
-    timeZone: 'Asia/Dubai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatUaeClockTime(value);
 }
 
 function signedReadyMinutes(order: KitchenOrder): number | null {
@@ -355,12 +411,14 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
   );
 }
 
-function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady }: {
+function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady, assignments }: {
   title: string;
   orders: KitchenOrder[];
   emptyText: string;
   onOpen: (orderId: number) => void;
   onBecameLate?: (order: KitchenOrder) => void;
+  onReady?: (order: KitchenOrder) => void;
+  assignments: Record<number, AssignmentInfo>;
 }) {
   return (
     <section className="mb-7">
@@ -384,9 +442,7 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady 
                     </div>
                     <p className="mt-1 text-lg text-slate-500">{order.customer_phone || order.customer_name} · {totalItems(order)} item{totalItems(order) === 1 ? '' : 's'}</p>
                     <p className="mt-3 text-xl font-medium text-slate-700">
-                      {isDeliveryOrder(order)
-                        ? (order.status === 'ready' ? 'Waiting rider pickup' : 'Rider is on the way')
-                        : order.status === 'ready' ? 'Ready for pickup' : 'Kitchen in progress'}
+                      {kitchenCardStatus(order, assignments[order.id])}
                     </p>
                   </div>
                   <TimerCircle order={order} onBecameLate={onBecameLate} />
@@ -794,13 +850,17 @@ export default function KitchenOrders() {
 
   const announceLateOrder = useCallback((order: KitchenOrder) => {
     const key = `kitchen_late_voice_${order.id}_${order.promised_ready_at || 'deadline'}`;
-    if (sessionStorage.getItem(key) === '1') return;
-    sessionStorage.setItem(key, '1');
+    if (localStorage.getItem(key) === '1') return;
+    localStorage.setItem(key, '1');
+
+    toast.warning(`Order #${order.id} time finished — please mark it Ready.`, { duration: 10000 });
 
     try {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const message = new SpeechSynthesisUtterance(`Order number ${order.id} is late`);
+        const message = new SpeechSynthesisUtterance(
+          `Order number ${order.id}. Time is finished. Please make it ready.`,
+        );
         message.lang = 'en-US';
         message.rate = 0.95;
         message.volume = 1;
@@ -820,6 +880,8 @@ export default function KitchenOrders() {
     const discount = Number(order.discount_amount || 0);
     const taxAmount = Number(order.tax_amount || 0);
     const assignment = assignments[order.id];
+    const acceptedAssignment = riderAcceptedAssignment(assignment);
+    const customerNotes = customerKitchenNotes(order.order_notes);
 
     return (
       <div className="min-h-screen bg-white">
@@ -860,8 +922,8 @@ export default function KitchenOrders() {
               <div className="mt-5 grid gap-3">
                 <Line label="Payment" value={paymentLabel(order)} />
                 <Line label="Items" value={`${totalItems(order)} item${totalItems(order) === 1 ? '' : 's'}`} />
-                {assignment && <Line label="Rider" value={`${assignment.rider_name} · ${String(assignment.status).replaceAll('_', ' ')}`} />}
-                {order.order_notes && <Line label="Notes" value={order.order_notes} />}
+                {acceptedAssignment && <Line label="Rider" value={riderKitchenLabel(acceptedAssignment)} />}
+                {customerNotes && <Line label="Notes" value={customerNotes} />}
               </div>
             </Card>
 
@@ -906,12 +968,6 @@ export default function KitchenOrders() {
             <div className="mt-5 rounded-3xl border border-red-200 bg-red-50 p-4">
               <p className="font-black text-red-700">Cancelled by {getCancelInfo(order)!.by}</p>
               <p className="mt-1 text-slate-700">Reason: {getCancelInfo(order)!.reason}</p>
-            </div>
-          )}
-          {getLatestRiderReject(order) && order.status !== 'cancelled' && (
-            <div className="mt-5 rounded-3xl border border-orange-200 bg-orange-50 p-4">
-              <p className="font-black text-orange-700">Rider {getLatestRiderReject(order)!.rider} rejected</p>
-              <p className="mt-1 text-slate-700">Reason: {getLatestRiderReject(order)!.reason}</p>
             </div>
           )}
 
@@ -1160,7 +1216,7 @@ export default function KitchenOrders() {
           <div className="mb-4 flex items-center justify-between px-1 text-sm text-slate-500">
             <div className="flex items-center gap-2">
               <Clock3 className="h-4 w-4" />
-              Last update: {lastRefresh.toLocaleTimeString()}
+              Last update: {formatUaeClockTime(lastRefresh)} UAE
             </div>
             <div>{nativePrinterAvailable() ? 'Printer connected' : 'Printer not connected'}</div>
           </div>
@@ -1178,9 +1234,9 @@ export default function KitchenOrders() {
           <EmptyState />
         ) : (
           <div>
-            <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
-            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onReady={(order) => void updateOrderStatus(order, 'ready')} />
-            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} />
+            <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
+            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onReady={(order) => void updateOrderStatus(order, 'ready')} assignments={assignments} />
+            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
           </div>
         )}
       </div>
