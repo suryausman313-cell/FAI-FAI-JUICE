@@ -6,7 +6,9 @@ Assignment rules:
 3. Rider must be active, have a fresh heartbeat, valid GPS and fresh GPS.
 4. Offline riders and stale/missing GPS riders are never used as fallback.
 5. Shop coordinates are required; customer coordinates are never used as pickup fallback.
-6. Eligible riders are ranked by distance to shop first, then active deliveries, then rider ID.
+6. Auto Assign gives a rider only one active delivery at a time.
+7. Eligible riders are ranked by distance to shop first, then rider ID.
+8. Manual Admin assignment may still give multiple orders to the same rider.
 """
 
 from __future__ import annotations
@@ -248,11 +250,18 @@ async def select_best_rider(
     active_counts = {int(row[0]): int(row[1]) for row in count_result.all()}
 
     now = datetime.now(timezone.utc)
-    scored: list[tuple[tuple[float, int, int], Riders, float]] = []
+    scored: list[tuple[tuple[float, int], Riders, float]] = []
 
     for rider in riders:
         live = rider_live_status(rider, now)
         if not live["eligible_for_assignment"]:
+            continue
+
+        active_count = active_counts.get(rider.id, 0)
+        # Auto Assign is intentionally conservative: one active delivery per rider.
+        # Admin manual assignment is not restricted by this rule and can group
+        # 2/3/4/5 nearby orders onto the same rider when operationally useful.
+        if active_count > 0:
             continue
 
         distance = haversine_km(
@@ -261,10 +270,9 @@ async def select_best_rider(
             shop_lat,
             shop_lng,
         )
-        active_count = active_counts.get(rider.id, 0)
 
-        # Nearest live rider is first priority. Workload only breaks a distance tie.
-        score = (distance, active_count, rider.id)
+        # Nearest available rider is first priority.
+        score = (distance, rider.id)
         scored.append((score, rider, distance))
 
     if not scored:
