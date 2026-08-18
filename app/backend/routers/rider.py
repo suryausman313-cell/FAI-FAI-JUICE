@@ -517,18 +517,22 @@ async def assign_delivery(
                 shop_lng,
             )
 
+        customer_lat = data.customer_lat if data.customer_lat is not None else getattr(order, "customer_lat", None)
+        customer_lng = data.customer_lng if data.customer_lng is not None else getattr(order, "customer_lng", None)
+        customer_address = (data.customer_address or getattr(order, "customer_address", "") or "").strip()
+
         assignment = Delivery_assignments(
             order_id=data.order_id,
             rider_id=data.rider_id,
             status="assigned",
-            customer_lat=data.customer_lat,
-            customer_lng=data.customer_lng,
-            customer_address=data.customer_address or "",
-            customer_name=data.customer_name or "",
-            customer_phone=data.customer_phone or "",
-            delivery_charge=data.delivery_charge or 0,
+            customer_lat=customer_lat,
+            customer_lng=customer_lng,
+            customer_address=customer_address,
+            customer_name=data.customer_name or order.customer_name or "",
+            customer_phone=data.customer_phone or order.customer_phone or "",
+            delivery_charge=data.delivery_charge if data.delivery_charge is not None else float(getattr(order, "delivery_charge", 0) or 0),
             distance_km=(round(pickup_distance, 2) if pickup_distance is not None else data.distance_km),
-            zone_name=data.zone_name,
+            zone_name=data.zone_name or getattr(order, "delivery_zone_name", None),
         )
         db.add(assignment)
         await db.commit()
@@ -612,9 +616,14 @@ async def update_rider_location(
         rider = result.scalar_one_or_none()
         if not rider:
             raise HTTPException(status_code=404, detail="Rider not found")
+        now = datetime.now(timezone.utc)
         rider.current_lat = data.lat
         rider.current_lng = data.lng
-        rider.location_updated_at = datetime.now(timezone.utc)
+        rider.location_updated_at = now
+        # A successful authenticated GPS update also proves the Rider app is alive.
+        # This prevents Admin from showing an actively tracking rider as offline when
+        # a heartbeat request is briefly delayed by the browser/network.
+        rider.last_heartbeat = now
         await db.commit()
         try:
             await auto_assign_unassigned_orders(db, limit=25)
