@@ -411,13 +411,13 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
   );
 }
 
-function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady, assignments }: {
+function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvance, assignments }: {
   title: string;
   orders: KitchenOrder[];
   emptyText: string;
   onOpen: (orderId: number) => void;
   onBecameLate?: (order: KitchenOrder) => void;
-  onReady?: (order: KitchenOrder) => void;
+  onAdvance?: (order: KitchenOrder) => void;
   assignments: Record<number, AssignmentInfo>;
 }) {
   return (
@@ -448,10 +448,18 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onReady,
                   <TimerCircle order={order} onBecameLate={onBecameLate} />
                 </div>
               </button>
-              {onReady && ['accepted', 'preparing'].includes(order.status) && (
+              {onAdvance && ['accepted', 'preparing'].includes(order.status) && (
                 <div className="border-t border-slate-100 p-3">
-                  <Button type="button" onClick={() => onReady(order)} className="h-14 w-full rounded-2xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
-                    {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
+                  <Button
+                    type="button"
+                    onClick={() => onAdvance(order)}
+                    className={`h-14 w-full rounded-2xl text-xl font-black ${order.status === 'accepted' ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                  >
+                    {order.status === 'accepted'
+                      ? 'Start preparing'
+                      : isDeliveryOrder(order)
+                        ? 'Ready for delivery'
+                        : 'Ready for pickup'}
                   </Button>
                 </div>
               )}
@@ -1023,14 +1031,9 @@ export default function KitchenOrders() {
             )}
 
             {order.status === 'accepted' && (
-              <div className="grid grid-cols-2 gap-3">
-                <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
-                  Start preparing
-                </Button>
-                <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 rounded-3xl bg-emerald-600 text-xl font-black hover:bg-emerald-700">
-                  {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
-                </Button>
-              </div>
+              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
+                Start preparing
+              </Button>
             )}
 
             {order.status === 'preparing' && (
@@ -1235,7 +1238,7 @@ export default function KitchenOrders() {
         ) : (
           <div>
             <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
-            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onReady={(order) => void updateOrderStatus(order, 'ready')} assignments={assignments} />
+            <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onAdvance={(order) => void updateOrderStatus(order, order.status === 'accepted' ? 'preparing' : 'ready')} assignments={assignments} />
             <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
           </div>
         )}
