@@ -157,9 +157,18 @@ export default function KitchenHistoryPanel({
     try {
       const response = await axios.get<{
         items?: Order[];
-      }>(`${baseURL}/api/v1/kitchen/orders?limit=200&skip=0`, {
+      }>(`${baseURL}/api/v1/admin/kitchen/orders`, {
+        params: {
+          limit: 200,
+          ...(Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0) > 0
+            ? { branch_id: Number(localStorage.getItem('fai_fai_kitchen_branch_id')) }
+            : {}),
+        },
         headers: {
           'X-Kitchen-Pin': pin,
+          ...(Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0) > 0
+            ? { 'X-Branch-Id': String(Number(localStorage.getItem('fai_fai_kitchen_branch_id'))) }
+            : {}),
         },
       });
 

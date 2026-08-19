@@ -11,6 +11,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { client } from '@/lib/api';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -68,6 +69,7 @@ interface AccountForm {
   username: string;
   password: string;
   role: 'admin' | 'manager';
+  branch_id: number | null;
   permissions: AdminPermissions;
 }
 
@@ -75,6 +77,7 @@ const EMPTY_FORM: AccountForm = {
   username: '',
   password: '',
   role: 'admin',
+  branch_id: null,
   permissions: { ...DEFAULT_PERMISSIONS },
 };
 
@@ -83,6 +86,7 @@ export default function AdminAccounts() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState<AdminAccount[]>([]);
+  const [branches, setBranches] = useState<Array<{ id: number; name: string; is_active: boolean; is_default: boolean }>>([]);
   const [superUsername, setSuperUsername] = useState('Super Admin');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AdminAccount | null>(null);
@@ -111,12 +115,19 @@ export default function AdminAccounts() {
   async function loadAccounts() {
     setLoading(true);
     try {
-      const [me, items] = await Promise.all([
+      const [me, items, branchResponse] = await Promise.all([
         getAdminMe(),
         listAdminAccounts(),
+        client.entities.branches.query({}),
       ]);
       setSuperUsername(me.username);
       setAccounts(items);
+      setBranches((branchResponse.data?.items || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name || `Branch ${item.id}`),
+        is_active: Boolean(item.is_active),
+        is_default: Boolean(item.is_default),
+      })));
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -134,6 +145,9 @@ export default function AdminAccounts() {
       username: '',
       password: '',
       role: 'admin',
+      branch_id: session?.role === 'super_admin'
+        ? (branches.find((branch) => branch.is_default)?.id || branches[0]?.id || null)
+        : (session?.branch_id || null),
       permissions: { ...DEFAULT_PERMISSIONS },
     });
     setDialogOpen(true);
@@ -145,6 +159,7 @@ export default function AdminAccounts() {
       username: account.username,
       password: '',
       role: account.role,
+      branch_id: account.branch_id,
       permissions: { ...account.permissions },
     });
     setDialogOpen(true);
@@ -173,6 +188,10 @@ export default function AdminAccounts() {
       toast.error('New password minimum 8 characters hona chahiye');
       return;
     }
+    if (!form.branch_id) {
+      toast.error('Admin ke liye branch select karo');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -180,6 +199,7 @@ export default function AdminAccounts() {
         await updateAdminAccount(editing.id, {
           username: form.username.trim(),
           role: form.role,
+          branch_id: Number(form.branch_id),
           permissions: form.permissions,
           ...(form.password ? { password: form.password } : {}),
         });
@@ -189,6 +209,7 @@ export default function AdminAccounts() {
           username: form.username.trim(),
           password: form.password,
           role: form.role,
+          branch_id: Number(form.branch_id),
           permissions: form.permissions,
         });
         toast.success('New admin account created');
@@ -350,6 +371,9 @@ export default function AdminAccounts() {
                       <span className="text-[10px] rounded-full px-2 py-0.5 bg-blue-500/10 text-blue-400 uppercase">
                         {account.role}
                       </span>
+                      <span className="text-[10px] rounded-full px-2 py-0.5 bg-purple-500/10 text-purple-300">
+                        {branches.find((branch) => branch.id === account.branch_id)?.name || `Branch ${account.branch_id || '-'}`}
+                      </span>
                     </div>
                     <p className="text-gray-600 text-[11px] mt-1">
                       Password hidden · Edit se password change hoga
@@ -443,6 +467,26 @@ export default function AdminAccounts() {
                 className="mt-1 bg-gray-950 border-gray-700 text-white"
                 placeholder="Minimum 8 characters"
               />
+            </div>
+
+            <div>
+              <Label className="text-gray-300">Assigned Branch</Label>
+              <select
+                value={form.branch_id || ''}
+                disabled={session?.role !== 'super_admin'}
+                onChange={(event) => setForm((current) => ({ ...current, branch_id: Number(event.target.value) || null }))}
+                className="mt-1 w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-white"
+              >
+                <option value="">Select branch</option>
+                {branches.filter((branch) => branch.is_active).map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}{branch.is_default ? ' (Default)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-gray-500">
+                Is Admin ko sirf is branch ke orders/delivery access milenge.
+              </p>
             </div>
 
             <div>

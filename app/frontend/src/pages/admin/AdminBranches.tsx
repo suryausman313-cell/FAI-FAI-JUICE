@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { MapPin, Plus, Star, Trash2 } from 'lucide-react';
+import { KeyRound, MapPin, Plus, Star, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import AdminSettingsPageLayout from '@/components/admin/AdminSettingsPageLayout';
 import { Button } from '@/components/ui/button';
@@ -13,10 +13,11 @@ type FormState = {
   phone: string;
   latitude: string;
   longitude: string;
+  kitchen_pin: string;
   is_default: boolean;
 };
 
-const EMPTY: FormState = { name: '', address: '', phone: '', latitude: '', longitude: '', is_default: false };
+const EMPTY: FormState = { name: '', address: '', phone: '', latitude: '', longitude: '', kitchen_pin: '', is_default: false };
 
 export default function AdminBranches() {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -47,9 +48,13 @@ export default function AdminBranches() {
       toast.error('Branch name, latitude and longitude are required');
       return;
     }
+    if (!form.is_default && !/^\d{4,8}$/.test(form.kitchen_pin.trim())) {
+      toast.error('New branch ke liye separate 4-8 digit Kitchen PIN zaroori hai');
+      return;
+    }
     setSaving(true);
     try {
-      await client.entities.branches.create({ data: { name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim(), latitude: lat, longitude: lng, is_active: true, is_default: form.is_default } });
+      await client.entities.branches.create({ data: { name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim(), latitude: lat, longitude: lng, is_active: true, is_default: form.is_default, ...(form.kitchen_pin.trim() ? { kitchen_pin: form.kitchen_pin.trim() } : {}) } });
       setForm(EMPTY);
       await load();
       toast.success('Branch added');
@@ -71,6 +76,22 @@ export default function AdminBranches() {
     await load();
   }
 
+  async function changeKitchenPin(branch: Branch) {
+    const nextPin = window.prompt(`Set 4-8 digit Kitchen PIN for ${branch.name}`);
+    if (nextPin == null) return;
+    if (!/^\d{4,8}$/.test(nextPin.trim())) {
+      toast.error('Kitchen PIN must be 4 to 8 digits');
+      return;
+    }
+    try {
+      await client.entities.branches.update({ id: String(branch.id), data: { kitchen_pin: nextPin.trim() } });
+      await load();
+      toast.success(`${branch.name} Kitchen PIN updated`);
+    } catch (error: any) {
+      toast.error(error?.message || 'Kitchen PIN update failed');
+    }
+  }
+
   async function remove(branch: Branch) {
     if (!window.confirm(`Delete ${branch.name}?`)) return;
     try {
@@ -89,6 +110,8 @@ export default function AdminBranches() {
           <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
             <input className="rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" placeholder="Branch name (e.g. Fai Fai Fujairah)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <input className="rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" placeholder="Phone (optional)" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            <input className="rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" inputMode="numeric" maxLength={8} placeholder="Kitchen PIN (4-8 digits)" value={form.kitchen_pin} onChange={(e) => setForm({ ...form, kitchen_pin: e.target.value.replace(/\D/g, '').slice(0, 8) })} />
+            <div className="flex items-center text-xs text-gray-500">Default/live branch: blank rakho to current Render KITCHEN_PIN same rahega.</div>
             <input className="md:col-span-2 rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" placeholder="Address" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             <input className="rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" placeholder="Latitude" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
             <input className="rounded-xl border border-gray-700 bg-gray-950 p-3 text-white" placeholder="Longitude" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
@@ -106,6 +129,7 @@ export default function AdminBranches() {
                 <div className="mt-1 text-xs text-gray-400">{branch.address || 'No address'} · {Number(branch.latitude).toFixed(5)}, {Number(branch.longitude).toFixed(5)}</div>
               </div>
               <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => void changeKitchenPin(branch)}><KeyRound className="mr-1 h-4 w-4" />Kitchen PIN</Button>
                 {!branch.is_default && <Button size="sm" variant="outline" onClick={() => void setDefault(branch)}><Star className="mr-1 h-4 w-4" />Default</Button>}
                 {branch.is_default ? (
                   <Button size="sm" variant="outline" disabled>Active</Button>

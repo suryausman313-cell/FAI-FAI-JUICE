@@ -138,6 +138,9 @@ export default function KitchenMenuPanel({ embedded = false }: { embedded?: bool
         {
           headers: {
             'X-Kitchen-Pin': pin,
+            ...(Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0) > 0
+              ? { 'X-Branch-Id': String(Number(localStorage.getItem('fai_fai_kitchen_branch_id'))) }
+              : {}),
           },
           timeout: 20000,
         },
@@ -227,6 +230,9 @@ export default function KitchenMenuPanel({ embedded = false }: { embedded?: bool
           headers: {
             'Content-Type': 'application/json',
             'X-Kitchen-Pin': pin,
+            ...(Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0) > 0
+              ? { 'X-Branch-Id': String(Number(localStorage.getItem('fai_fai_kitchen_branch_id'))) }
+              : {}),
           },
           timeout: 20000,
         },

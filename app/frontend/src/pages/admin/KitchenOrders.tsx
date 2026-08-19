@@ -100,7 +100,7 @@ type AssignmentInfo = {
   distance_to_shop_km?: number | null;
 };
 
-type BranchOption = { id: number; name: string; is_active: boolean; is_default: boolean };
+type BranchOption = { id: number; name: string; is_active: boolean; is_default: boolean; restaurant_status?: RestaurantStatus | string };
 type RestaurantStatus = 'open' | 'busy' | 'closed';
 type ViewMode = 'live' | 'today' | 'yesterday' | 'menu';
 
@@ -552,8 +552,9 @@ export default function KitchenOrders() {
     () => ({
       'Content-Type': 'application/json',
       'X-Kitchen-Pin': kitchenPin(),
+      ...(kitchenBranchId ? { 'X-Branch-Id': String(kitchenBranchId) } : {}),
     }),
-    [kitchenPin],
+    [kitchenPin, kitchenBranchId],
   );
 
   const loadBranches = useCallback(async () => {
@@ -567,6 +568,7 @@ export default function KitchenOrders() {
         name: String(item.name || `Branch ${item.id}`),
         is_active: Boolean(item.is_active),
         is_default: Boolean(item.is_default),
+        restaurant_status: String(item.restaurant_status || 'open'),
       }));
       setBranches(list);
       if (list.length > 0) {
@@ -574,6 +576,8 @@ export default function KitchenOrders() {
         const selected = list.find((item) => item.id === saved) || list.find((item) => item.is_default) || list[0];
         setKitchenBranchId(selected.id);
         localStorage.setItem('fai_fai_kitchen_branch_id', String(selected.id));
+        const status = String(selected.restaurant_status || 'open').toLowerCase();
+        setRestaurantStatus(status === 'busy' || status === 'closed' ? status : 'open');
       }
     } catch (error) {
       console.error('Branch loading failed:', error);
@@ -585,11 +589,22 @@ export default function KitchenOrders() {
 
   function selectKitchenBranch(nextId: number) {
     if (!Number.isFinite(nextId) || nextId <= 0) return;
+    const changingBranch = kitchenBranchId !== null && kitchenBranchId !== nextId;
     localStorage.setItem('fai_fai_kitchen_branch_id', String(nextId));
     previousNewIdsRef.current = new Set();
     firstLoadRef.current = true;
     setSelectedOrderId(null);
     setKitchenBranchId(nextId);
+    const nextBranch = branches.find((branch) => branch.id === nextId);
+    const status = String(nextBranch?.restaurant_status || 'open').toLowerCase();
+    setRestaurantStatus(status === 'busy' || status === 'closed' ? status : 'open');
+    if (authenticated && changingBranch) {
+      localStorage.removeItem('kitchen_auth');
+      localStorage.removeItem('kitchen_pin');
+      setAuthenticated(false);
+      setOrders([]);
+      toast.info('Enter the Kitchen PIN for the selected branch');
+    }
   }
 
   const loadReceiptSettings = useCallback(async () => {
@@ -690,9 +705,19 @@ export default function KitchenOrders() {
   useEffect(() => {
     setAuthenticated(localStorage.getItem('kitchen_auth') === 'true');
     void loadReceiptSettings();
-    void loadRestaurantStatus();
     void loadBranches();
-  }, [loadReceiptSettings, loadRestaurantStatus, loadBranches]);
+  }, [loadReceiptSettings, loadBranches]);
+
+  useEffect(() => {
+    const selectedBranch = branches.find((branch) => branch.id === kitchenBranchId);
+    if (!selectedBranch) return;
+    if (selectedBranch.is_default) {
+      void loadRestaurantStatus();
+      return;
+    }
+    const branchStatus = String(selectedBranch.restaurant_status || 'open').toLowerCase();
+    setRestaurantStatus(branchStatus === 'busy' || branchStatus === 'closed' ? branchStatus : 'open');
+  }, [branches, kitchenBranchId, loadRestaurantStatus]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -724,6 +749,7 @@ export default function KitchenOrders() {
         headers: {
           'Content-Type': 'application/json',
           'X-Kitchen-Pin': normalizedPin,
+          ...(kitchenBranchId ? { 'X-Branch-Id': String(kitchenBranchId) } : {}),
         },
         params: { limit: 1, ...(kitchenBranchId ? { branch_id: kitchenBranchId } : {}) },
         timeout: 12000,
@@ -786,6 +812,11 @@ export default function KitchenOrders() {
         { headers: kitchenHeaders(), timeout: 15000 },
       );
       setRestaurantStatus(nextStatus);
+      if (kitchenBranchId) {
+        setBranches((current) => current.map((branch) =>
+          branch.id === kitchenBranchId ? { ...branch, restaurant_status: nextStatus } : branch
+        ));
+      }
       setStatusDialogOpen(false);
       toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
     } catch (error: any) {
@@ -1242,6 +1273,17 @@ export default function KitchenOrders() {
           <h1 className="mb-2 text-2xl font-black text-slate-900">Kitchen Display</h1>
           <p className="mb-6 text-sm text-slate-500">Enter PIN to access Kitchen orders</p>
           <form onSubmit={handlePinLogin} className="space-y-4">
+            {branches.length > 0 && (
+              <select
+                value={kitchenBranchId || ''}
+                onChange={(event) => selectKitchenBranch(Number(event.target.value))}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-slate-400"
+              >
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>{branch.name}{branch.is_default ? ' (Default)' : ''}</option>
+                ))}
+              </select>
+            )}
             <input
               type="password"
               value={pin}
