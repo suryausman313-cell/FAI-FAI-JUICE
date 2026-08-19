@@ -20,6 +20,7 @@ from core.database import db_manager
 ENTITY_PERMISSIONS = {
     "activity_logs": "logs",
     "app_notifications": "notifications",
+    "branches": "settings",
     "categories": "menu",
     "customer_sessions": "customers",
     "deals": "deals",
