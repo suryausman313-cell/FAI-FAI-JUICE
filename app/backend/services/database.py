@@ -269,6 +269,9 @@ async def ensure_multibranch_schema() -> None:
         "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_start_time VARCHAR(10)",
         "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_end_time VARCHAR(10)",
         "ALTER TABLE branches ADD COLUMN IF NOT EXISTS estimated_delivery_time VARCHAR(80)",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS restaurant_status VARCHAR(20) DEFAULT 'open'",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS kitchen_pin_hash TEXT",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS kitchen_pin_salt VARCHAR(64)",
         "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS branch_id INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_delivery_zones_branch_id ON delivery_zones (branch_id)",
     ]
@@ -316,6 +319,18 @@ async def ensure_multibranch_schema() -> None:
                 await session.execute(text("UPDATE branches SET is_default = (id = :id)"), {"id": default_id})
 
         if default_id is not None:
+            # Mirror the original live shop status into the default branch without
+            # changing the legacy restaurant_settings record.
+            await session.execute(text("""
+                UPDATE branches
+                SET restaurant_status = COALESCE(
+                    (SELECT restaurant_status FROM restaurant_settings ORDER BY id DESC LIMIT 1),
+                    restaurant_status,
+                    'open'
+                )
+                WHERE id = :branch_id
+            """), {"branch_id": default_id})
+
             await session.execute(text("""
                 UPDATE orders
                 SET branch_id = COALESCE(branch_id, :branch_id),
