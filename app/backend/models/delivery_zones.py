@@ -8,6 +8,9 @@ class Delivery_zones(Base):
     __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True, nullable=False)
+    # NULL is only possible before startup backfill. Existing zones are assigned
+    # to the original/default branch automatically.
+    branch_id = Column(Integer, nullable=True, index=True)
     zone_name = Column(String(100), nullable=False)
     min_distance_km = Column(Float, nullable=False)
     max_distance_km = Column(Float, nullable=False)
