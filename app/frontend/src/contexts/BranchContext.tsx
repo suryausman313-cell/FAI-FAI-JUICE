@@ -15,6 +15,8 @@ export type Branch = {
   delivery_start_time?: string | null;
   delivery_end_time?: string | null;
   estimated_delivery_time?: string | null;
+  restaurant_status?: 'open' | 'busy' | 'closed' | string | null;
+  has_kitchen_pin?: boolean;
 };
 
 type BranchContextValue = {
@@ -64,7 +66,9 @@ export function BranchProvider({ children }: { children: ReactNode }) {
 
   const selectNearestFromPosition = useCallback((list: Branch[], latitude: number, longitude: number) => {
     if (!list.length) return;
-    const nearest = [...list].sort(
+    const openBranches = list.filter((branch) => String(branch.restaurant_status || 'open').toLowerCase() !== 'closed');
+    const candidates = openBranches.length > 0 ? openBranches : list;
+    const nearest = [...candidates].sort(
       (a, b) => distanceKm(latitude, longitude, a.latitude, a.longitude) - distanceKm(latitude, longitude, b.latitude, b.longitude),
     )[0];
     chooseBranch(nearest, false);
