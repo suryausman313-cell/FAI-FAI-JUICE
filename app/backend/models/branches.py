@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 
 from core.database import Base
 
@@ -24,5 +24,10 @@ class Branches(Base):
     delivery_start_time = Column(String(10), nullable=True)
     delivery_end_time = Column(String(10), nullable=True)
     estimated_delivery_time = Column(String(80), nullable=True)
+    restaurant_status = Column(String(20), nullable=True, default="open", server_default="open")
+    # Optional per-branch Kitchen PIN. Default/legacy branch can keep using the
+    # existing Render KITCHEN_PIN when these are empty.
+    kitchen_pin_hash = Column(Text, nullable=True)
+    kitchen_pin_salt = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)
