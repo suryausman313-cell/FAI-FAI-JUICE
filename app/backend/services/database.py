@@ -241,6 +241,103 @@ async def ensure_order_delivery_columns() -> None:
     logger.info("Order delivery/GPS database columns checked successfully")
 
 
+async def ensure_multibranch_schema() -> None:
+    """Add multi-branch support without changing existing single-branch behaviour."""
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS branches (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(120) NOT NULL,
+            address VARCHAR(500) DEFAULT '',
+            phone VARCHAR(50) DEFAULT '',
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS branch_id INTEGER",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS branch_name VARCHAR(120) DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_orders_branch_id ON orders (branch_id)",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_enabled BOOLEAN",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_schedule_enabled BOOLEAN",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_start_time VARCHAR(10)",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS delivery_end_time VARCHAR(10)",
+        "ALTER TABLE branches ADD COLUMN IF NOT EXISTS estimated_delivery_time VARCHAR(80)",
+        "ALTER TABLE delivery_zones ADD COLUMN IF NOT EXISTS branch_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_delivery_zones_branch_id ON delivery_zones (branch_id)",
+    ]
+
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+
+        branch_count = await session.scalar(text("SELECT COUNT(*) FROM branches"))
+        if int(branch_count or 0) == 0:
+            settings = (await session.execute(text("""
+                SELECT restaurant_name, address, phone, restaurant_lat, restaurant_lng
+                FROM restaurant_settings
+                ORDER BY id DESC
+                LIMIT 1
+            """))).mappings().first()
+
+            def as_float(value, fallback):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return fallback
+
+            name = str((settings or {}).get("restaurant_name") or "Fai Fai Juice - Fujairah")[:120]
+            address = str((settings or {}).get("address") or "")[:500]
+            phone = str((settings or {}).get("phone") or "")[:50]
+            lat = as_float((settings or {}).get("restaurant_lat"), 25.1288)
+            lng = as_float((settings or {}).get("restaurant_lng"), 56.3265)
+            await session.execute(
+                text("""
+                    INSERT INTO branches (name, address, phone, latitude, longitude, is_active, is_default)
+                    VALUES (:name, :address, :phone, :lat, :lng, TRUE, TRUE)
+                """),
+                {"name": name, "address": address, "phone": phone, "lat": lat, "lng": lng},
+            )
+
+        default_id = await session.scalar(text("""
+            SELECT id FROM branches
+            WHERE is_default = TRUE AND is_active = TRUE
+            ORDER BY id LIMIT 1
+        """))
+        if default_id is None:
+            default_id = await session.scalar(text("SELECT id FROM branches WHERE is_active = TRUE ORDER BY id LIMIT 1"))
+            if default_id is not None:
+                await session.execute(text("UPDATE branches SET is_default = (id = :id)"), {"id": default_id})
+
+        if default_id is not None:
+            await session.execute(text("""
+                UPDATE orders
+                SET branch_id = COALESCE(branch_id, :branch_id),
+                    branch_name = CASE
+                        WHEN COALESCE(branch_name, '') = '' THEN COALESCE((SELECT name FROM branches WHERE id = :branch_id), '')
+                        ELSE branch_name
+                    END
+                WHERE branch_id IS NULL OR COALESCE(branch_name, '') = ''
+            """), {"branch_id": default_id})
+
+            # Old delivery zones belonged to the original live shop. Assign them
+            # to that default branch once, so future branches never share/mix zones.
+            await session.execute(text("""
+                UPDATE delivery_zones
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+            """), {"branch_id": default_id})
+
+        await session.commit()
+    logger.info("Multi-branch database schema checked successfully")
+
+
 async def ensure_homepage_settings_columns() -> None:
     """Ensure customer homepage controls are stored in restaurant_settings."""
     if not db_manager.async_session_maker:
@@ -328,6 +425,8 @@ async def initialize_database():
 
         logger.info("V6 schema migration 3/3: checking restaurant/homepage columns...")
         await ensure_homepage_settings_columns()
+        await ensure_multibranch_schema()
+        logger.info("V9 multi-branch schema migration completed")
         logger.info("V7 rider auto-assign schema migration completed")
 
         await ensure_admin_alarm_columns()
