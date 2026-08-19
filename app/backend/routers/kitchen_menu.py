@@ -1,10 +1,9 @@
 # @File: backend/routers/kitchen_menu.py
 # @Desc: Kitchen staff menu availability control protected by Kitchen PIN.
 
-import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from models.categories import Categories
 from models.menu_items import Menu_items
+from services.branch_kitchen_auth import verify_branch_kitchen_pin
 
 
 router = APIRouter(
@@ -19,22 +19,14 @@ router = APIRouter(
     tags=["kitchen-menu"],
 )
 
-def verify_kitchen_pin(
-    x_kitchen_pin: Optional[str] = Header(
-        default=None,
-        alias="X-Kitchen-Pin",
-    ),
-) -> bool:
-    """Only a logged-in Kitchen screen may change menu availability."""
-    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
-    if len(expected_pin) < 4:
-        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
-    if not x_kitchen_pin or x_kitchen_pin != expected_pin:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid kitchen PIN",
-        )
-    return True
+async def verify_kitchen_pin(
+    x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
+    x_branch_id: Optional[int] = Header(default=None, alias="X-Branch-Id"),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[int]:
+    """Allow the PIN assigned to the selected Kitchen branch."""
+    return await verify_branch_kitchen_pin(db, x_kitchen_pin or "", x_branch_id)
+
 
 
 class AvailabilityUpdate(BaseModel):
@@ -88,7 +80,7 @@ async def kitchen_menu_health():
 
 @router.get("")
 async def get_kitchen_menu(
-    kitchen_access: bool = Depends(verify_kitchen_pin),
+    kitchen_access: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
     del kitchen_access
@@ -138,7 +130,7 @@ async def get_kitchen_menu(
 async def update_kitchen_item_availability(
     item_id: int,
     data: AvailabilityUpdate,
-    kitchen_access: bool = Depends(verify_kitchen_pin),
+    kitchen_access: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
     del kitchen_access

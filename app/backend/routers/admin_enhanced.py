@@ -87,6 +87,8 @@ async def delete_order(
 
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if current_user.role != "super_admin" and (current_user.branch_id is None or int(getattr(order, "branch_id", 0) or 0) != int(current_user.branch_id)):
+            raise HTTPException(status_code=403, detail="This order belongs to another branch")
 
         # Store order info for activity log
         order_info = {
@@ -250,6 +252,8 @@ async def add_staff_note(
 
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if current_user.role != "super_admin" and (current_user.branch_id is None or int(getattr(order, "branch_id", 0) or 0) != int(current_user.branch_id)):
+            raise HTTPException(status_code=403, detail="This order belongs to another branch")
 
         # Append staff note with timestamp
         timestamp = datetime.now().strftime("%d/%m %H:%M")

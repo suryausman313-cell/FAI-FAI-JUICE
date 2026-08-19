@@ -1,8 +1,10 @@
 # @File: backend/routers/admin.py
 # @Desc: Admin API routes for order management, customers, and sales reports
+import hashlib
+import hmac
 import logging
 import os
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_
@@ -13,6 +15,7 @@ from core.database import get_db
 from routers.customer_auth import decode_customer_token, get_bearer_token
 from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
 from models.orders import Orders
+from models.branches import Branches
 from models.customer_sessions import Customer_sessions
 from services.customer_push_service import notify_customer_order_update_safely
 
@@ -24,32 +27,53 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 async def verify_kitchen_pin(
     x_kitchen_pin: Optional[str] = Header(default=None, alias="X-Kitchen-Pin"),
+    x_branch_id: Optional[int] = Header(default=None, alias="X-Branch-Id"),
+    branch_id: Optional[int] = Query(default=None),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     db: AsyncSession = Depends(get_db),
-) -> bool:
-    """Allow a valid Fai Fai Admin token or the Kitchen PIN."""
-    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
+) -> Optional[int]:
+    """Allow Admin JWT or the Kitchen PIN assigned to the selected branch.
+
+    Backward compatibility: when no branch is supplied, or the selected branch is
+    the original default branch without a custom PIN, the existing Render
+    KITCHEN_PIN is used exactly as before.
+    """
     supplied_pin = (x_kitchen_pin or "").strip()
-    if len(expected_pin) >= 4 and supplied_pin and supplied_pin == expected_pin:
-        return True
+    selected_branch_id = x_branch_id or branch_id
 
     if authorization and authorization.lower().startswith("bearer "):
         identity = await get_current_admin(authorization=authorization, db=db)
-        if (
-            identity.role == "super_admin"
-            or identity.permissions.get("orders")
-            or identity.permissions.get("kitchen")
-        ):
-            return True
+        if identity.role == "super_admin" or identity.permissions.get("orders") or identity.permissions.get("kitchen"):
+            return 0  # Admin JWT = global/scope handled by the Admin endpoint itself.
         raise HTTPException(status_code=403, detail="Orders permission required")
 
-    if len(expected_pin) < 4 and not authorization:
-        raise HTTPException(
-            status_code=503,
-            detail="Set KITCHEN_PIN in Render Environment first",
-        )
+    if selected_branch_id is not None:
+        branch = (await db.execute(select(Branches).where(Branches.id == int(selected_branch_id)))).scalar_one_or_none()
+        if not branch or not bool(branch.is_active):
+            raise HTTPException(status_code=404, detail="Kitchen branch not found or disabled")
 
-    raise HTTPException(status_code=401, detail="Admin login or valid kitchen PIN required")
+        salt = str(getattr(branch, "kitchen_pin_salt", "") or "")
+        expected_hash = str(getattr(branch, "kitchen_pin_hash", "") or "")
+        if salt and expected_hash:
+            try:
+                calculated = hashlib.pbkdf2_hmac(
+                    "sha256", supplied_pin.encode("utf-8"), bytes.fromhex(salt), 180_000
+                ).hex()
+            except Exception:
+                calculated = ""
+            if supplied_pin and hmac.compare_digest(calculated, expected_hash):
+                return int(selected_branch_id)
+            raise HTTPException(status_code=401, detail="Invalid Kitchen PIN for this branch")
+
+        if not bool(branch.is_default):
+            raise HTTPException(status_code=503, detail="Set a Kitchen PIN for this branch in Super Admin > Branches")
+
+    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
+    if len(expected_pin) >= 4 and supplied_pin and hmac.compare_digest(supplied_pin, expected_pin):
+        return int(selected_branch_id) if selected_branch_id is not None else None
+    if len(expected_pin) < 4:
+        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
+    raise HTTPException(status_code=401, detail="Admin login or valid Kitchen PIN required")
 
 
 def is_delivery_order(order: Orders) -> bool:
@@ -129,13 +153,14 @@ async def get_kitchen_orders(
     branch_id: Optional[int] = None,
     limit: int = 100,
     skip: int = 0,
-    kitchen_access: bool = Depends(verify_kitchen_pin),
+    kitchen_access: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get orders for the Kitchen panel using the X-Kitchen-Pin header."""
-    del kitchen_access
+    """Get orders for the Kitchen panel using the PIN assigned to its branch."""
 
     try:
+        if kitchen_access and kitchen_access > 0:
+            branch_id = int(kitchen_access)
         query = select(Orders).order_by(desc(Orders.created_at))
 
         if status and status != "all":
@@ -168,11 +193,10 @@ async def get_kitchen_orders(
 async def update_kitchen_order_status(
     order_id: int,
     data: OrderStatusUpdate,
-    kitchen_access: bool = Depends(verify_kitchen_pin),
+    kitchen_access: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update order status from the Kitchen panel using the kitchen PIN."""
-    del kitchen_access
+    """Update order status from the Kitchen panel using its branch PIN."""
 
     try:
         result = await db.execute(select(Orders).where(Orders.id == order_id))
@@ -180,6 +204,8 @@ async def update_kitchen_order_status(
 
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if kitchen_access and kitchen_access > 0 and int(getattr(order, "branch_id", 0) or 0) != int(kitchen_access):
+            raise HTTPException(status_code=403, detail="This order belongs to another branch")
 
         valid_transitions = {
             "new": ["accepted", "preparing", "cancelled"],
@@ -284,16 +310,25 @@ async def update_kitchen_order_status(
 async def get_orders(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    branch_id: Optional[int] = None,
     limit: int = 100,
     skip: int = 0,
-    panel_access: bool = Depends(verify_kitchen_pin),
+    identity: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all orders for the Admin panel using the X-Kitchen-Pin header."""
-    del panel_access
+    """Admin orders. Branch Admin is always locked to its assigned branch."""
+    effective_branch_id = branch_id
+    if identity.role != "super_admin":
+        if identity.branch_id is None:
+            raise HTTPException(status_code=403, detail="This Admin is not assigned to a branch")
+        if branch_id is not None and int(branch_id) != int(identity.branch_id):
+            raise HTTPException(status_code=403, detail="This Admin can only access its assigned branch")
+        effective_branch_id = int(identity.branch_id)
 
     try:
         query = select(Orders).order_by(desc(Orders.created_at))
+        if effective_branch_id is not None:
+            query = query.where(Orders.branch_id == int(effective_branch_id))
 
         if status and status != "all":
             if status == "new":
@@ -325,11 +360,10 @@ async def get_orders(
 async def update_order_status(
     order_id: int,
     data: OrderStatusUpdate,
-    panel_access: bool = Depends(verify_kitchen_pin),
+    identity: AdminIdentity = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update order status from the Admin panel using the X-Kitchen-Pin header."""
-    del panel_access
+    """Update order status. Branch Admin can only change its own branch orders."""
 
     try:
         result = await db.execute(select(Orders).where(Orders.id == order_id))
@@ -337,6 +371,8 @@ async def update_order_status(
 
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if identity.role != "super_admin" and (identity.branch_id is None or int(getattr(order, "branch_id", 0) or 0) != int(identity.branch_id)):
+            raise HTTPException(status_code=403, detail="This order belongs to another branch")
 
         # ===== VALID STATUS TRANSITIONS =====
         # Orders always start as "new". Valid flow:

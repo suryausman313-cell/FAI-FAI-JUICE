@@ -149,6 +149,7 @@ class AdminAccountCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=120)
     password: str = Field(min_length=8, max_length=300)
     role: str = Field(default="admin", max_length=30)
+    branch_id: int = Field(ge=1)
     permissions: dict[str, bool] = Field(default_factory=lambda: dict(DEFAULT_STAFF_PERMISSIONS))
 
 
@@ -156,6 +157,7 @@ class AdminAccountUpdateRequest(BaseModel):
     username: Optional[str] = Field(default=None, min_length=3, max_length=120)
     password: Optional[str] = Field(default=None, min_length=8, max_length=300)
     role: Optional[str] = Field(default=None, max_length=30)
+    branch_id: Optional[int] = Field(default=None, ge=1)
     permissions: Optional[dict[str, bool]] = None
     is_active: Optional[bool] = None
 
@@ -172,6 +174,7 @@ class AdminIdentity:
     role: str
     permissions: dict[str, bool]
     token_version: int
+    branch_id: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +229,7 @@ def _create_token(identity: AdminIdentity) -> str:
         "username": identity.username,
         "role": identity.role,
         "permissions": identity.permissions,
+        "branch_id": identity.branch_id,
         "ver": identity.token_version,
         "exp": int(time.time()) + TOKEN_TTL_SECONDS,
         "nonce": secrets.token_hex(8),
@@ -302,6 +306,7 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
                 password_hash TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 role VARCHAR(30) NOT NULL DEFAULT 'admin',
+                branch_id INTEGER NULL,
                 permissions_json TEXT NOT NULL DEFAULT '{}',
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 token_version INTEGER NOT NULL DEFAULT 1,
@@ -311,6 +316,15 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
             """
         )
     )
+
+    # Backward-compatible migration: old databases keep their existing Super Admin
+    # and staff accounts. Existing staff are attached to the current default branch.
+    try:
+        await db.execute(text("ALTER TABLE admin_accounts_secure ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL"))
+    except Exception:
+        # Some local SQLite builds do not support IF NOT EXISTS for ADD COLUMN.
+        # Production Render/Postgres does; ignore only for already-existing local schemas.
+        pass
 
     existing = await db.execute(text("SELECT id FROM admin_security WHERE id = 1"))
     if existing.first() is None:
@@ -341,6 +355,18 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
                 "salt": salt,
             },
         )
+
+    # Existing staff accounts from the old single-branch app are kept and bound
+    # to the original/default branch. Super Admin remains global.
+    await db.execute(text("""
+        UPDATE admin_accounts_secure
+        SET branch_id = COALESCE(
+            branch_id,
+            (SELECT id FROM branches WHERE is_default = TRUE ORDER BY id LIMIT 1),
+            (SELECT id FROM branches ORDER BY id LIMIT 1)
+        )
+        WHERE branch_id IS NULL
+    """))
     await db.commit()
 
 
@@ -368,6 +394,31 @@ async def _username_exists(
 
     account_result = await db.execute(text(query), params)
     return account_result.first() is not None
+
+
+async def _default_branch_id(db: AsyncSession) -> Optional[int]:
+    try:
+        result = await db.execute(
+            text("SELECT id FROM branches WHERE is_default = TRUE ORDER BY id LIMIT 1")
+        )
+        value = result.scalar_one_or_none()
+        if value is None:
+            result = await db.execute(text("SELECT id FROM branches ORDER BY id LIMIT 1"))
+            value = result.scalar_one_or_none()
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
+async def _require_valid_branch(db: AsyncSession, branch_id: int) -> int:
+    result = await db.execute(
+        text("SELECT id FROM branches WHERE id = :id AND is_active = TRUE"),
+        {"id": int(branch_id)},
+    )
+    value = result.scalar_one_or_none()
+    if value is None:
+        raise HTTPException(status_code=400, detail="Select an active branch for this Admin account.")
+    return int(value)
 
 
 async def get_current_admin(
@@ -407,7 +458,7 @@ async def get_current_admin(
     result = await db.execute(
         text(
             """
-            SELECT id, username, role, permissions_json, is_active, token_version
+            SELECT id, username, role, branch_id, permissions_json, is_active, token_version
             FROM admin_accounts_secure
             WHERE id = :id
             """
@@ -428,6 +479,7 @@ async def get_current_admin(
         role=str(row["role"]),
         permissions=_parse_permissions(row["permissions_json"]),
         token_version=int(row["token_version"]),
+        branch_id=(int(row["branch_id"]) if row.get("branch_id") is not None else await _default_branch_id(db)),
     )
 
 
@@ -484,12 +536,13 @@ async def login_admin(
             "username": identity.username,
             "role": identity.role,
             "permissions": identity.permissions,
+            "branch_id": None,
         }
 
     account_result = await db.execute(
         text(
             """
-            SELECT id, username, password_hash, salt, role,
+            SELECT id, username, password_hash, salt, role, branch_id,
                    permissions_json, is_active, token_version
             FROM admin_accounts_secure
             WHERE LOWER(username) = :username
@@ -513,6 +566,7 @@ async def login_admin(
             role=str(account["role"]),
             permissions=_parse_permissions(account["permissions_json"]),
             token_version=int(account["token_version"]),
+            branch_id=(int(account["branch_id"]) if account.get("branch_id") is not None else await _default_branch_id(db)),
         )
         return {
             "success": True,
@@ -521,6 +575,7 @@ async def login_admin(
             "username": identity.username,
             "role": identity.role,
             "permissions": identity.permissions,
+            "branch_id": identity.branch_id,
         }
 
     raise HTTPException(status_code=401, detail="Invalid username or password.")
@@ -532,6 +587,7 @@ async def admin_me(identity: AdminIdentity = Depends(get_current_admin)):
         "username": identity.username,
         "role": identity.role,
         "permissions": identity.permissions,
+        "branch_id": identity.branch_id,
     }
 
 
@@ -604,12 +660,14 @@ async def list_admin_accounts(
     result = await db.execute(
         text(
             """
-            SELECT id, username, role, permissions_json, is_active,
+            SELECT id, username, role, branch_id, permissions_json, is_active,
                    created_at, updated_at
             FROM admin_accounts_secure
+            WHERE (:is_super = TRUE OR branch_id = :branch_id)
             ORDER BY created_at ASC
             """
-        )
+        ),
+        {"is_super": identity.role == "super_admin", "branch_id": identity.branch_id},
     )
     accounts = []
     for row in result.mappings().all():
@@ -618,6 +676,7 @@ async def list_admin_accounts(
                 "id": str(row["id"]),
                 "username": str(row["username"]),
                 "role": str(row["role"]),
+                "branch_id": (int(row["branch_id"]) if row.get("branch_id") is not None else await _default_branch_id(db)),
                 "permissions": _parse_permissions(row["permissions_json"]),
                 "is_active": bool(row["is_active"]),
                 "created_at": row["created_at"].isoformat()
@@ -648,6 +707,10 @@ async def create_admin_account(
     if role not in {"admin", "manager"}:
         raise HTTPException(status_code=400, detail="Role must be admin or manager.")
 
+    requested_branch_id = data.branch_id if identity.role == "super_admin" else identity.branch_id
+    if requested_branch_id is None:
+        raise HTTPException(status_code=403, detail="This Admin is not assigned to a branch.")
+    branch_id = await _require_valid_branch(db, int(requested_branch_id))
     account_id = str(uuid.uuid4())
     salt, password_hash = _new_password_record(data.password)
     permissions = _normalise_permissions(data.permissions)
@@ -656,10 +719,10 @@ async def create_admin_account(
         text(
             """
             INSERT INTO admin_accounts_secure
-                (id, username, password_hash, salt, role,
+                (id, username, password_hash, salt, role, branch_id,
                  permissions_json, is_active, token_version)
             VALUES
-                (:id, :username, :password_hash, :salt, :role,
+                (:id, :username, :password_hash, :salt, :role, :branch_id,
                  :permissions_json, TRUE, 1)
             """
         ),
@@ -669,6 +732,7 @@ async def create_admin_account(
             "password_hash": password_hash,
             "salt": salt,
             "role": role,
+            "branch_id": branch_id,
             "permissions_json": json.dumps(permissions),
         },
     )
@@ -681,6 +745,7 @@ async def create_admin_account(
             "id": account_id,
             "username": username,
             "role": role,
+            "branch_id": branch_id,
             "permissions": permissions,
             "is_active": True,
         },
@@ -700,7 +765,7 @@ async def update_admin_account(
     current_result = await db.execute(
         text(
             """
-            SELECT id, username, role, permissions_json, is_active
+            SELECT id, username, role, branch_id, permissions_json, is_active
             FROM admin_accounts_secure
             WHERE id = :id
             """
@@ -710,6 +775,9 @@ async def update_admin_account(
     current = current_result.mappings().first()
     if current is None:
         raise HTTPException(status_code=404, detail="Admin account not found.")
+    current_branch_id = int(current["branch_id"]) if current.get("branch_id") is not None else await _default_branch_id(db)
+    if identity.role != "super_admin" and current_branch_id != identity.branch_id:
+        raise HTTPException(status_code=403, detail="You can only manage Admin accounts for your own branch.")
 
     updates: list[str] = []
     params: dict[str, Any] = {"id": account_id}
@@ -733,6 +801,12 @@ async def update_admin_account(
             raise HTTPException(status_code=400, detail="Role must be admin or manager.")
         updates.append("role = :role")
         params["role"] = role
+
+    if data.branch_id is not None:
+        if identity.role != "super_admin" and int(data.branch_id) != int(identity.branch_id or 0):
+            raise HTTPException(status_code=403, detail="Only Super Admin can move an account to another branch.")
+        params["branch_id"] = await _require_valid_branch(db, data.branch_id)
+        updates.append("branch_id = :branch_id")
 
     if data.permissions is not None:
         updates.append("permissions_json = :permissions_json")
@@ -772,13 +846,16 @@ async def delete_admin_account(
     require_accounts_permission(identity)
     await ensure_admin_tables(db)
 
-    result = await db.execute(
-        text("DELETE FROM admin_accounts_secure WHERE id = :id"),
+    current = (await db.execute(
+        text("SELECT id, branch_id FROM admin_accounts_secure WHERE id = :id"),
         {"id": account_id},
-    )
-    if not getattr(result, "rowcount", 0):
-        await db.rollback()
+    )).mappings().first()
+    if current is None:
         raise HTTPException(status_code=404, detail="Admin account not found.")
+    current_branch_id = int(current["branch_id"]) if current.get("branch_id") is not None else await _default_branch_id(db)
+    if identity.role != "super_admin" and current_branch_id != identity.branch_id:
+        raise HTTPException(status_code=403, detail="You can only manage Admin accounts for your own branch.")
+    await db.execute(text("DELETE FROM admin_accounts_secure WHERE id = :id"), {"id": account_id})
     await db.commit()
     return {"success": True, "message": "Admin account deleted."}
 

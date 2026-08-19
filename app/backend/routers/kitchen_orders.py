@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from models.orders import Orders
+from models.branches import Branches
+from services.branch_kitchen_auth import verify_branch_kitchen_pin
 from models.restaurant_settings import Restaurant_settings
 from services.customer_push_service import notify_customer_order_update_safely
 
@@ -33,19 +35,13 @@ class KitchenRestaurantStatusUpdate(BaseModel):
     status: str
 
 
-def verify_kitchen_pin(
+async def verify_kitchen_pin(
     x_kitchen_pin: str = Header(default="", alias="X-Kitchen-Pin"),
-) -> str:
-    expected_pin = os.getenv("KITCHEN_PIN", "").strip()
-    if len(expected_pin) < 4:
-        raise HTTPException(status_code=503, detail="Set KITCHEN_PIN in Render Environment first")
-    supplied = (x_kitchen_pin or "").strip()
-    if not supplied or not secrets.compare_digest(supplied, expected_pin):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Kitchen PIN. Login to Kitchen again.",
-        )
-    return supplied
+    x_branch_id: Optional[int] = Header(default=None, alias="X-Branch-Id"),
+    branch_id: Optional[int] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[int]:
+    return await verify_branch_kitchen_pin(db, x_kitchen_pin, x_branch_id or branch_id)
 
 
 
@@ -79,25 +75,38 @@ def is_delivery_order(order: Orders) -> bool:
 @router.put("/restaurant-status")
 async def update_restaurant_status(
     data: KitchenRestaurantStatusUpdate,
-    _pin: str = Depends(verify_kitchen_pin),
+    kitchen_branch_id: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Allow Kitchen to change only the public open/busy/closed status."""
+    """Allow Kitchen to change only its own branch open/busy/closed status."""
     new_status = str(data.status or "").lower().strip()
     if new_status not in {"open", "busy", "closed"}:
         raise HTTPException(status_code=400, detail="Invalid shop status")
 
-    result = await db.execute(
-        select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
-    )
-    settings = result.scalar_one_or_none()
-    if not settings:
-        raise HTTPException(status_code=404, detail="Restaurant settings not found")
+    settings = None
+    branch = None
+    if kitchen_branch_id is not None:
+        branch = (await db.execute(select(Branches).where(Branches.id == int(kitchen_branch_id)))).scalar_one_or_none()
 
-    settings.restaurant_status = new_status
+    if branch is not None and not bool(branch.is_default):
+        branch.restaurant_status = new_status
+    else:
+        result = await db.execute(
+            select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
+        )
+        settings = result.scalar_one_or_none()
+        if not settings:
+            raise HTTPException(status_code=404, detail="Restaurant settings not found")
+        settings.restaurant_status = new_status
+        if branch is not None:
+            branch.restaurant_status = new_status
+
     try:
         await db.commit()
-        await db.refresh(settings)
+        if settings is not None:
+            await db.refresh(settings)
+        if branch is not None:
+            await db.refresh(branch)
     except Exception as exc:
         await db.rollback()
         logger.exception("Kitchen could not update restaurant status")
@@ -148,10 +157,12 @@ async def get_kitchen_orders(
     branch_id: Optional[int] = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     skip: int = Query(default=0, ge=0),
-    _pin: str = Depends(verify_kitchen_pin),
+    authorized_branch_id: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Orders).order_by(desc(Orders.created_at))
+    if authorized_branch_id is not None:
+        branch_id = authorized_branch_id
     if branch_id is not None:
         query = query.where(Orders.branch_id == branch_id)
     if status and status != "all":
@@ -171,13 +182,15 @@ async def get_kitchen_orders(
 async def update_kitchen_order_status(
     order_id: int,
     data: KitchenOrderStatusUpdate,
-    _pin: str = Depends(verify_kitchen_pin),
+    authorized_branch_id: Optional[int] = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Orders).where(Orders.id == order_id))
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if authorized_branch_id is not None and int(getattr(order, "branch_id", 0) or 0) != int(authorized_branch_id):
+        raise HTTPException(status_code=403, detail="This order belongs to another branch")
 
     transitions = {
         "new": {"accepted", "preparing", "cancelled"},
