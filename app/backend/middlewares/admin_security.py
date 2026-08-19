@@ -7,6 +7,7 @@ entity router receives the same protection without duplicating auth code.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 from typing import Optional
@@ -106,14 +107,38 @@ def _required_permission(path: str, method: str) -> Optional[str]:
     return None
 
 
-def _valid_kitchen_pin(request: Request) -> bool:
-    expected = os.getenv("KITCHEN_PIN", "").strip()
+async def _valid_kitchen_pin(request: Request) -> bool:
     supplied = request.headers.get("X-Kitchen-Pin", "").strip()
-    return bool(
-        len(expected) >= 4
-        and supplied
-        and hmac.compare_digest(supplied, expected)
-    )
+    raw_branch = request.headers.get("X-Branch-Id", "").strip() or request.query_params.get("branch_id", "").strip()
+
+    if raw_branch and db_manager.async_session_maker:
+        try:
+            branch_id = int(raw_branch)
+        except ValueError:
+            return False
+        from sqlalchemy import text
+        async with db_manager.async_session_maker() as db:
+            row = (await db.execute(text(
+                "SELECT is_default, kitchen_pin_hash, kitchen_pin_salt FROM branches WHERE id = :id AND is_active = TRUE"
+            ), {"id": branch_id})).mappings().first()
+        if not row:
+            return False
+        salt = str(row.get("kitchen_pin_salt") or "")
+        expected_hash = str(row.get("kitchen_pin_hash") or "")
+        if salt and expected_hash:
+            try:
+                calculated = hashlib.pbkdf2_hmac(
+                    "sha256", supplied.encode("utf-8"), bytes.fromhex(salt), 180_000
+                ).hex()
+            except Exception:
+                return False
+            return bool(supplied and hmac.compare_digest(calculated, expected_hash))
+        if not bool(row.get("is_default")):
+            return False
+
+    # Legacy/default Kitchen remains exactly on the existing Render KITCHEN_PIN.
+    expected = os.getenv("KITCHEN_PIN", "").strip()
+    return bool(len(expected) >= 4 and supplied and hmac.compare_digest(supplied, expected))
 
 
 async def _admin_identity(request: Request):
@@ -147,7 +172,7 @@ async def admin_security_middleware(request: Request, call_next):
     if (
         path.startswith("/api/v1/rider/admin/")
         and method == "GET"
-        and _valid_kitchen_pin(request)
+        and await _valid_kitchen_pin(request)
     ):
         return await call_next(request)
 
