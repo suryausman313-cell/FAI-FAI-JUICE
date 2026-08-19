@@ -8,6 +8,7 @@ import {
   Database,
   Home,
   KeyRound,
+  MapPinned,
   Megaphone,
   PackageCheck,
   Percent,
@@ -22,6 +23,14 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
 const SETTINGS = [
+  {
+    path: '/admin/settings/branches',
+    title: 'Branches',
+    description:
+      'Add Fujairah, Dubai, Dibba and future branches with GPS locations.',
+    icon: MapPinned,
+    color: 'text-teal-400',
+  },
   {
     path: '/admin/settings/brand',
     title: 'Brand & App Settings',

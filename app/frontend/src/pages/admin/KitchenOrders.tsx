@@ -49,6 +49,8 @@ declare global {
 }
 
 type KitchenOrder = Order & {
+  branch_id?: number | null;
+  branch_name?: string;
   order_type?: string;
   service_fee?: number | string;
   small_order_fee?: number | string;
@@ -98,6 +100,7 @@ type AssignmentInfo = {
   distance_to_shop_km?: number | null;
 };
 
+type BranchOption = { id: number; name: string; is_active: boolean; is_default: boolean };
 type RestaurantStatus = 'open' | 'busy' | 'closed';
 type ViewMode = 'live' | 'today' | 'yesterday' | 'menu';
 
@@ -505,6 +508,11 @@ export default function KitchenOrders() {
   const [cancelOrderTarget, setCancelOrderTarget] = useState<KitchenOrder | null>(null);
   const [cancelPreset, setCancelPreset] = useState('');
   const [cancelOtherReason, setCancelOtherReason] = useState('');
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [kitchenBranchId, setKitchenBranchId] = useState<number | null>(() => {
+    const saved = Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0);
+    return saved > 0 ? saved : null;
+  });
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
@@ -547,6 +555,42 @@ export default function KitchenOrders() {
     }),
     [kitchenPin],
   );
+
+  const loadBranches = useCallback(async () => {
+    try {
+      const response = await axios.get(`${getAPIBaseURL()}/api/v1/entities/branches`, {
+        params: { active_only: true },
+        timeout: 12000,
+      });
+      const list: BranchOption[] = (response.data?.items || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name || `Branch ${item.id}`),
+        is_active: Boolean(item.is_active),
+        is_default: Boolean(item.is_default),
+      }));
+      setBranches(list);
+      if (list.length > 0) {
+        const saved = Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0);
+        const selected = list.find((item) => item.id === saved) || list.find((item) => item.is_default) || list[0];
+        setKitchenBranchId(selected.id);
+        localStorage.setItem('fai_fai_kitchen_branch_id', String(selected.id));
+      }
+    } catch (error) {
+      console.error('Branch loading failed:', error);
+      // Safe fallback: old single-shop Kitchen continues without branch filtering.
+      setBranches([]);
+      setKitchenBranchId(null);
+    }
+  }, []);
+
+  function selectKitchenBranch(nextId: number) {
+    if (!Number.isFinite(nextId) || nextId <= 0) return;
+    localStorage.setItem('fai_fai_kitchen_branch_id', String(nextId));
+    previousNewIdsRef.current = new Set();
+    firstLoadRef.current = true;
+    setSelectedOrderId(null);
+    setKitchenBranchId(nextId);
+  }
 
   const loadReceiptSettings = useCallback(async () => {
     try {
@@ -599,7 +643,7 @@ export default function KitchenOrders() {
     try {
       const response = await axios.get(`${getAPIBaseURL()}/api/v1/admin/kitchen/orders`, {
         headers: kitchenHeaders(),
-        params: { limit: 300 },
+        params: { limit: 300, ...(kitchenBranchId ? { branch_id: kitchenBranchId } : {}) },
         timeout: 15000,
       });
 
@@ -641,13 +685,14 @@ export default function KitchenOrders() {
       setRefreshing(false);
       loadInProgressRef.current = false;
     }
-  }, [kitchenHeaders]);
+  }, [kitchenHeaders, kitchenBranchId]);
 
   useEffect(() => {
     setAuthenticated(localStorage.getItem('kitchen_auth') === 'true');
     void loadReceiptSettings();
     void loadRestaurantStatus();
-  }, [loadReceiptSettings, loadRestaurantStatus]);
+    void loadBranches();
+  }, [loadReceiptSettings, loadRestaurantStatus, loadBranches]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -680,7 +725,7 @@ export default function KitchenOrders() {
           'Content-Type': 'application/json',
           'X-Kitchen-Pin': normalizedPin,
         },
-        params: { limit: 1 },
+        params: { limit: 1, ...(kitchenBranchId ? { branch_id: kitchenBranchId } : {}) },
         timeout: 12000,
       });
 
@@ -992,6 +1037,7 @@ export default function KitchenOrders() {
               </div>
 
               <div className="mt-5 grid gap-3">
+                {order.branch_name && <Line label="Branch" value={order.branch_name} />}
                 <Line label="Payment" value={paymentLabel(order)} />
                 <Line label="Items" value={`${totalItems(order)} item${totalItems(order) === 1 ? '' : 's'}`} />
                 {acceptedAssignment && <Line label="Rider" value={riderKitchenLabel(acceptedAssignment)} />}
@@ -1278,6 +1324,24 @@ export default function KitchenOrders() {
             )}
           </div>
         </header>
+
+        {!selectedOrder && branches.length > 1 && (
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <label className="flex items-center gap-3">
+              <span className="whitespace-nowrap text-sm font-bold text-slate-700">Kitchen branch</span>
+              <select
+                value={kitchenBranchId || ''}
+                onChange={(event) => selectKitchenBranch(Number(event.target.value))}
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-900 outline-none focus:border-slate-400"
+              >
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>{branch.name}</option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-1 text-xs text-slate-400">This device will only show orders for the selected branch.</p>
+          </div>
+        )}
 
         {!selectedOrder && (
           <div className="mb-4 flex items-center justify-between px-1 text-sm text-slate-500">

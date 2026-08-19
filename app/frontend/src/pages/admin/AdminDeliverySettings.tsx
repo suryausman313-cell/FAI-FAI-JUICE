@@ -32,6 +32,7 @@ import {
 
 interface Zone {
   id: number;
+  branch_id?: number | null;
   zone_name: string;
   min_distance_km: number;
   max_distance_km: number;
@@ -41,8 +42,24 @@ interface Zone {
   polygon_json?: string;
 }
 
+type DeliveryBranch = {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  is_active: boolean;
+  is_default: boolean;
+  delivery_enabled?: boolean | null;
+  delivery_schedule_enabled?: boolean | null;
+  delivery_start_time?: string | null;
+  delivery_end_time?: string | null;
+  estimated_delivery_time?: string | null;
+};
+
 export default function AdminDeliverySettings() {
   const local = readExtendedSettings();
+  const [branches, setBranches] = useState<DeliveryBranch[]>([]);
+  const [branchId, setBranchId] = useState<number | null>(null);
   const [settingsId, setSettingsId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -56,30 +73,54 @@ export default function AdminDeliverySettings() {
   });
 
   useEffect(() => {
-    void load();
+    void (async () => {
+      try {
+        const response = await client.entities.branches.query({});
+        const list = (response?.data?.items || []) as DeliveryBranch[];
+        setBranches(list);
+        const first = list.find(branch => branch.is_default) || list[0];
+        if (first) setBranchId(Number(first.id));
+      } catch (error) {
+        console.error(error);
+        toast.error('Could not load branches');
+      }
+    })();
   }, []);
 
-  async function load() {
+  useEffect(() => {
+    if (branchId) void load(branchId);
+  }, [branchId]);
+
+  async function load(activeBranchId: number) {
     try {
       const settings = await loadRestaurantSettings();
       if (!settings) return;
 
       setSettingsId(Number(settings.id));
+      const branch = branches.find(item => Number(item.id) === Number(activeBranchId));
+      const isDefault = branch?.is_default !== false;
       setForm({
-        delivery_enabled: settings.delivery_enabled === true,
-        delivery_schedule_enabled:
-          settings.delivery_schedule_enabled === true,
-        delivery_start_time:
-          settings.delivery_start_time || local.delivery_start_time,
-        delivery_end_time:
-          settings.delivery_end_time || local.delivery_end_time,
-        estimated_delivery_time:
-          settings.estimated_delivery_time ||
-          local.estimated_delivery_time,
-        restaurant_lat:
-          String(settings.restaurant_lat || local.restaurant_lat),
-        restaurant_lng:
-          String(settings.restaurant_lng || local.restaurant_lng),
+        delivery_enabled: isDefault
+          ? settings.delivery_enabled === true
+          : (branch?.delivery_enabled ?? (settings.delivery_enabled === true)),
+        delivery_schedule_enabled: isDefault
+          ? settings.delivery_schedule_enabled === true
+          : (branch?.delivery_schedule_enabled ?? (settings.delivery_schedule_enabled === true)),
+        delivery_start_time: isDefault
+          ? (settings.delivery_start_time || local.delivery_start_time)
+          : (branch?.delivery_start_time || settings.delivery_start_time || local.delivery_start_time),
+        delivery_end_time: isDefault
+          ? (settings.delivery_end_time || local.delivery_end_time)
+          : (branch?.delivery_end_time || settings.delivery_end_time || local.delivery_end_time),
+        estimated_delivery_time: isDefault
+          ? (settings.estimated_delivery_time || local.estimated_delivery_time)
+          : (branch?.estimated_delivery_time || settings.estimated_delivery_time || local.estimated_delivery_time),
+        restaurant_lat: String(
+          branch?.latitude ?? settings.restaurant_lat ?? local.restaurant_lat
+        ),
+        restaurant_lng: String(
+          branch?.longitude ?? settings.restaurant_lng ?? local.restaurant_lng
+        ),
       });
     } catch (error) {
       console.error(error);
@@ -87,16 +128,48 @@ export default function AdminDeliverySettings() {
   }
 
   async function save() {
-    if (!settingsId) {
-      toast.error('Restaurant settings record was not found');
+    const branch = branches.find(item => Number(item.id) === Number(branchId));
+    if (!branch) {
+      toast.error('Select a branch first');
       return;
     }
 
     setSaving(true);
     try {
-      await updateRestaurantSettings(settingsId, form);
-      saveExtendedSettings(form);
-      toast.success('Delivery and shop location saved');
+      const branchDelivery = {
+        latitude: Number(form.restaurant_lat),
+        longitude: Number(form.restaurant_lng),
+        delivery_enabled: form.delivery_enabled,
+        delivery_schedule_enabled: form.delivery_schedule_enabled,
+        delivery_start_time: form.delivery_start_time,
+        delivery_end_time: form.delivery_end_time,
+        estimated_delivery_time: form.estimated_delivery_time,
+      };
+
+      if (branch.is_default) {
+        if (!settingsId) {
+          toast.error('Restaurant settings record was not found');
+          return;
+        }
+        // Keep the original/default branch on the exact legacy settings path.
+        await updateRestaurantSettings(settingsId, form);
+        saveExtendedSettings(form);
+        await client.entities.branches.update({
+          id: String(branch.id),
+          data: branchDelivery,
+        });
+      } else {
+        // New branches store their delivery controls independently.
+        await client.entities.branches.update({
+          id: String(branch.id),
+          data: branchDelivery,
+        });
+      }
+
+      setBranches(current => current.map(item =>
+        item.id === branch.id ? { ...item, ...branchDelivery } : item
+      ));
+      toast.success(`Delivery settings saved for ${branch.name}`);
     } catch (error: any) {
       toast.error(error?.message || 'Could not save delivery settings');
     } finally {
@@ -141,6 +214,24 @@ export default function AdminDeliverySettings() {
       maxWidth="max-w-5xl"
     >
       <div className="space-y-5">
+        <Card className="bg-gray-900 border-gray-800 p-4">
+          <Label className="text-gray-300">Branch</Label>
+          <select
+            value={branchId || ''}
+            onChange={event => setBranchId(Number(event.target.value))}
+            className="mt-2 w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+          >
+            {branches.map(branch => (
+              <option key={branch.id} value={branch.id}>
+                {branch.name}{branch.is_default ? ' (Current / Default)' : ''}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-xs text-gray-500">
+            Delivery distance charges and blocked areas below belong only to this branch.
+          </p>
+        </Card>
+
         <Card className="bg-gray-900 border-gray-800 p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -243,7 +334,7 @@ export default function AdminDeliverySettings() {
             <p className="text-gray-500 text-sm mb-4">
               Actual driving distance chooses a custom slab. Edit km and AED anytime.
             </p>
-            <DeliveryZonesManager />
+            <DeliveryZonesManager branchId={branchId} />
           </Card>
         )}
 
@@ -257,6 +348,7 @@ export default function AdminDeliverySettings() {
               Draw only the area where delivery must be blocked. A blocked area wins even when it is close to the shop.
             </p>
             <BlockedAreasManager
+              branchId={branchId}
               shopLat={Number.parseFloat(form.restaurant_lat)}
               shopLng={Number.parseFloat(form.restaurant_lng)}
             />
@@ -310,7 +402,7 @@ export default function AdminDeliverySettings() {
   );
 }
 
-function DeliveryZonesManager() {
+function DeliveryZonesManager({ branchId }: { branchId: number | null }) {
   const [zones, setZones] = useState<Zone[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -329,15 +421,15 @@ function DeliveryZonesManager() {
   });
 
   useEffect(() => {
-    void loadZones();
-  }, []);
+    if (branchId) void loadZones();
+  }, [branchId]);
 
   async function loadZones() {
     try {
       const response = await client.apiCall.invoke({
         url:
           '/api/v1/entities/delivery_zones' +
-          '?query={"zone_type":"distance"}&sort=min_distance_km&limit=50',
+          `?query=${encodeURIComponent(JSON.stringify({ zone_type: 'distance', branch_id: branchId }))}&sort=min_distance_km&limit=50`,
         method: 'GET',
       });
       setZones(response?.data?.items || []);
@@ -369,6 +461,7 @@ function DeliveryZonesManager() {
         url: '/api/v1/entities/delivery_zones',
         method: 'POST',
         data: {
+          branch_id: branchId,
           zone_name: `${newZone.min_distance_km}-${newZone.max_distance_km} km`,
           min_distance_km: Number(newZone.min_distance_km),
           max_distance_km: Number(newZone.max_distance_km),
@@ -612,9 +705,11 @@ function ZoneInputs({
 
 
 function BlockedAreasManager({
+  branchId,
   shopLat,
   shopLng,
 }: {
+  branchId: number | null;
   shopLat: number;
   shopLng: number;
 }) {
@@ -637,12 +732,12 @@ function BlockedAreasManager({
   const [manualName, setManualName] = useState('');
   const [draft, setDraft] = useState<[number, number][]>([]);
 
-  useEffect(() => { void loadAreas(); }, []);
+  useEffect(() => { if (branchId) void loadAreas(); }, [branchId]);
 
   async function loadAreas() {
     try {
       const response = await client.apiCall.invoke({
-        url: '/api/v1/entities/delivery_zones?query={"zone_type":"blocked"}&sort=zone_name&limit=100',
+        url: `/api/v1/entities/delivery_zones?query=${encodeURIComponent(JSON.stringify({ zone_type: 'blocked', branch_id: branchId }))}&sort=zone_name&limit=100`,
         method: 'GET',
       });
       setAreas(response?.data?.items || []);
