@@ -117,6 +117,8 @@ def serialize_order(order: Orders) -> dict:
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
         "order_notes": order.order_notes or "",
+        "branch_id": getattr(order, "branch_id", None),
+        "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
         "order_type": "delivery" if is_delivery_order(order) else "pickup",
         "status": normalize_status(order.status),
@@ -143,12 +145,15 @@ def serialize_order(order: Orders) -> dict:
 @router.get("/orders")
 async def get_kitchen_orders(
     status: Optional[str] = Query(default=None),
+    branch_id: Optional[int] = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     skip: int = Query(default=0, ge=0),
     _pin: str = Depends(verify_kitchen_pin),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Orders).order_by(desc(Orders.created_at))
+    if branch_id is not None:
+        query = query.where(Orders.branch_id == branch_id)
     if status and status != "all":
         wanted = normalize_status(status)
         if wanted == "new":

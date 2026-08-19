@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/v1/entities/delivery_zones", tags=["delivery_zon
 # ---------- Pydantic Schemas ----------
 class Delivery_zonesData(BaseModel):
     """Entity data schema (for create/update)"""
+    branch_id: Optional[int] = None
     zone_name: str
     min_distance_km: float
     max_distance_km: float
@@ -37,6 +38,7 @@ class Delivery_zonesData(BaseModel):
 
 class Delivery_zonesUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
+    branch_id: Optional[int] = None
     zone_name: Optional[str] = None
     min_distance_km: Optional[float] = None
     max_distance_km: Optional[float] = None
@@ -49,6 +51,7 @@ class Delivery_zonesUpdateData(BaseModel):
 class Delivery_zonesResponse(BaseModel):
     """Entity response schema"""
     id: int
+    branch_id: Optional[int] = None
     zone_name: str
     min_distance_km: float
     max_distance_km: float
@@ -92,6 +95,47 @@ class Delivery_zonesBatchDeleteRequest(BaseModel):
     ids: List[int]
 
 
+async def _default_branch_id(db: AsyncSession) -> Optional[int]:
+    from sqlalchemy import select
+    from models.branches import Branches
+
+    branch_id = (await db.execute(
+        select(Branches.id).where(Branches.is_default.is_(True), Branches.is_active.is_(True)).order_by(Branches.id).limit(1)
+    )).scalar_one_or_none()
+    if branch_id is None:
+        branch_id = (await db.execute(
+            select(Branches.id).where(Branches.is_active.is_(True)).order_by(Branches.id).limit(1)
+        )).scalar_one_or_none()
+    return int(branch_id) if branch_id is not None else None
+
+
+async def _resolve_branch_id(db: AsyncSession, requested: Optional[int]) -> int:
+    from sqlalchemy import select
+    from models.branches import Branches
+
+    if requested is None:
+        branch_id = await _default_branch_id(db)
+        if branch_id is None:
+            raise HTTPException(status_code=503, detail="No active branch is configured")
+        return branch_id
+
+    branch = (await db.execute(
+        select(Branches).where(Branches.id == int(requested), Branches.is_active.is_(True))
+    )).scalar_one_or_none()
+    if not branch:
+        raise HTTPException(status_code=400, detail="Selected branch is not available")
+    return int(branch.id)
+
+
+async def _scope_query_to_branch(query_dict: Optional[dict], db: AsyncSession) -> dict:
+    scoped = dict(query_dict or {})
+    if "branch_id" not in scoped or scoped.get("branch_id") is None:
+        scoped["branch_id"] = await _resolve_branch_id(db, None)
+    else:
+        scoped["branch_id"] = await _resolve_branch_id(db, int(scoped["branch_id"]))
+    return scoped
+
+
 # ---------- Routes ----------
 @router.get("", response_model=Delivery_zonesListResponse)
 async def query_delivery_zoness(
@@ -114,6 +158,7 @@ async def query_delivery_zoness(
                 query_dict = json.loads(query)
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid query JSON format")
+        query_dict = await _scope_query_to_branch(query_dict, db)
         
         result = await service.get_list(
             skip=skip, 
@@ -154,6 +199,7 @@ async def query_delivery_zoness_all(
                 query_dict = json.loads(query)
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid query JSON format")
+        query_dict = await _scope_query_to_branch(query_dict, db)
 
         result = await service.get_list(
             skip=skip,
@@ -693,7 +739,9 @@ async def create_delivery_zones(
     
     service = Delivery_zonesService(db)
     try:
-        result = await service.create(data.model_dump())
+        payload = data.model_dump()
+        payload["branch_id"] = await _resolve_branch_id(db, payload.get("branch_id"))
+        result = await service.create(payload)
         if not result:
             raise HTTPException(status_code=400, detail="Failed to create delivery_zones")
         
@@ -720,7 +768,9 @@ async def create_delivery_zoness_batch(
     
     try:
         for item_data in request.items:
-            result = await service.create(item_data.model_dump())
+            payload = item_data.model_dump()
+            payload["branch_id"] = await _resolve_branch_id(db, payload.get("branch_id"))
+            result = await service.create(payload)
             if result:
                 results.append(result)
         
@@ -845,6 +895,7 @@ from models.delivery_zones import Delivery_zones
 
 
 class CalculateChargeRequest(BaseModel):
+    branch_id: Optional[int] = None
     customer_lat: float = Field(ge=-90, le=90)
     customer_lng: float = Field(ge=-180, le=180)
     restaurant_lat: float = Field(ge=-90, le=90)
@@ -1018,11 +1069,12 @@ async def get_road_distance_km(data: CalculateChargeRequest) -> Tuple[float, str
 
 
 async def evaluate_delivery_location(data: CalculateChargeRequest, db: AsyncSession) -> dict:
-    """Server source of truth: blocked area -> road distance -> matching charge slab."""
+    """Server source of truth: selected branch -> blocked area -> road distance -> matching charge slab."""
     service = Delivery_zonesService(db)
+    branch_id = await _resolve_branch_id(db, data.branch_id)
 
     blocked_result = await service.get_list(
-        skip=0, limit=200, query_dict={"is_active": True, "zone_type": "blocked"}, sort="zone_name"
+        skip=0, limit=200, query_dict={"branch_id": branch_id, "is_active": True, "zone_type": "blocked"}, sort="zone_name"
     )
     for area in blocked_result.get("items", []):
         raw_polygon = getattr(area, "polygon_json", "") or ""
@@ -1034,9 +1086,20 @@ async def evaluate_delivery_location(data: CalculateChargeRequest, db: AsyncSess
                 "message": f"Delivery is not available in {getattr(area, 'zone_name', 'this area')}. Please choose another location or Pickup.",
             }
 
-    distance, distance_source = await get_road_distance_km(data)
+    distance_data = data
+    if data.branch_id is not None:
+        from sqlalchemy import select
+        from models.branches import Branches
+        branch = (await db.execute(select(Branches).where(Branches.id == branch_id))).scalar_one_or_none()
+        if branch is not None:
+            distance_data = data.model_copy(update={
+                "restaurant_lat": float(branch.latitude),
+                "restaurant_lng": float(branch.longitude),
+            })
+
+    distance, distance_source = await get_road_distance_km(distance_data)
     result = await service.get_list(
-        skip=0, limit=100, query_dict={"is_active": True, "zone_type": "distance"}, sort="min_distance_km"
+        skip=0, limit=100, query_dict={"branch_id": branch_id, "is_active": True, "zone_type": "distance"}, sort="min_distance_km"
     )
     zones = result.get("items", [])
     if not zones:

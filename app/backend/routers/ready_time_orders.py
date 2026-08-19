@@ -73,6 +73,8 @@ def serialize_order(order: Orders) -> dict:
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
         "order_notes": order.order_notes or "",
+        "branch_id": getattr(order, "branch_id", None),
+        "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
         "status": normalize_status(order.status),
         "total_amount": order.total_amount,

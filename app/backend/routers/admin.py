@@ -95,6 +95,8 @@ def serialize_order(order: Orders) -> dict:
         "customer_lat": getattr(order, "customer_lat", None),
         "customer_lng": getattr(order, "customer_lng", None),
         "customer_address": getattr(order, "customer_address", "") or "",
+        "branch_id": getattr(order, "branch_id", None),
+        "branch_name": getattr(order, "branch_name", "") or "",
         "delivery_area_name": getattr(order, "delivery_area_name", "") or "",
         "delivery_country": getattr(order, "delivery_country", "") or "",
         "delivery_distance_km": getattr(order, "delivery_distance_km", None),
@@ -124,6 +126,7 @@ class OrderStatusUpdate(BaseModel):
 async def get_kitchen_orders(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    branch_id: Optional[int] = None,
     limit: int = 100,
     skip: int = 0,
     kitchen_access: bool = Depends(verify_kitchen_pin),
@@ -137,6 +140,9 @@ async def get_kitchen_orders(
 
         if status and status != "all":
             query = query.where(Orders.status == status)
+
+        if branch_id is not None:
+            query = query.where(Orders.branch_id == branch_id)
 
         if search:
             query = query.where(

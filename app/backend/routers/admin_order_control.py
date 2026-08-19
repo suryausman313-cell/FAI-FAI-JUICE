@@ -54,6 +54,8 @@ def serialize_order(order: Orders, assignment: Optional[dict] = None) -> dict:
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
         "order_notes": order.order_notes or "",
+        "branch_id": getattr(order, "branch_id", None),
+        "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
         "order_type": (
             str(getattr(order, "order_type", "") or "").lower().strip()

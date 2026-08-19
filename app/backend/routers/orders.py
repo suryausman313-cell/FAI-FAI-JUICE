@@ -67,6 +67,7 @@ class PlaceOrderFullRequest(PlaceOrderRequest):
     customer_lng: Optional[float] = Field(default=None, ge=-180, le=180)
     customer_address: Optional[str] = Field(default="", max_length=500)
     order_type: Optional[str] = Field(default="pickup", max_length=20)
+    branch_id: Optional[int] = Field(default=None, ge=1)
 
 
 @router.post("/place")
@@ -135,6 +136,29 @@ async def place_order(
             select(Restaurant_settings).order_by(desc(Restaurant_settings.id)).limit(1)
         )
         settings = settings_result.scalar_one_or_none()
+
+        # ===== BRANCH ROUTING (backwards compatible) =====
+        # Old customer builds do not send branch_id. They continue using the
+        # default branch, so rolling out this backend cannot break the live app.
+        from models.branches import Branches
+
+        branch = None
+        if data.branch_id is not None:
+            branch = (await db.execute(
+                select(Branches).where(
+                    Branches.id == int(data.branch_id),
+                    Branches.is_active.is_(True),
+                ).limit(1)
+            )).scalar_one_or_none()
+            if branch is None:
+                raise HTTPException(status_code=400, detail="Selected branch is not available. Please choose another branch.")
+        else:
+            branch = (await db.execute(
+                select(Branches)
+                .where(Branches.is_active.is_(True))
+                .order_by(desc(Branches.is_default), Branches.id)
+                .limit(1)
+            )).scalar_one_or_none()
 
         # ===== SHOP OPEN/CLOSED + ORDER-TYPE RULES =====
         now_dubai = datetime.now(dubai_tz)
@@ -217,8 +241,16 @@ async def place_order(
             try:
                 from routers.delivery_zones import CalculateChargeRequest, evaluate_delivery_location
 
-                restaurant_lat = float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747
-                restaurant_lng = float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450
+                restaurant_lat = (
+                    float(branch.latitude)
+                    if branch is not None
+                    else (float(settings.restaurant_lat) if settings and settings.restaurant_lat else 25.2747)
+                )
+                restaurant_lng = (
+                    float(branch.longitude)
+                    if branch is not None
+                    else (float(settings.restaurant_lng) if settings and settings.restaurant_lng else 56.3450)
+                )
                 delivery_result = await evaluate_delivery_location(
                     CalculateChargeRequest(
                         customer_lat=float(data.customer_lat),
@@ -441,6 +473,7 @@ async def place_order(
                 Orders.total_amount == server_total,
                 Orders.created_at >= sixty_seconds_ago,
                 Orders.status != "cancelled",
+                *(([Orders.branch_id == branch.id]) if branch is not None else []),
             ).order_by(desc(Orders.created_at)).limit(1)
         )
         existing_order = duplicate_check.scalar_one_or_none()
@@ -466,6 +499,8 @@ async def place_order(
                 str(data.customer_address or "").strip()
                 or (f"GPS: {float(data.customer_lat):.6f},{float(data.customer_lng):.6f}" if normalized_order_type == "delivery" else "")
             ) if normalized_order_type == "delivery" else "",
+            branch_id=branch.id if branch is not None else None,
+            branch_name=branch.name if branch is not None else "",
             delivery_distance_km=delivery_distance_km if normalized_order_type == "delivery" else None,
             delivery_zone_name=delivery_zone_name if normalized_order_type == "delivery" else "",
             status="new",
@@ -501,6 +536,7 @@ async def place_order(
             "success": True,
             "order_id": order.id,
             "status": order.status,
+            "branch": ({"id": branch.id, "name": branch.name} if branch is not None else None),
             "rider_assignment": rider_assignment,
             "pricing": {
                 "subtotal": subtotal_amount,
@@ -679,6 +715,8 @@ async def get_my_orders(
                 "customer_lat": getattr(order, "customer_lat", None),
                 "customer_lng": getattr(order, "customer_lng", None),
                 "customer_address": getattr(order, "customer_address", "") or "",
+                "branch_id": getattr(order, "branch_id", None),
+                "branch_name": getattr(order, "branch_name", "") or "",
                 "status": order.status,
                 "total_amount": order.total_amount,
                 "subtotal_amount": order.subtotal_amount or 0,
