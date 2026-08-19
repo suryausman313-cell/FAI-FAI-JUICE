@@ -23,6 +23,7 @@ import { LanguagePickerModal } from '@/components/LanguagePicker';
 import { CustomerHeartbeatProvider } from '@/components/CustomerHeartbeatProvider';
 import { CustomerAuthProvider } from '@/contexts/CustomerAuthContext';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
+import { BranchProvider } from '@/contexts/BranchContext';
 
 // Customer pages
 const Index = lazy(() => import('./pages/Index'));
@@ -87,6 +88,10 @@ const AdminBrandSettings = lazy(
 
 const AdminRestaurantSettings = lazy(
   () => import('./pages/admin/AdminRestaurantSettings')
+);
+
+const AdminBranches = lazy(
+  () => import('./pages/admin/AdminBranches')
 );
 
 const AdminHomepageSettings = lazy(
@@ -386,6 +391,11 @@ const AppRoutes = () => (
       />
 
       <Route
+        path="/admin/settings/branches"
+        element={<AdminBranches />}
+      />
+
+      <Route
         path="/admin/settings/homepage"
         element={<AdminHomepageSettings />}
       />
@@ -498,9 +508,11 @@ const App = () => (
 
         <BrowserRouter>
           <CustomerAuthProvider>
-            <CustomerHeartbeatProvider>
-              <AppRoutes />
-            </CustomerHeartbeatProvider>
+            <BranchProvider>
+              <CustomerHeartbeatProvider>
+                <AppRoutes />
+              </CustomerHeartbeatProvider>
+            </BranchProvider>
           </CustomerAuthProvider>
         </BrowserRouter>
       </TooltipProvider>
