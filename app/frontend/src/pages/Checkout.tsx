@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { MapPin, Car, Tag, Navigation, CheckCircle, X } from 'lucide-react';
 import CustomerLayout from '@/components/CustomerLayout';
+import { useBranch } from '@/contexts/BranchContext';
 import { client, CartItem, Offer, localizedMenuText } from '@/lib/api';
 import { getCart, getCartTotal, getCartOriginalTotal, getCartItemDiscountTotal, clearCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
@@ -391,6 +392,7 @@ const CHECKOUT_AR: Record<string, string> = {
 };
 
 export default function Checkout() {
+  const { selectedBranch } = useBranch();
   const navigate = useNavigate();
   const { t: baseT, language } = useTranslation();
   const humanizeKey = (key: string) =>
@@ -447,6 +449,12 @@ export default function Checkout() {
   // Delivery zone settings
   const [restaurantLat, setRestaurantLat] = useState(25.2747);
   const [restaurantLng, setRestaurantLng] = useState(56.3450);
+
+  useEffect(() => {
+    if (!selectedBranch) return;
+    setRestaurantLat(Number(selectedBranch.latitude));
+    setRestaurantLng(Number(selectedBranch.longitude));
+  }, [selectedBranch]);
   const [nearRadius, setNearRadius] = useState(5);
   const [farRadius, setFarRadius] = useState(15);
   const [nearCharge, setNearCharge] = useState(5);
@@ -489,9 +497,12 @@ export default function Checkout() {
 
   useEffect(() => {
     setCart(getCart());
-    loadDeliverySettings();
     loadActivePromoOffers();
   }, []);
+
+  useEffect(() => {
+    void loadDeliverySettings();
+  }, [selectedBranch?.id]);
 
   const deliveryAvailableNow = deliveryEnabled && (
     !deliveryScheduleEnabled ||
@@ -696,6 +707,7 @@ export default function Checkout() {
         url: '/api/v1/entities/delivery_zones/calculate',
         method: 'POST',
         data: {
+          branch_id: selectedBranch?.id || null,
           customer_lat: lat,
           customer_lng: lng,
           restaurant_lat: restaurantLat,
@@ -801,8 +813,22 @@ export default function Checkout() {
         setDeliveryEndTime(s.delivery_end_time || '01:00');
         setDeliveryCharge(parseFloat(s.delivery_charges) || 5);
         setEstimatedDeliveryTime(s.estimated_delivery_time || '30-45 min');
-        if (s.restaurant_lat) setRestaurantLat(parseFloat(s.restaurant_lat));
-        if (s.restaurant_lng) setRestaurantLng(parseFloat(s.restaurant_lng));
+
+        // The original/default branch keeps using the legacy restaurant settings.
+        // Only additional branches apply their own delivery overrides.
+        if (selectedBranch && !selectedBranch.is_default) {
+          if (selectedBranch.delivery_enabled !== null && selectedBranch.delivery_enabled !== undefined) {
+            setDeliveryEnabled(selectedBranch.delivery_enabled === true);
+          }
+          if (selectedBranch.delivery_schedule_enabled !== null && selectedBranch.delivery_schedule_enabled !== undefined) {
+            setDeliveryScheduleEnabled(selectedBranch.delivery_schedule_enabled === true);
+          }
+          if (selectedBranch.delivery_start_time) setDeliveryStartTime(selectedBranch.delivery_start_time);
+          if (selectedBranch.delivery_end_time) setDeliveryEndTime(selectedBranch.delivery_end_time);
+          if (selectedBranch.estimated_delivery_time) setEstimatedDeliveryTime(selectedBranch.estimated_delivery_time);
+        }
+        if (!selectedBranch && s.restaurant_lat) setRestaurantLat(parseFloat(s.restaurant_lat));
+        if (!selectedBranch && s.restaurant_lng) setRestaurantLng(parseFloat(s.restaurant_lng));
         if (s.near_radius) setNearRadius(parseFloat(s.near_radius));
         if (s.far_radius) setFarRadius(parseFloat(s.far_radius));
         if (s.near_charge) setNearCharge(parseFloat(s.near_charge));
@@ -826,7 +852,7 @@ export default function Checkout() {
       // Load delivery zones from backend for map legend
       try {
         const zonesRes = await client.apiCall.invoke({
-          url: '/api/v1/entities/delivery_zones?query={"is_active":true}&sort=min_distance_km&limit=50',
+          url: `/api/v1/entities/delivery_zones?query=${encodeURIComponent(JSON.stringify({ is_active: true, branch_id: selectedBranch?.id || null }))}&sort=min_distance_km&limit=50`,
           method: 'GET',
         });
         const zones = zonesRes?.data?.items || [];
@@ -847,8 +873,8 @@ export default function Checkout() {
           setDeliveryEndTime(parsed.delivery_end_time || '01:00');
           setDeliveryCharge(parseFloat(parsed.delivery_charges) || 5);
           setEstimatedDeliveryTime(parsed.estimated_delivery_time || '30-45 min');
-          if (parsed.restaurant_lat) setRestaurantLat(parseFloat(parsed.restaurant_lat));
-          if (parsed.restaurant_lng) setRestaurantLng(parseFloat(parsed.restaurant_lng));
+          if (!selectedBranch && parsed.restaurant_lat) setRestaurantLat(parseFloat(parsed.restaurant_lat));
+          if (!selectedBranch && parsed.restaurant_lng) setRestaurantLng(parseFloat(parsed.restaurant_lng));
           if (parsed.near_radius) setNearRadius(parseFloat(parsed.near_radius));
           if (parsed.far_radius) setFarRadius(parseFloat(parsed.far_radius));
           if (parsed.near_charge) setNearCharge(parseFloat(parsed.near_charge));
@@ -1258,6 +1284,7 @@ export default function Checkout() {
           customer_lat: orderType === 'delivery' ? customerLat : null,
           customer_lng: orderType === 'delivery' ? customerLng : null,
           customer_address: orderType === 'delivery' ? deliveryAddress.trim() : '',
+          branch_id: selectedBranch?.id || null,
         },
         {
           headers: {
