@@ -21,12 +21,14 @@ export interface AdminSession {
   username: string;
   role: 'super_admin' | 'admin' | 'manager';
   permissions: AdminPermissions;
+  branch_id?: number | null;
 }
 
 export interface AdminAccount {
   id: string;
   username: string;
   role: 'admin' | 'manager';
+  branch_id: number | null;
   permissions: AdminPermissions;
   is_active: boolean;
   created_at?: string | null;
@@ -124,6 +126,7 @@ export function readAdminSession(): AdminSession | null {
       username: String(value.username || ''),
       role: value.role,
       permissions: value.permissions || {},
+      branch_id: value.branch_id == null ? null : Number(value.branch_id),
     } as AdminSession;
   } catch {
     return null;
@@ -139,6 +142,7 @@ export async function loginAdmin(
     username: string;
     role: AdminSession['role'];
     permissions: AdminPermissions;
+    branch_id?: number | null;
   }>(
     '/login',
     {
@@ -152,6 +156,7 @@ export async function loginAdmin(
     username: response.username,
     role: response.role,
     permissions: response.permissions,
+    branch_id: response.branch_id == null ? null : Number(response.branch_id),
   };
   saveAdminSession(response.token, session);
   return session;
@@ -183,6 +188,7 @@ export async function createAdminAccount(data: {
   username: string;
   password: string;
   role: 'admin' | 'manager';
+  branch_id: number;
   permissions: AdminPermissions;
 }): Promise<void> {
   await request('/accounts', {
@@ -197,6 +203,7 @@ export async function updateAdminAccount(
     username: string;
     password: string;
     role: 'admin' | 'manager';
+    branch_id: number;
     permissions: AdminPermissions;
     is_active: boolean;
   }>,
