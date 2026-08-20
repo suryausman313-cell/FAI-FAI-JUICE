@@ -45,6 +45,7 @@ declare global {
       startOrderAlarm?: (count: number) => void;
       stopOrderAlarm?: () => void;
       speakText?: (text: string) => void;
+      getBatteryInfo?: () => string;
     };
     webkitAudioContext?: typeof AudioContext;
   }
@@ -574,11 +575,11 @@ export default function KitchenOrders() {
   const [cancelOrderTarget, setCancelOrderTarget] = useState<KitchenOrder | null>(null);
   const [cancelPreset, setCancelPreset] = useState('');
   const [cancelOtherReason, setCancelOtherReason] = useState('');
+  // Single-shop Kitchen: keep legacy branch fields dormant for backend compatibility,
+  // but never expose/filter by branch on this device.
   const [branches, setBranches] = useState<BranchOption[]>([]);
-  const [kitchenBranchId, setKitchenBranchId] = useState<number | null>(() => {
-    const saved = Number(localStorage.getItem('fai_fai_kitchen_branch_id') || 0);
-    return saved > 0 ? saved : null;
-  });
+  const [kitchenBranchId, setKitchenBranchId] = useState<number | null>(null);
+  const [batteryInfo, setBatteryInfo] = useState<{ level: number; charging: boolean } | null>(null);
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
   const pendingVisibleNewIdsRef = useRef<number[]>([]);
@@ -620,9 +621,8 @@ export default function KitchenOrders() {
     () => ({
       'Content-Type': 'application/json',
       'X-Kitchen-Pin': kitchenPin(),
-      ...(kitchenBranchId ? { 'X-Branch-Id': String(kitchenBranchId) } : {}),
     }),
-    [kitchenPin, kitchenBranchId],
+    [kitchenPin],
   );
 
   const loadBranches = useCallback(async () => {
@@ -726,7 +726,7 @@ export default function KitchenOrders() {
     try {
       const response = await axios.get(`${getAPIBaseURL()}/api/v1/admin/kitchen/orders`, {
         headers: kitchenHeaders(),
-        params: { limit: 300, ...(kitchenBranchId ? { branch_id: kitchenBranchId } : {}) },
+        params: { limit: 300 },
         timeout: 15000,
       });
 
@@ -738,7 +738,6 @@ export default function KitchenOrders() {
         : [...currentNewIds].filter((orderId) => !previousNewIdsRef.current.has(orderId));
 
       if (!isFirstLoad && newIds.length > 0) {
-        toast.success(`${newIds.length} new order${newIds.length > 1 ? 's' : ''} received`);
       }
 
       previousNewIdsRef.current = currentNewIds;
@@ -766,24 +765,34 @@ export default function KitchenOrders() {
       setRefreshing(false);
       loadInProgressRef.current = false;
     }
-  }, [kitchenHeaders, kitchenBranchId]);
+  }, [kitchenHeaders]);
 
   useEffect(() => {
     setAuthenticated(localStorage.getItem('kitchen_auth') === 'true');
+    localStorage.removeItem('fai_fai_kitchen_branch_id');
+    setKitchenBranchId(null);
+    setBranches([]);
     void loadReceiptSettings();
-    void loadBranches();
-  }, [loadReceiptSettings, loadBranches]);
+    void loadRestaurantStatus();
+  }, [loadReceiptSettings, loadRestaurantStatus]);
 
   useEffect(() => {
-    const selectedBranch = branches.find((branch) => branch.id === kitchenBranchId);
-    if (!selectedBranch) return;
-    if (selectedBranch.is_default) {
-      void loadRestaurantStatus();
-      return;
-    }
-    const branchStatus = String(selectedBranch.restaurant_status || 'open').toLowerCase();
-    setRestaurantStatus(branchStatus === 'busy' || branchStatus === 'closed' ? branchStatus : 'open');
-  }, [branches, kitchenBranchId, loadRestaurantStatus]);
+    const readBattery = () => {
+      try {
+        const raw = window.VitaPrinter?.getBatteryInfo?.();
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        const level = Number(parsed?.level);
+        if (!Number.isFinite(level) || level < 0) return;
+        setBatteryInfo({ level: Math.max(0, Math.min(100, Math.round(level))), charging: Boolean(parsed?.charging) });
+      } catch {
+        // Native battery bridge is optional in a normal browser.
+      }
+    };
+    readBattery();
+    const timer = window.setInterval(readBattery, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -873,16 +882,14 @@ export default function KitchenOrders() {
         headers: {
           'Content-Type': 'application/json',
           'X-Kitchen-Pin': normalizedPin,
-          ...(kitchenBranchId ? { 'X-Branch-Id': String(kitchenBranchId) } : {}),
         },
-        params: { limit: 1, ...(kitchenBranchId ? { branch_id: kitchenBranchId } : {}) },
+        params: { limit: 1 },
         timeout: 12000,
       });
 
       localStorage.setItem('kitchen_auth', 'true');
       localStorage.setItem('kitchen_pin', normalizedPin);
       setAuthenticated(true);
-      toast.success('Kitchen opened');
     } catch {
       toast.error('Invalid Kitchen PIN');
     }
@@ -944,7 +951,6 @@ export default function KitchenOrders() {
         ));
       }
       setStatusDialogOpen(false);
-      toast.success(`Shop status: ${nextStatus.toUpperCase()}`);
     } catch (error: any) {
       toast.error(error?.response?.data?.detail || 'Shop status could not be saved.');
     } finally {
@@ -1021,8 +1027,9 @@ export default function KitchenOrders() {
         announceReadyOrder(order.id);
       }
 
-      if (status === 'cancelled') setSelectedOrderId(null);
-      toast.success(`Order #${order.id} → ${status}`);
+      // Any bottom action used from inside an order returns to the Kitchen list,
+      // matching the top Back arrow instead of pushing staff to another detail state.
+      if (selectedOrderId === order.id || status === 'cancelled') setSelectedOrderId(null);
       setTimeout(() => void loadOrders(), 700);
     } catch (error: any) {
       // If accepting/cancelling a still-new order failed, let the alarm resume.
@@ -1056,7 +1063,6 @@ export default function KitchenOrders() {
           : item
       ));
       setSelectedTime(safeMinutes);
-      toast.success(`Ready time updated to ${safeMinutes} min`);
       setTimeout(() => void loadOrders(), 500);
     } catch (error: any) {
       console.error('Kitchen ready-time update failed:', error);
@@ -1168,7 +1174,6 @@ export default function KitchenOrders() {
     // localStorage: if a browser blocks one speech attempt, future sessions must
     // still be able to announce the late order.
     lateVoiceAnnouncedRef.current.add(key);
-    toast.warning(`Order #${order.id} is late — please make it Ready.`, { duration: 10000 });
 
     // Ring briefly, then say the exact order number and that it is late.
     try {
@@ -1275,7 +1280,6 @@ export default function KitchenOrders() {
             </div>
 
             <div className="space-y-1 text-sm">
-              {order.branch_name && <Line label="Branch" value={order.branch_name} />}
               <Line label="Payment" value={paymentLabel(order)} />
               {acceptedAssignment && <Line label="Rider" value={riderKitchenLabel(acceptedAssignment)} />}
               {customerNotes && <Line label="Notes" value={customerNotes} />}
@@ -1454,17 +1458,6 @@ export default function KitchenOrders() {
           <h1 className="mb-2 text-2xl font-black text-slate-900">Kitchen Display</h1>
           <p className="mb-6 text-sm text-slate-900">Enter PIN to access Kitchen orders</p>
           <form onSubmit={handlePinLogin} className="space-y-4">
-            {branches.length > 0 && (
-              <select
-                value={kitchenBranchId || ''}
-                onChange={(event) => selectKitchenBranch(Number(event.target.value))}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-slate-400"
-              >
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>{branch.name}{branch.is_default ? ' (Default)' : ''}</option>
-                ))}
-              </select>
-            )}
             <input
               type="password"
               value={pin}
@@ -1537,7 +1530,13 @@ export default function KitchenOrders() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {batteryInfo && (
+              <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-black text-slate-900" title={batteryInfo.charging ? 'Charging' : 'Battery'}>
+                <span aria-hidden="true">{batteryInfo.charging ? '⚡' : '🔋'}</span>
+                <span>{batteryInfo.level}%</span>
+              </div>
+            )}
             {!selectedOrder && (
               <button type="button" onClick={() => setStatusDialogOpen(true)}>
                 <StatusPill status={restaurantStatus} />
@@ -1550,24 +1549,6 @@ export default function KitchenOrders() {
             )}
           </div>
         </header>
-
-        {!selectedOrder && branches.length > 1 && (
-          <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <label className="flex items-center gap-3">
-              <span className="whitespace-nowrap text-sm font-bold text-slate-900">Kitchen branch</span>
-              <select
-                value={kitchenBranchId || ''}
-                onChange={(event) => selectKitchenBranch(Number(event.target.value))}
-                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-900 outline-none focus:border-slate-400"
-              >
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>{branch.name}</option>
-                ))}
-              </select>
-            </label>
-            <p className="mt-1 text-xs text-slate-800">This device will only show orders for the selected branch.</p>
-          </div>
-        )}
 
         {selectedOrder ? (
           renderOrderDetail(selectedOrder)
