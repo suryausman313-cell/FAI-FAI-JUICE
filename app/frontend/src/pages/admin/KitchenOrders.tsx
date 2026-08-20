@@ -12,6 +12,8 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  Minus,
+  Plus,
   Printer,
   RefreshCw,
   Store,
@@ -112,7 +114,6 @@ type ParsedItem = {
   extras: string[];
 };
 
-const TIME_OPTIONS = [10, 15, 20, 30, 45];
 const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
 const DELIVERY_PENDING_STATUSES = new Set(['out_for_delivery', 'picked_up', 'on_the_way']);
 
@@ -516,8 +517,7 @@ export default function KitchenOrders() {
   const [pin, setPin] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [selectedTime, setSelectedTime] = useState(20);
-  const [customTime, setCustomTime] = useState('');
+  const [selectedTime, setSelectedTime] = useState(10);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('live');
   const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatus>('open');
@@ -526,7 +526,7 @@ export default function KitchenOrders() {
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>({
     printer_ip: '192.168.70.125',
     printer_port: 9100,
-    paper_width: '80mm',
+    paper_width: '58mm',
     auto_print_on_accept: true,
     restaurant_name: 'Fai Fai Juice',
   });
@@ -542,6 +542,8 @@ export default function KitchenOrders() {
   });
 
   const previousNewIdsRef = useRef<Set<number>>(new Set());
+  const pendingVisibleNewIdsRef = useRef<number[]>([]);
+  const updatingOrderIdsRef = useRef<Set<number>>(new Set());
   const firstLoadRef = useRef(true);
   const loadInProgressRef = useRef(false);
   const lateVoiceAnnouncedRef = useRef<Set<string>>(new Set());
@@ -702,16 +704,13 @@ export default function KitchenOrders() {
 
       previousNewIdsRef.current = currentNewIds;
       firstLoadRef.current = false;
+      pendingVisibleNewIdsRef.current = newIds;
       setOrders(nextOrders);
       setLastRefresh(new Date());
 
-      // In the foreground, sound starts only AFTER React has received the order list.
-      // The Android background service stays responsible when the app is not visible.
-      if (newIds.length > 0 && window.VitaPrinter?.startOrderAlarm) {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => window.VitaPrinter?.startOrderAlarm?.(newIds.length));
-        });
-      }
+      // Do not ring or print here. React has not painted the new order card yet.
+      // The orders effect below waits for the visible render first, then rings.
+      // Printing happens only after Accept succeeds.
     } catch (error: any) {
       const status = error?.response?.status;
       if (status === 401 || status === 403) {
@@ -762,6 +761,43 @@ export default function KitchenOrders() {
     const exists = orders.some((order) => order.id === selectedOrderId);
     if (!exists) setSelectedOrderId(null);
   }, [orders, selectedOrderId]);
+
+  useEffect(() => {
+    if (!authenticated || pendingVisibleNewIdsRef.current.length === 0) return;
+
+    const pendingIds = [...pendingVisibleNewIdsRef.current];
+    const visibleNewOrders = pendingIds
+      .map((orderId) => orders.find((order) => order.id === orderId))
+      .filter((order): order is KitchenOrder => Boolean(order && order.status === 'new'));
+
+    if (visibleNewOrders.length === 0) {
+      pendingVisibleNewIdsRef.current = [];
+      return;
+    }
+
+    pendingVisibleNewIdsRef.current = [];
+    let cancelled = false;
+
+    // Two animation frames guarantee the New card is painted on the POS screen
+    // before the ringtone starts.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (cancelled) return;
+
+        // Ring only after the New order card is visible.
+        // Do NOT print here: the kitchen copy must print only after staff Accepts.
+        try {
+          window.VitaPrinter?.startOrderAlarm?.(visibleNewOrders.length);
+        } catch {
+          // Android bridge is optional in browser/PWA mode.
+        }
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, orders, receiptSettings]);
 
   async function handlePinLogin(event: FormEvent) {
     event.preventDefault();
@@ -816,7 +852,7 @@ export default function KitchenOrders() {
           items: parseItems(order.items_json),
           order_type: isDeliveryOrder(order) ? 'delivery' : 'pickup',
         },
-        settings: receiptSettings,
+        settings: { ...receiptSettings, paper_width: '58mm' },
         reprint,
         copy_label: reprint ? 'REPRINT / COPY' : 'KITCHEN COPY',
       });
@@ -860,6 +896,10 @@ export default function KitchenOrders() {
     estimatedMinutes?: number,
     cancelReason?: string,
   ) {
+    // Prevent double taps from sending accepted -> accepted (or any duplicate transition).
+    if (updatingOrderIdsRef.current.has(order.id)) return;
+    updatingOrderIdsRef.current.add(order.id);
+
     const shouldStopAlarm = status !== 'new';
 
     // Stop the native alarm immediately on the tap. Do not wait for Render/API.
@@ -901,23 +941,21 @@ export default function KitchenOrders() {
         ),
       );
 
-      if (status === 'accepted') {
+      if (status === 'accepted' && order.status === 'new') {
+        // Fai Fai rule: original kitchen receipt prints exactly once, after Accept succeeds.
         const printKey = `kitchen_original_printed_${order.id}`;
-        if (receiptSettings.auto_print_on_accept !== false && localStorage.getItem(printKey) !== 'true') {
-          const printed = printReceipt(
-            {
-              ...order,
-              status: 'accepted',
-              estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : '',
-            },
-            false,
-          );
+        if (localStorage.getItem(printKey) !== 'true') {
+          const acceptedOrder = serverOrder || {
+            ...order,
+            status: 'accepted',
+            estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : makeLocalReadyTime(10),
+          };
+          const printed = printReceipt(acceptedOrder, false);
           if (printed) localStorage.setItem(printKey, 'true');
         }
       }
 
       if (status === 'cancelled') setSelectedOrderId(null);
-      setCustomTime('');
       toast.success(`Order #${order.id} → ${status}`);
       setTimeout(() => void loadOrders(), 700);
     } catch (error: any) {
@@ -928,6 +966,37 @@ export default function KitchenOrders() {
       }
       console.error('Kitchen status update failed:', error);
       toast.error(String(error?.response?.data?.detail || 'Order update failed'));
+    } finally {
+      updatingOrderIdsRef.current.delete(order.id);
+    }
+  }
+
+  async function updateReadyTime(order: KitchenOrder, minutes: number) {
+    const safeMinutes = Math.max(5, Math.min(60, Math.round(minutes)));
+    if (!['accepted', 'preparing'].includes(String(order.status || '').toLowerCase())) return;
+    if (updatingOrderIdsRef.current.has(order.id)) return;
+    updatingOrderIdsRef.current.add(order.id);
+
+    try {
+      const response = await axios.put(
+        `${getAPIBaseURL()}/api/v1/admin/kitchen/orders/${order.id}/status`,
+        { status: order.status, estimated_minutes: safeMinutes },
+        { headers: kitchenHeaders(), timeout: 15000 },
+      );
+      const serverOrder = response.data?.order ? normalizeOrder(response.data.order) : null;
+      setOrders((current) => current.map((item) =>
+        item.id === order.id
+          ? serverOrder || { ...item, estimated_time: makeLocalReadyTime(safeMinutes), promised_ready_at: null }
+          : item
+      ));
+      setSelectedTime(safeMinutes);
+      toast.success(`Ready time updated to ${safeMinutes} min`);
+      setTimeout(() => void loadOrders(), 500);
+    } catch (error: any) {
+      console.error('Kitchen ready-time update failed:', error);
+      toast.error(String(error?.response?.data?.detail || 'Ready time could not be updated'));
+    } finally {
+      updatingOrderIdsRef.current.delete(order.id);
     }
   }
 
@@ -986,6 +1055,10 @@ export default function KitchenOrders() {
     () => (selectedOrderId === null ? null : orders.find((order) => order.id === selectedOrderId) || null),
     [orders, selectedOrderId],
   );
+
+  useEffect(() => {
+    if (selectedOrder?.status === 'new') setSelectedTime(10);
+  }, [selectedOrderId]);
 
   const announceLateOrder = useCallback((order: KitchenOrder) => {
     const key = `${order.id}_${order.promised_ready_at || 'deadline'}`;
@@ -1089,7 +1162,54 @@ export default function KitchenOrders() {
                 <h2 className="mt-2 truncate text-xl font-black text-slate-900">{order.customer_name}</h2>
                 {order.customer_phone && <p className="mt-0.5 text-sm text-slate-900">{order.customer_phone}</p>}
               </div>
-              <div className="shrink-0"><TimerCircle order={order} onBecameLate={announceLateOrder} /></div>
+              <div className="shrink-0">
+                {['new', 'accepted', 'preparing'].includes(order.status) ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-label="Reduce ready time"
+                      onClick={() => {
+                        if (order.status === 'new') {
+                          setSelectedTime((value) => Math.max(5, value - 5));
+                          return;
+                        }
+                        const remaining = signedReadyMinutes(order);
+                        const nextMinutes = Math.max(1, (remaining !== null && remaining > 0 ? remaining : 5) - 5);
+                        void updateReadyTime(order, nextMinutes);
+                      }}
+                      className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-slate-300 bg-white text-slate-950 shadow-sm active:bg-slate-100"
+                    >
+                      <Minus className="h-6 w-6 stroke-[3]" />
+                    </button>
+
+                    {order.status === 'new' ? (
+                      <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[3px] border-emerald-500 bg-emerald-50 text-emerald-700">
+                        <span className="text-2xl font-black leading-none">{selectedTime}</span>
+                        <span className="text-[10px] font-black uppercase tracking-wide">mins</span>
+                      </div>
+                    ) : (
+                      <TimerCircle order={order} onBecameLate={announceLateOrder} />
+                    )}
+
+                    <button
+                      type="button"
+                      aria-label="Increase ready time"
+                      onClick={() => {
+                        if (order.status === 'new') {
+                          setSelectedTime((value) => Math.min(60, value + 5));
+                          return;
+                        }
+                        const remaining = signedReadyMinutes(order);
+                        const nextMinutes = Math.min(60, Math.max(5, remaining !== null && remaining > 0 ? remaining + 5 : 5));
+                        void updateReadyTime(order, nextMinutes);
+                      }}
+                      className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-slate-300 bg-white text-slate-950 shadow-sm active:bg-slate-100"
+                    >
+                      <Plus className="h-6 w-6 stroke-[3]" />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <div className="space-y-1 text-sm">
@@ -1144,33 +1264,13 @@ export default function KitchenOrders() {
 
           {order.status === 'new' && (
             <div className="mt-3 border-t border-slate-200 pt-3">
-              <p className="mb-2 text-sm font-black text-slate-900">Accept order · ready in minutes</p>
-              <div className="mb-3 grid grid-cols-5 gap-1.5">
-                {TIME_OPTIONS.map((minutes) => (
-                  <button
-                    key={minutes}
-                    type="button"
-                    onClick={() => { setSelectedTime(minutes); setCustomTime(''); }}
-                    className={`rounded-lg px-1 py-2.5 text-sm font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-900'}`}
-                  >
-                    {minutes}
-                  </button>
-                ))}
+              <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-center text-sm font-black text-slate-900">
+                Ready in {selectedTime} min · use − / + beside the timer
               </div>
-              <input
-                value={customTime}
-                onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-                inputMode="numeric"
-                placeholder="Custom minutes"
-                className="mb-3 w-full rounded-xl border border-slate-200 px-3 py-3 text-base outline-none focus:border-emerald-500"
-              />
               <div className="grid grid-cols-2 gap-2">
                 <Button
-                  onClick={() => {
-                    const minutes = Number(customTime || selectedTime);
-                    void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
-                  }}
-                  className="h-12 rounded-xl bg-emerald-600 text-base font-bold hover:bg-emerald-700"
+                  onClick={() => void updateOrderStatus(order, 'accepted', selectedTime || 10)}
+                  className="h-12 rounded-xl bg-emerald-600 text-base font-black hover:bg-emerald-700"
                 >
                   <Check className="mr-2 h-4 w-4" /> Accept
                 </Button>
@@ -1182,11 +1282,17 @@ export default function KitchenOrders() {
                     setCancelOtherReason('');
                     setCancelOrderTarget(order);
                   }}
-                  className="h-12 rounded-xl border-red-200 text-base font-bold text-red-600 hover:bg-red-50"
+                  className="h-12 rounded-xl border-red-200 text-base font-black text-red-600 hover:bg-red-50"
                 >
                   <X className="mr-2 h-4 w-4" /> Cancel
                 </Button>
               </div>
+            </div>
+          )}
+
+          {['accepted', 'preparing'].includes(order.status) && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center text-sm font-black text-slate-900">
+              Use − / + beside the timer to change ready time · customer sees the same time
             </div>
           )}
 
