@@ -359,10 +359,15 @@ function TimerCircle({
     return () => clearInterval(timer);
   }, [timerActive]);
 
-  const signed = timerActive ? signedReadyMinutes(order) : null;
-  const elapsed = timerActive ? getElapsedMinutes(order.created_at) : 0;
-  const isLate = timerActive && signed !== null && signed < 0;
-  const value = signed !== null ? signed : elapsed;
+  const orderStatus = String(order.status || '').toLowerCase();
+  const isNewOrder = orderStatus === 'new';
+  // A brand-new order has no promised deadline yet. Show the kitchen's default
+  // ready time (10 min) on the outside card instead of an elapsed 0-minute timer.
+  // Once accepted, the real promised-ready deadline drives the countdown.
+  const signed = timerActive && !isNewOrder ? signedReadyMinutes(order) : null;
+  const elapsed = timerActive && !isNewOrder ? getElapsedMinutes(order.created_at) : 0;
+  const isLate = timerActive && !isNewOrder && signed !== null && signed < 0;
+  const value = isNewOrder ? 10 : (signed !== null ? signed : elapsed);
 
   useEffect(() => {
     if (isLate && !lateAnnouncedRef.current) {
@@ -392,7 +397,7 @@ function TimerCircle({
   return (
     <div className="w-16 h-16 rounded-full border-[3px] border-emerald-500 flex flex-col items-center justify-center text-emerald-700 bg-emerald-50 shrink-0">
       <span className="text-2xl leading-none font-black">{value}</span>
-      <span className="text-[10px] uppercase tracking-wide font-bold">{signed !== null ? 'mins' : 'min'}</span>
+      <span className="text-[10px] uppercase tracking-wide font-bold">mins</span>
     </div>
   );
 }
@@ -851,6 +856,7 @@ export default function KitchenOrders() {
           total_amount: Number(order.total_amount || 0),
           items: parseItems(order.items_json),
           order_type: isDeliveryOrder(order) ? 'delivery' : 'pickup',
+          customer_notes: customerKitchenNotes(order.order_notes),
         },
         settings: { ...receiptSettings, paper_width: '58mm' },
         reprint,
