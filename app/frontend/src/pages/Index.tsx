@@ -61,6 +61,9 @@ export default function Index() {
   const [offers, setOffers] = useState<Offer[]>(cached?.offers || []);
   // Only show loading spinner if we have NO cached data
   const [loading, setLoading] = useState(!cached);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try { return sessionStorage.getItem('fai_fai_welcome_seen') !== '1'; } catch { return true; }
+  });
 
   const loadData = useCallback(async () => {
     try {
@@ -108,6 +111,13 @@ export default function Index() {
     }
   }, [loadData]);
 
+  useEffect(() => {
+    if (!showWelcome) return;
+    try { sessionStorage.setItem('fai_fai_welcome_seen', '1'); } catch { /* optional storage */ }
+    const timer = window.setTimeout(() => setShowWelcome(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [showWelcome]);
+
   function getStatusColor(status: string) {
     switch (status) {
       case 'open': return 'bg-green-500';
@@ -136,7 +146,24 @@ export default function Index() {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   }
 
+  const welcomeOverlay = (
+    <div className="fai-welcome-screen" aria-label="Welcome to Fai Fai Juice">
+      <div className="fai-welcome-orb fai-welcome-orb-one" />
+      <div className="fai-welcome-orb fai-welcome-orb-two" />
+      <div className="fai-welcome-content">
+        <div className="fai-welcome-badge">FF</div>
+        <p className="fai-welcome-kicker">WELCOME TO</p>
+        <div className="fai-welcome-wordmark">
+          <FaiFaiWordmark name={settings?.restaurant_name || 'Fai Fai Juice'} />
+        </div>
+        <p className="fai-welcome-tagline">Fresh Juices • Desserts • Beverages</p>
+        <div className="fai-welcome-line"><span /></div>
+      </div>
+    </div>
+  );
+
   if (loading) {
+    if (showWelcome) return welcomeOverlay;
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="text-center">
@@ -160,6 +187,7 @@ export default function Index() {
 
   return (
     <div className="min-h-screen bg-gray-950">
+      {showWelcome && welcomeOverlay}
       {/* Header */}
       <header className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur-sm border-b border-gray-800">
         <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
