@@ -450,6 +450,33 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvanc
       <SectionTitle title={title} count={orders.length} />
       {orders.length === 0 ? (
         <div className="rounded-3xl border border-slate-200 bg-white px-5 py-8 text-lg text-slate-800 shadow-sm">{emptyText}</div>
+      ) : title === 'New' ? (
+        <div className="grid grid-cols-2 gap-3">
+          {orders.map((order) => (
+            <button
+              key={order.id}
+              type="button"
+              onClick={() => onOpen(order.id)}
+              className="min-h-[132px] rounded-xl bg-orange-500 p-4 text-left shadow-sm transition active:scale-[0.99]"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-3xl font-black leading-none text-slate-950">#{order.id}</div>
+                  <div className="mt-3 text-lg font-black text-slate-900">
+                    {totalItems(order)} item{totalItems(order) === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-full border-2 border-slate-900/70 bg-white/90 text-slate-950">
+                  <span className="text-xl font-black leading-none">10</span>
+                  <span className="mt-0.5 text-[9px] font-black uppercase">mins</span>
+                </div>
+              </div>
+              <div className="mt-3 text-xs font-black uppercase tracking-wide text-slate-900">
+                {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
+              </div>
+            </button>
+          ))}
+        </div>
       ) : (
         <div className="space-y-4">
           {orders.map((order) => (
