@@ -38,7 +38,21 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="fai-customer-app min-h-screen bg-background flex flex-col">
+      <style>{`
+        .fai-customer-app, .fai-customer-app * {
+          -webkit-user-select: none !important;
+          user-select: none !important;
+          -webkit-touch-callout: none !important;
+        }
+        .fai-customer-app input,
+        .fai-customer-app textarea,
+        .fai-customer-app [contenteditable="true"] {
+          -webkit-user-select: text !important;
+          user-select: text !important;
+          -webkit-touch-callout: default !important;
+        }
+      `}</style>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-black border-b border-red-900/30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
