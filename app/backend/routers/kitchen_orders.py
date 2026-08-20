@@ -216,26 +216,37 @@ async def update_kitchen_order_status(
             ),
         )
 
+    # Allow Kitchen to adjust only the promised ready time while an order is
+    # Accepted/Preparing, without forcing an illegal accepted->accepted or
+    # preparing->preparing workflow transition. Customer My Orders reads the same
+    # pickup_time value, so its countdown stays exactly in sync with Kitchen.
+    is_ready_time_only_update = (
+        new_status == current_status
+        and current_status in {"accepted", "preparing"}
+        and data.estimated_minutes is not None
+    )
+
     allowed = transitions.get(current_status, set())
-    if new_status not in allowed:
+    if not is_ready_time_only_update and new_status not in allowed:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot change order from {current_status} to {new_status}",
         )
 
     now = datetime.now(timezone.utc)
-    order.status = new_status
+    if not is_ready_time_only_update:
+        order.status = new_status
 
-    if new_status == "accepted":
+    if data.estimated_minutes is not None and (new_status == "accepted" or is_ready_time_only_update):
+        minutes = max(5, min(int(data.estimated_minutes), 60))
+        promised_ready_at = now + timedelta(minutes=minutes)
+        order.promised_ready_at = promised_ready_at
+        # One canonical value powers both Kitchen and Customer countdowns.
+        order.pickup_time = f"{minutes} min|{promised_ready_at.isoformat()}"
+
+    if new_status == "accepted" and not is_ready_time_only_update:
         if getattr(order, "accepted_at", None) is None:
             order.accepted_at = now
-
-        if data.estimated_minutes is not None:
-            minutes = max(1, min(int(data.estimated_minutes), 240))
-            promised_ready_at = now + timedelta(minutes=minutes)
-            order.promised_ready_at = promised_ready_at
-            # Preserve readable minutes while also storing the exact deadline.
-            order.pickup_time = f"{minutes} min|{promised_ready_at.isoformat()}"
 
         if is_delivery_order(order) and getattr(order, "promised_delivery_at", None) is None:
             settings_result = await db.execute(
@@ -248,7 +259,7 @@ async def update_kitchen_order_status(
             if target_minutes:
                 order.promised_delivery_at = now + timedelta(minutes=target_minutes)
 
-    elif new_status == "preparing" and getattr(order, "preparing_at", None) is None:
+    elif new_status == "preparing" and not is_ready_time_only_update and getattr(order, "preparing_at", None) is None:
         order.preparing_at = now
 
     elif new_status == "ready" and getattr(order, "ready_at", None) is None:
@@ -269,7 +280,8 @@ async def update_kitchen_order_status(
         logger.exception("Kitchen could not update order %s status", order_id)
         raise HTTPException(status_code=500, detail="Could not update order status") from exc
 
-    await notify_customer_order_update_safely(db, order, new_status)
+    if not is_ready_time_only_update:
+        await notify_customer_order_update_safely(db, order, new_status)
 
     return {
         "success": True,

@@ -249,8 +249,16 @@ async def update_kitchen_order_status(
                 ),
             )
 
+        # Kitchen may change only the promised ready time while an order is
+        # already Accepted/Preparing. This is not a workflow status transition.
+        is_ready_time_only_update = (
+            new_status == current_status
+            and current_status in ("accepted", "preparing")
+            and data.estimated_minutes is not None
+        )
+
         allowed_next = valid_transitions.get(current_status, [])
-        if new_status not in allowed_next:
+        if not is_ready_time_only_update and new_status not in allowed_next:
             if current_status in ("completed", "cancelled"):
                 raise HTTPException(
                     status_code=400,
@@ -273,12 +281,21 @@ async def update_kitchen_order_status(
                 raise HTTPException(status_code=400, detail="Cancellation reason is too long.")
             data.cancel_reason = reason
 
-        order.status = new_status
+        if not is_ready_time_only_update:
+            order.status = new_status
 
-        if data.estimated_minutes is not None:
-            safe_minutes = max(1, min(240, int(data.estimated_minutes)))
+        if data.estimated_minutes is not None and (new_status == "accepted" or is_ready_time_only_update):
+            safe_minutes = max(5, min(60, int(data.estimated_minutes)))
             deadline = datetime.now(timezone.utc) + timedelta(minutes=safe_minutes)
             order.pickup_time = f"{safe_minutes} min|{deadline.isoformat()}"
+            order.promised_ready_at = deadline
+
+        if new_status == "accepted" and not is_ready_time_only_update and getattr(order, "accepted_at", None) is None:
+            order.accepted_at = datetime.now(timezone.utc)
+        elif new_status == "preparing" and not is_ready_time_only_update and getattr(order, "preparing_at", None) is None:
+            order.preparing_at = datetime.now(timezone.utc)
+        elif new_status == "ready" and getattr(order, "ready_at", None) is None:
+            order.ready_at = datetime.now(timezone.utc)
 
         if new_status == "cancelled" and data.cancel_reason:
             existing_notes = order.order_notes or ""
@@ -290,7 +307,8 @@ async def update_kitchen_order_status(
         await db.commit()
         await db.refresh(order)
 
-        await notify_customer_order_update_safely(db, order, new_status)
+        if not is_ready_time_only_update:
+            await notify_customer_order_update_safely(db, order, new_status)
 
         return {
             "success": True,
