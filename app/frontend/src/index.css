@@ -210,3 +210,179 @@ body,
     user-drag: none;
   }
 }
+
+/* ===== Fai Fai customer launch welcome =====
+   4-second lightweight video-style animation. No video/network asset required. */
+.fai-welcome-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 1.5rem;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(239, 68, 68, 0.13), transparent 34%),
+    radial-gradient(circle at 25% 80%, rgba(34, 197, 94, 0.10), transparent 30%),
+    #030712;
+  animation: faiWelcomeScreen 4s ease both;
+}
+
+.fai-welcome-content {
+  position: relative;
+  z-index: 2;
+  width: min(92vw, 34rem);
+  animation: faiWelcomeContent 4s cubic-bezier(.2,.7,.2,1) both;
+}
+
+.fai-welcome-badge {
+  width: 4.9rem;
+  height: 4.9rem;
+  margin: 0 auto 1.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  color: #fff;
+  font-size: 1.7rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  background: linear-gradient(135deg, #ef4444 0%, #f97316 48%, #22c55e 100%);
+  box-shadow: 0 18px 55px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.12) inset;
+  animation: faiWelcomeBadge 4s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.fai-welcome-kicker {
+  margin: 0 0 .6rem;
+  color: rgba(255,255,255,.58);
+  font-size: .78rem;
+  font-weight: 800;
+  letter-spacing: .34em;
+  animation: faiWelcomeTextUp 4s ease both;
+}
+
+.fai-welcome-wordmark {
+  color: #fff;
+  font-size: clamp(2.75rem, 12vw, 4.6rem);
+  font-weight: 950;
+  line-height: .95;
+  filter: drop-shadow(0 10px 28px rgba(0,0,0,.38));
+  animation: faiWelcomeWordmark 4s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.fai-welcome-tagline {
+  margin: 1rem 0 0;
+  color: rgba(255,255,255,.62);
+  font-size: .92rem;
+  font-weight: 600;
+  letter-spacing: .025em;
+  animation: faiWelcomeTextUp 4s .08s ease both;
+}
+
+.fai-welcome-line {
+  width: min(16rem, 62vw);
+  height: 3px;
+  margin: 1.7rem auto 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: rgba(255,255,255,.10);
+}
+
+.fai-welcome-line > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  background: linear-gradient(90deg, #ef4444, #f97316, #22c55e);
+  animation: faiWelcomeProgress 3.45s .25s linear both;
+}
+
+.fai-welcome-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(8px);
+  opacity: .25;
+  pointer-events: none;
+}
+
+.fai-welcome-orb-one {
+  width: 13rem;
+  height: 13rem;
+  top: -4rem;
+  right: -4rem;
+  background: #ef4444;
+  animation: faiWelcomeOrbOne 4s ease-in-out both;
+}
+
+.fai-welcome-orb-two {
+  width: 11rem;
+  height: 11rem;
+  left: -4rem;
+  bottom: -3rem;
+  background: #22c55e;
+  animation: faiWelcomeOrbTwo 4s ease-in-out both;
+}
+
+@keyframes faiWelcomeScreen {
+  0% { opacity: 0; }
+  8%, 88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes faiWelcomeContent {
+  0% { opacity: 0; transform: translateY(16px) scale(.96); }
+  16%, 82% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-8px) scale(1.02); }
+}
+
+@keyframes faiWelcomeBadge {
+  0% { opacity: 0; transform: scale(.55) rotate(-16deg); }
+  18% { opacity: 1; transform: scale(1.06) rotate(2deg); }
+  28%, 82% { opacity: 1; transform: scale(1) rotate(0); }
+  100% { opacity: 0; transform: scale(1.08); }
+}
+
+@keyframes faiWelcomeWordmark {
+  0%, 10% { opacity: 0; transform: translateY(20px) scale(.92); filter: blur(6px); }
+  28%, 82% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0) drop-shadow(0 10px 28px rgba(0,0,0,.38)); }
+  100% { opacity: 0; transform: translateY(-6px) scale(1.025); }
+}
+
+@keyframes faiWelcomeTextUp {
+  0%, 18% { opacity: 0; transform: translateY(10px); }
+  34%, 82% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-4px); }
+}
+
+@keyframes faiWelcomeProgress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes faiWelcomeOrbOne {
+  0% { transform: translate(0,0) scale(.8); opacity: 0; }
+  25%, 75% { opacity: .24; }
+  100% { transform: translate(-3rem,4rem) scale(1.2); opacity: 0; }
+}
+
+@keyframes faiWelcomeOrbTwo {
+  0% { transform: translate(0,0) scale(.8); opacity: 0; }
+  25%, 75% { opacity: .20; }
+  100% { transform: translate(3rem,-3rem) scale(1.18); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fai-welcome-screen,
+  .fai-welcome-content,
+  .fai-welcome-badge,
+  .fai-welcome-kicker,
+  .fai-welcome-wordmark,
+  .fai-welcome-tagline,
+  .fai-welcome-line > span,
+  .fai-welcome-orb {
+    animation-duration: .01ms !important;
+    animation-delay: 0ms !important;
+  }
+}

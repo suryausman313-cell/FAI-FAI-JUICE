@@ -22,6 +22,20 @@ function installCustomerAppInteractionGuards() {
   document.addEventListener('contextmenu', preventCustomerContextMenu, { passive: false });
   document.addEventListener('selectstart', preventCustomerContextMenu, { passive: false });
   document.addEventListener('dragstart', preventCustomerContextMenu, { passive: false });
+
+  // Android Chrome/WebView can still create a selection toolbar after a long press
+  // even when CSS user-select is disabled. Clear that selection immediately on
+  // customer pages, while keeping text editing normal inside form controls.
+  document.addEventListener('selectionchange', () => {
+    if (!isCustomerPath()) return;
+    const active = document.activeElement;
+    if (isEditableTarget(active)) return;
+    const selection = window.getSelection?.();
+    if (selection && selection.rangeCount > 0) selection.removeAllRanges();
+  });
+
+  document.documentElement.style.overscrollBehaviorY = 'none';
+  document.body.style.overscrollBehaviorY = 'none';
 }
 
 installCustomerAppInteractionGuards();
