@@ -126,6 +126,16 @@ export default function Index() {
     }
   }
 
+  function shopMapUrl(): string {
+    const lat = Number(settings?.restaurant_lat);
+    const lng = Number(settings?.restaurant_lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat !== 0 || lng !== 0)) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
+    }
+    const address = String(settings?.address || 'Murbah, Fujairah, UAE').trim();
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -415,10 +425,19 @@ export default function Index() {
             <Phone className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0" />
             <p className="text-gray-300 text-sm">{settings?.phone || '+971 54 294 0112'}</p>
           </div>
-          <div className="flex items-start gap-3">
-            <MapPin className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0" />
-            <p className="text-gray-300 text-sm">{settings?.address || 'Murbah, Fujairah, UAE'}</p>
-          </div>
+          <a
+            href={shopMapUrl()}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-start gap-3 rounded-lg -mx-2 px-2 py-1.5 hover:bg-gray-800/70 active:bg-gray-800 cursor-pointer"
+            aria-label="Open Fai Fai Juice location in maps"
+          >
+            <MapPin className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-gray-300 text-sm underline underline-offset-2">{settings?.address || 'Murbah, Fujairah, UAE'}</p>
+              <p className="text-gray-500 text-[10px] mt-0.5">Tap to open shop location</p>
+            </div>
+          </a>
         </div>
         )}
       </div>
