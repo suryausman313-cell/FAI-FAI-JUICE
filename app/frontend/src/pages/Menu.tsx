@@ -5,7 +5,6 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { toast } from 'sonner';
 import CustomerLayout from '@/components/CustomerLayout';
 import { client, Category, MenuItem, Extra, RestaurantSettings, getItemSizes, getItemExtras, localizedMenuText, localizedMenuDescription } from '@/lib/api';
 import { getItemPriceBreakdown } from '@/lib/discounts';
@@ -124,7 +123,6 @@ export default function Menu() {
     if (!selectedItem) return;
     addToCart(selectedItem, selectedSize, selectedExtras, quantity);
     setDialogOpen(false);
-    toast.success(t('menu.added'));
     window.dispatchEvent(new Event('cart-updated'));
   }
 
