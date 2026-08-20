@@ -176,3 +176,37 @@ body {
     padding-bottom: 2rem !important;
   }
 }
+
+
+/* ===== Customer installed-app interaction guard =====
+   Prevent Android/Chrome/PWA pull-to-refresh and accidental text selection.
+   Inputs/textareas stay selectable so customers can type/edit normally. */
+html,
+body,
+#root {
+  overscroll-behavior-y: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  #root,
+  #root *:not(input):not(textarea):not([contenteditable="true"]):not([role="textbox"]) {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
+  #root input,
+  #root textarea,
+  #root [contenteditable="true"],
+  #root [role="textbox"] {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default !important;
+  }
+
+  #root img,
+  #root a {
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+}
