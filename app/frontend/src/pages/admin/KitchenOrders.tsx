@@ -1030,177 +1030,165 @@ export default function KitchenOrders() {
     const assignment = assignments[order.id];
     const acceptedAssignment = riderAcceptedAssignment(assignment);
     const customerNotes = customerKitchenNotes(order.order_notes);
+    const statusText = order.status.replaceAll('_', ' ');
 
     return (
       <div className="min-h-screen bg-white">
-        <div className="mx-auto max-w-4xl px-4 pb-12 pt-3">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+        <div className="mx-auto max-w-xl px-3 pb-8 pt-1">
+          <div className="sticky top-0 z-20 -mx-3 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
             <button type="button" onClick={() => setSelectedOrderId(null)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
-              <ChevronLeft className="h-6 w-6" />
+              <ChevronLeft className="h-5 w-5" />
             </button>
             <div className="min-w-0 px-2 text-center">
-              <h1 className="truncate text-3xl font-black text-slate-900">#{order.id}</h1>
-              <p className="text-sm text-slate-500">{formatUaeTime(order.created_at)}</p>
+              <h1 className="truncate text-xl font-black text-slate-900">#{order.id}</h1>
+              <p className="text-[11px] text-slate-400">{formatUaeTime(order.created_at)}</p>
             </div>
-            <button type="button" onClick={() => printReceipt(order, true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
-              <Printer className="h-6 w-6" />
+            <button type="button" onClick={() => printReceipt(order, true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100" title="Print order">
+              <Printer className="h-5 w-5" />
             </button>
           </div>
 
-          <div className="space-y-4 pt-5">
-            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Badge className={isDeliveryOrder(order)
-                      ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
-                      : 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'}>
-                      {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
-                    </Badge>
-                    <Badge className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-700 border-slate-200 capitalize">
-                      {order.status.replaceAll('_', ' ')}
-                    </Badge>
-                  </div>
-                  <h2 className="mt-4 text-3xl font-black text-slate-900">{order.customer_name}</h2>
-                  {order.customer_phone && <p className="mt-1 text-lg text-slate-500">{order.customer_phone}</p>}
+          <div className="border-b border-slate-200 py-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-black uppercase ${order.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : order.status === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-sky-100 text-sky-700'}`}>
+                    {statusText}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">
+                    {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
+                  </span>
                 </div>
-                <TimerCircle order={order} onBecameLate={announceLateOrder} />
+                <h2 className="mt-3 truncate text-2xl font-black text-slate-900">{order.customer_name}</h2>
+                {order.customer_phone && <p className="mt-0.5 text-sm text-slate-500">{order.customer_phone}</p>}
               </div>
+              <div className="shrink-0"><TimerCircle order={order} onBecameLate={announceLateOrder} /></div>
+            </div>
 
-              <div className="mt-5 grid gap-3">
-                {order.branch_name && <Line label="Branch" value={order.branch_name} />}
-                <Line label="Payment" value={paymentLabel(order)} />
-                <Line label="Items" value={`${totalItems(order)} item${totalItems(order) === 1 ? '' : 's'}`} />
-                {acceptedAssignment && <Line label="Rider" value={riderKitchenLabel(acceptedAssignment)} />}
-                {customerNotes && <Line label="Notes" value={customerNotes} />}
-              </div>
-            </Card>
+            <div className="space-y-1 text-sm">
+              {order.branch_name && <Line label="Branch" value={order.branch_name} />}
+              <Line label="Payment" value={paymentLabel(order)} />
+              {acceptedAssignment && <Line label="Rider" value={riderKitchenLabel(acceptedAssignment)} />}
+              {customerNotes && <Line label="Notes" value={customerNotes} />}
+            </div>
+          </div>
 
-            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-4 text-3xl font-black text-slate-900">Items</h3>
-              <div className="space-y-4">
-                {items.length === 0 ? (
-                  <p className="text-lg text-slate-400">No item details available.</p>
-                ) : (
-                  items.map((item, index) => (
-                    <div key={`${order.id}-${index}`} className="rounded-2xl bg-slate-50 px-4 py-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-2xl font-bold text-slate-900">{item.quantity} × {item.name}</p>
-                          {item.size && <p className="mt-1 text-lg text-slate-500">{item.size}</p>}
-                          {item.extras.length > 0 && <p className="mt-1 text-base text-slate-500">Extras: {item.extras.join(', ')}</p>}
-                        </div>
-                        <div className="text-right text-2xl font-bold text-slate-900">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</div>
-                      </div>
+          <div className="border-b border-slate-200 py-3">
+            <h3 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-500">Items</h3>
+            {items.length === 0 ? (
+              <p className="py-4 text-sm text-slate-400">No item details available.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {items.map((item, index) => (
+                  <div key={`${order.id}-${index}`} className="flex items-start justify-between gap-3 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-base font-black text-slate-900">{item.quantity} × {item.name}</p>
+                      {item.size && <p className="mt-0.5 text-sm text-slate-500">{item.quantity} × {item.size}</p>}
+                      {item.extras.length > 0 && <p className="mt-0.5 text-xs leading-5 text-slate-500">{item.extras.join(', ')}</p>}
                     </div>
-                  ))
-                )}
+                    <p className="shrink-0 text-sm font-bold text-slate-700">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
+                  </div>
+                ))}
               </div>
-            </Card>
+            )}
+          </div>
 
-            <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-4 text-3xl font-black text-slate-900">Total</h3>
-              <div className="space-y-3">
-                <Line label="Subtotal" value={`AED ${money(subtotal)}`} />
-                {deliveryFee > 0 && <Line label="Delivery Fee" value={`AED ${money(deliveryFee)}`} />}
-                {serviceFee > 0 && <Line label="Service Fee" value={`AED ${money(serviceFee)}`} />}
-                {smallOrderFee > 0 && <Line label="Small Order Fee" value={`AED ${money(smallOrderFee)}`} />}
-                {discount > 0 && <Line label="Discount" value={`-AED ${money(discount)}`} valueClassName="text-red-600" />}
-                {taxAmount > 0 && <Line label="VAT (Incl.)" value={`AED ${money(taxAmount)}`} />}
-                <div className="border-t border-slate-200 pt-3">
-                  <Line label="Grand Total" value={`AED ${money(order.total_amount)}`} valueClassName="text-slate-900 text-3xl" />
-                </div>
-              </div>
-            </Card>
+          <div className="border-b border-slate-200 py-3 text-sm">
+            <div className="space-y-1.5">
+              <Line label="Subtotal" value={`AED ${money(subtotal)}`} />
+              {serviceFee > 0 && <Line label="Service Fee" value={`AED ${money(serviceFee)}`} />}
+              {deliveryFee > 0 && <Line label="Delivery Fee" value={`AED ${money(deliveryFee)}`} />}
+              {smallOrderFee > 0 && <Line label="Small Order Fee" value={`AED ${money(smallOrderFee)}`} />}
+              {discount > 0 && <Line label="Discount" value={`-AED ${money(discount)}`} valueClassName="text-red-600" />}
+              {taxAmount > 0 && <Line label="VAT (Incl.)" value={`AED ${money(taxAmount)}`} />}
+            </div>
+            <div className="mt-3 flex items-end justify-between border-t border-slate-300 pt-3">
+              <span className="text-lg font-medium text-slate-700">Total</span>
+              <span className="text-2xl font-black text-slate-900">AED {money(order.total_amount)}</span>
+            </div>
+          </div>
 
           {order.status === 'cancelled' && getCancelInfo(order) && (
-            <div className="mt-5 rounded-3xl border border-red-200 bg-red-50 p-4">
+            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm">
               <p className="font-black text-red-700">Cancelled by {getCancelInfo(order)!.by}</p>
               <p className="mt-1 text-slate-700">Reason: {getCancelInfo(order)!.reason}</p>
             </div>
           )}
 
-            {order.status === 'new' && (
-              <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-3xl font-black text-slate-900">Accept order</h3>
-                <div className="mb-4 grid grid-cols-5 gap-2">
-                  {TIME_OPTIONS.map((minutes) => (
-                    <button
-                      key={minutes}
-                      type="button"
-                      onClick={() => {
-                        setSelectedTime(minutes);
-                        setCustomTime('');
-                      }}
-                      className={`rounded-2xl px-2 py-4 text-lg font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
-                    >
-                      {minutes}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  value={customTime}
-                  onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
-                  inputMode="numeric"
-                  placeholder="Custom minutes"
-                  className="mb-4 w-full rounded-2xl border border-slate-200 px-4 py-4 text-xl outline-none focus:border-emerald-500"
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <Button
-                    onClick={() => {
-                      const minutes = Number(customTime || selectedTime);
-                      void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
-                    }}
-                    className="h-14 rounded-2xl bg-emerald-600 text-lg font-bold hover:bg-emerald-700"
+          {order.status === 'new' && (
+            <div className="mt-3 border-t border-slate-200 pt-3">
+              <p className="mb-2 text-sm font-black text-slate-700">Accept order · ready in minutes</p>
+              <div className="mb-3 grid grid-cols-5 gap-1.5">
+                {TIME_OPTIONS.map((minutes) => (
+                  <button
+                    key={minutes}
+                    type="button"
+                    onClick={() => { setSelectedTime(minutes); setCustomTime(''); }}
+                    className={`rounded-lg px-1 py-2.5 text-sm font-black ${selectedTime === minutes && !customTime ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
                   >
-                    <Check className="mr-2 h-5 w-5" /> Accept
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      window.VitaPrinter?.stopOrderAlarm?.();
-                      setCancelPreset('');
-                      setCancelOtherReason('');
-                      setCancelOrderTarget(order);
-                    }}
-                    className="h-14 rounded-2xl border-red-200 text-lg font-bold text-red-600 hover:bg-red-50"
-                  >
-                    <X className="mr-2 h-5 w-5" /> Cancel
-                  </Button>
-                </div>
-              </Card>
-            )}
-
-            {order.status === 'accepted' && (
-              <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-16 w-full rounded-3xl bg-orange-500 text-xl font-black hover:bg-orange-600">
-                Start preparing
-              </Button>
-            )}
-
-            {order.status === 'preparing' && (
-              <Button onClick={() => void updateOrderStatus(order, 'ready')} className="h-16 w-full rounded-3xl bg-emerald-600 text-2xl font-black hover:bg-emerald-700">
-                {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
-              </Button>
-            )}
-
-            {order.status === 'ready' && !isDeliveryOrder(order) && (
-              <Button
-                onClick={() => {
-                  setSelectedOrderId(null);
-                  void updateOrderStatus(order, 'completed');
-                }}
-                className="h-16 w-full rounded-3xl bg-slate-900 text-2xl font-black hover:bg-slate-800"
-              >
-                Complete pickup
-              </Button>
-            )}
-
-            {order.status === 'ready' && isDeliveryOrder(order) && (
-              <div className="rounded-3xl bg-blue-50 px-5 py-5 text-center text-xl font-semibold text-blue-700">
-                Waiting for rider pickup.
+                    {minutes}
+                  </button>
+                ))}
               </div>
-            )}
-          </div>
+              <input
+                value={customTime}
+                onChange={(event) => setCustomTime(event.target.value.replace(/\D/g, ''))}
+                inputMode="numeric"
+                placeholder="Custom minutes"
+                className="mb-3 w-full rounded-xl border border-slate-200 px-3 py-3 text-base outline-none focus:border-emerald-500"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  onClick={() => {
+                    const minutes = Number(customTime || selectedTime);
+                    void updateOrderStatus(order, 'accepted', Number.isFinite(minutes) && minutes > 0 ? minutes : 20);
+                  }}
+                  className="h-12 rounded-xl bg-emerald-600 text-base font-bold hover:bg-emerald-700"
+                >
+                  <Check className="mr-2 h-4 w-4" /> Accept
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    window.VitaPrinter?.stopOrderAlarm?.();
+                    setCancelPreset('');
+                    setCancelOtherReason('');
+                    setCancelOrderTarget(order);
+                  }}
+                  className="h-12 rounded-xl border-red-200 text-base font-bold text-red-600 hover:bg-red-50"
+                >
+                  <X className="mr-2 h-4 w-4" /> Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {order.status === 'accepted' && (
+            <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="mt-3 h-12 w-full rounded-xl bg-orange-500 text-base font-black hover:bg-orange-600">
+              Start preparing
+            </Button>
+          )}
+
+          {order.status === 'preparing' && (
+            <Button onClick={() => void updateOrderStatus(order, 'ready')} className="mt-3 h-12 w-full rounded-xl bg-emerald-600 text-base font-black hover:bg-emerald-700">
+              {isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup'}
+            </Button>
+          )}
+
+          {order.status === 'ready' && !isDeliveryOrder(order) && (
+            <Button
+              onClick={() => { setSelectedOrderId(null); void updateOrderStatus(order, 'completed'); }}
+              className="mt-3 h-12 w-full rounded-xl bg-slate-900 text-base font-black hover:bg-slate-800"
+            >
+              Complete pickup
+            </Button>
+          )}
+
+          {order.status === 'ready' && isDeliveryOrder(order) && (
+            <div className="mt-3 rounded-xl bg-blue-50 px-4 py-3 text-center text-sm font-semibold text-blue-700">
+              Waiting for rider pickup.
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1212,52 +1200,58 @@ export default function KitchenOrders() {
       .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
 
     return (
-      <div className="space-y-4">
-        <div className="pt-1">
-          <h2 className="text-4xl font-black text-slate-900">Recent orders</h2>
-          <p className="mt-1 text-base text-slate-500">Tap any completed order to view full details and reprint.</p>
+      <div className="mx-auto max-w-xl bg-white">
+        <div className="mb-4 grid grid-cols-2 border-b border-slate-200">
+          <button
+            type="button"
+            onClick={() => setViewMode('today')}
+            className={`py-3 text-center text-sm font-bold ${viewMode === 'today' ? 'border-b-2 border-slate-900 text-slate-900' : 'text-slate-500'}`}
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('yesterday')}
+            className={`py-3 text-center text-sm font-bold ${viewMode === 'yesterday' ? 'border-b-2 border-slate-900 text-slate-900' : 'text-slate-500'}`}
+          >
+            Yesterday
+          </button>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">Orders</p>
-            <p className="mt-1 text-4xl font-black text-slate-900">{ordersForDay.length}</p>
-          </Card>
-          <Card className="rounded-3xl border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">Completed Sale</p>
-            <p className="mt-1 text-3xl font-black text-emerald-600">AED {money(completedTotal)}</p>
-          </Card>
+
+        <div className="px-1 pb-2">
+          <h2 className="text-3xl font-black tracking-tight text-slate-900">Recent orders</h2>
+          <p className="mt-1 text-sm font-medium text-slate-600">All - {ordersForDay.length} (AED {money(completedTotal)})</p>
         </div>
+
         {ordersForDay.length === 0 ? (
-          <div className="rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center text-lg text-slate-400 shadow-sm">No orders found for this day.</div>
+          <div className="border-t border-slate-100 px-2 py-12 text-center text-sm text-slate-400">No orders found for this day.</div>
         ) : (
-          ordersForDay.map((order) => (
-            <button
-              key={order.id}
-              type="button"
-              onClick={() => setSelectedOrderId(order.id)}
-              className="block w-full rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-4xl font-black text-slate-900">#{order.id}</span>
-                    <Badge className={order.status === 'completed'
-                      ? 'rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700 border-emerald-200'
-                      : DELIVERY_PENDING_STATUSES.has(order.status)
-                        ? 'rounded-full bg-blue-100 px-3 py-1 text-sm font-bold text-blue-700 border-blue-200'
-                        : 'rounded-full bg-red-100 px-3 py-1 text-sm font-bold text-red-700 border-red-200'}>
-                      {order.status.replaceAll('_', ' ')}
-                    </Badge>
+          <div className="divide-y divide-slate-100 border-t border-slate-100">
+            {ordersForDay.map((order) => {
+              const cancelInfo = order.status === 'cancelled' ? getCancelInfo(order) : null;
+              return (
+                <button
+                  key={order.id}
+                  type="button"
+                  onClick={() => setSelectedOrderId(order.id)}
+                  className="grid w-full grid-cols-[64px_minmax(0,1fr)_auto] items-start gap-2 px-1 py-3 text-left hover:bg-slate-50"
+                >
+                  <div className="pt-0.5 text-lg font-black text-slate-900">{formatUaeTime(order.updated_at || order.created_at)}</div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-slate-900">#{order.id}</p>
+                    <p className="mt-1 truncate text-sm text-slate-600">{order.customer_name}</p>
+                    {cancelInfo && <p className="mt-1 text-[11px] font-semibold text-red-600">{cancelInfo.by}: {cancelInfo.reason}</p>}
                   </div>
-                  <p className="mt-2 text-lg text-slate-500">{formatUaeTime(order.updated_at || order.created_at)} · {order.customer_name}</p>
-                  {order.status === 'cancelled' && getCancelInfo(order) && (
-                    <p className="mt-1 text-sm font-semibold text-red-600">{getCancelInfo(order)!.by}: {getCancelInfo(order)!.reason}</p>
-                  )}
-                </div>
-                <div className="text-3xl font-black text-slate-900">AED {money(order.total_amount)}</div>
-              </div>
-            </button>
-          ))
+                  <div className="min-w-[88px] text-right">
+                    <p className={`text-[10px] font-black uppercase tracking-wide ${order.status === 'completed' ? 'text-emerald-600' : DELIVERY_PENDING_STATUSES.has(order.status) ? 'text-sky-600' : 'text-red-600'}`}>
+                      {order.status.replaceAll('_', ' ')}
+                    </p>
+                    <p className="mt-1 text-base font-black text-slate-900">AED {money(order.total_amount)}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
     );
@@ -1337,8 +1331,8 @@ export default function KitchenOrders() {
           </div>
         </div>
       )}
-      <div className="mx-auto max-w-5xl px-4 pb-12 pt-3">
-        <header className="mb-4 flex items-center justify-between gap-3 rounded-3xl bg-white px-4 py-3 shadow-sm">
+      <div className="mx-auto max-w-xl px-3 pb-8 pt-2">
+        <header className="mb-3 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-1 py-2">
           <div className="flex items-center gap-3">
             {!selectedOrder && (
               <button type="button" onClick={() => setDrawerOpen(true)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
