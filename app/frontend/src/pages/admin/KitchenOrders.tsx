@@ -504,9 +504,9 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvanc
 
 function Line({ label, value, valueClassName = 'text-slate-900' }: { label: string; value: ReactNode; valueClassName?: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 text-xl">
-      <span className="text-slate-900">{label}</span>
-      <span className={`text-right font-bold ${valueClassName}`}>{value}</span>
+    <div className="flex items-start justify-between gap-3 text-xl font-black">
+      <span className="text-black">{label}</span>
+      <span className={`text-right font-black ${valueClassName}`}>{value}</span>
     </div>
   );
 }
@@ -942,17 +942,17 @@ export default function KitchenOrders() {
       );
 
       if (status === 'accepted' && order.status === 'new') {
-        // Fai Fai rule: original kitchen receipt prints exactly once, after Accept succeeds.
-        const printKey = `kitchen_original_printed_${order.id}`;
-        if (localStorage.getItem(printKey) !== 'true') {
-          const acceptedOrder = serverOrder || {
-            ...order,
-            status: 'accepted',
-            estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : makeLocalReadyTime(10),
-          };
-          const printed = printReceipt(acceptedOrder, false);
-          if (printed) localStorage.setItem(printKey, 'true');
-        }
+        // Print exactly after a successful Accept. The double-tap guard above prevents
+        // duplicate Accept requests, so no persistent localStorage print flag is needed.
+        // A short delay lets the accepted state paint first on the handheld screen.
+        const acceptedOrder = serverOrder || {
+          ...order,
+          status: 'accepted',
+          estimated_time: estimatedMinutes ? makeLocalReadyTime(estimatedMinutes) : makeLocalReadyTime(10),
+        };
+        window.setTimeout(() => {
+          printReceipt(acceptedOrder, false);
+        }, 250);
       }
 
       if (status === 'cancelled') setSelectedOrderId(null);
@@ -1140,8 +1140,8 @@ export default function KitchenOrders() {
               <ChevronLeft className="h-5 w-5" />
             </button>
             <div className="min-w-0 px-2 text-center">
-              <h1 className="truncate text-lg font-black text-slate-900">#{order.id}</h1>
-              <p className="text-[11px] text-slate-800">{formatUaeTime(order.created_at)}</p>
+              <h1 className="truncate text-xl font-black text-black">#{order.id}</h1>
+              <p className="text-sm font-bold text-black">{formatUaeTime(order.created_at)}</p>
             </div>
             <button type="button" onClick={() => printReceipt(order, true)} className="rounded-full p-2 text-slate-900 hover:bg-slate-100" title="Print order">
               <Printer className="h-5 w-5" />
@@ -1159,8 +1159,8 @@ export default function KitchenOrders() {
                     {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
                   </span>
                 </div>
-                <h2 className="mt-2 truncate text-xl font-black text-slate-900">{order.customer_name}</h2>
-                {order.customer_phone && <p className="mt-0.5 text-sm text-slate-900">{order.customer_phone}</p>}
+                <h2 className="mt-2 truncate text-2xl font-black text-black">{order.customer_name}</h2>
+                {order.customer_phone && <p className="mt-1 text-base font-bold text-black">{order.customer_phone}</p>}
               </div>
               <div className="shrink-0">
                 {['new', 'accepted', 'preparing'].includes(order.status) ? (
@@ -1221,7 +1221,7 @@ export default function KitchenOrders() {
           </div>
 
           <div className="border-b border-slate-200 py-3">
-            <h3 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-900">Items</h3>
+            <h3 className="mb-2 text-base font-black uppercase tracking-wide text-black">Items</h3>
             {items.length === 0 ? (
               <p className="py-4 text-sm text-slate-800">No item details available.</p>
             ) : (
@@ -1229,11 +1229,11 @@ export default function KitchenOrders() {
                 {items.map((item, index) => (
                   <div key={`${order.id}-${index}`} className="flex items-start justify-between gap-3 py-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-black text-slate-900">{item.quantity} × {item.name}</p>
-                      {item.size && <p className="mt-0.5 text-sm text-slate-900">{item.quantity} × {item.size}</p>}
-                      {item.extras.length > 0 && <p className="mt-0.5 text-xs leading-5 text-slate-900">{item.extras.join(', ')}</p>}
+                      <p className="text-lg font-black text-black">{item.quantity} × {item.name}</p>
+                      {item.size && <p className="mt-1 text-base font-bold text-black">{item.quantity} × {item.size}</p>}
+                      {item.extras.length > 0 && <p className="mt-1 text-sm font-bold leading-6 text-black">{item.extras.join(', ')}</p>}
                     </div>
-                    <p className="shrink-0 text-sm font-bold text-slate-900">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
+                    <p className="shrink-0 text-lg font-black text-black">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
                   </div>
                 ))}
               </div>
@@ -1250,8 +1250,8 @@ export default function KitchenOrders() {
               {taxAmount > 0 && <Line label="VAT (Incl.)" value={`AED ${money(taxAmount)}`} />}
             </div>
             <div className="mt-3 flex items-end justify-between border-t border-slate-300 pt-3">
-              <span className="text-base font-bold text-slate-900">Total</span>
-              <span className="text-xl font-black text-slate-900">AED {money(order.total_amount)}</span>
+              <span className="text-lg font-black text-black">Total</span>
+              <span className="text-2xl font-black text-black">AED {money(order.total_amount)}</span>
             </div>
           </div>
 
@@ -1264,9 +1264,6 @@ export default function KitchenOrders() {
 
           {order.status === 'new' && (
             <div className="mt-3 border-t border-slate-200 pt-3">
-              <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-center text-sm font-black text-slate-900">
-                Ready in {selectedTime} min · use − / + beside the timer
-              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   onClick={() => void updateOrderStatus(order, 'accepted', selectedTime || 10)}
@@ -1287,12 +1284,6 @@ export default function KitchenOrders() {
                   <X className="mr-2 h-4 w-4" /> Cancel
                 </Button>
               </div>
-            </div>
-          )}
-
-          {['accepted', 'preparing'].includes(order.status) && (
-            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center text-sm font-black text-slate-900">
-              Use − / + beside the timer to change ready time · customer sees the same time
             </div>
           )}
 
@@ -1479,7 +1470,7 @@ export default function KitchenOrders() {
               </button>
             ) : null}
             <div className="leading-tight">
-              <p className="text-sm font-black text-slate-900">Fai Fai Juice</p>
+              <p className="text-lg font-black text-black">Fai Fai Juice</p>
               <p className="text-[9px] font-black tracking-wide text-slate-900">Mahi Shah</p>
             </div>
           </div>
@@ -1549,7 +1540,7 @@ export default function KitchenOrders() {
           <aside className="absolute left-0 top-0 bottom-0 w-[78%] max-w-xs bg-white p-3 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <p className="text-sm font-black text-slate-900">Fai Fai Juice</p>
+                <p className="text-lg font-black text-black">Fai Fai Juice</p>
                 <p className="text-[10px] font-black tracking-wide text-slate-900">Mahi Shah</p>
               </div>
               <button type="button" onClick={() => setDrawerOpen(false)} className="rounded-xl p-2 text-slate-900 hover:bg-slate-100"><X className="h-5 w-5" /></button>
