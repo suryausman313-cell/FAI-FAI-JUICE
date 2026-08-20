@@ -279,6 +279,19 @@ function formatUaeTime(value: string): string {
   return formatUaeClockTime(value);
 }
 
+function formatHistoryTime(value: string): string {
+  try {
+    return new Date(value).toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Dubai',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return formatUaeTime(value);
+  }
+}
+
 function signedReadyMinutes(order: KitchenOrder): number | null {
   const explicitDeadline = order.promised_ready_at || (
     typeof (order as any).pickup_time === 'string' && String((order as any).pickup_time).includes('|')
@@ -414,13 +427,14 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
   );
 }
 
-function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvance, assignments }: {
+function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvance, onCompletePickup, assignments }: {
   title: string;
   orders: KitchenOrder[];
   emptyText: string;
   onOpen: (orderId: number) => void;
   onBecameLate?: (order: KitchenOrder) => void;
   onAdvance?: (order: KitchenOrder) => void;
+  onCompletePickup?: (order: KitchenOrder) => void;
   assignments: Record<number, AssignmentInfo>;
 }) {
   return (
@@ -463,6 +477,17 @@ function BoardSection({ title, orders, emptyText, onOpen, onBecameLate, onAdvanc
                       : isDeliveryOrder(order)
                         ? 'Ready for delivery'
                         : 'Ready for pickup'}
+                  </Button>
+                </div>
+              )}
+              {onCompletePickup && order.status === 'ready' && !isDeliveryOrder(order) && (
+                <div className="border-t border-slate-100 p-3">
+                  <Button
+                    type="button"
+                    onClick={() => onCompletePickup(order)}
+                    className="h-14 w-full rounded-2xl bg-slate-900 text-xl font-black hover:bg-slate-800"
+                  >
+                    Complete pickup
                   </Button>
                 </div>
               )}
@@ -794,7 +819,8 @@ export default function KitchenOrders() {
         copy_label: reprint ? 'REPRINT / COPY' : 'KITCHEN COPY',
       });
       window.VitaPrinter?.printReceipt(payload);
-      toast.success(reprint ? `Order #${order.id} reprint sent` : `Order #${order.id} printed`);
+      // Successful printing stays silent on the Kitchen device.
+      // Print errors still show below so staff are warned only when action is needed.
       return true;
     } catch (error) {
       console.error('Receipt print failed:', error);
@@ -939,6 +965,8 @@ export default function KitchenOrders() {
     return historyOrders.filter((order) => uaeDateKey(order.updated_at || order.created_at) === key);
   }, [historyOrders]);
 
+  const recentHistory = useMemo(() => historyOrders.slice(0, 30), [historyOrders]);
+
   const newOrders = useMemo(() => activeOrders.filter((order) => order.status === 'new'), [activeOrders]);
   const acceptedOrders = useMemo(() => activeOrders.filter((order) => ['accepted', 'preparing'].includes(order.status)), [activeOrders]);
   const upcomingOrders = useMemo(() => activeOrders.filter((order) => order.status === 'ready'), [activeOrders]);
@@ -953,6 +981,12 @@ export default function KitchenOrders() {
       .filter((order) => order.status === 'completed')
       .reduce((sum, order) => sum + Number(order.total_amount || 0), 0),
     [yesterdayHistory],
+  );
+  const recentCompletedTotal = useMemo(
+    () => recentHistory
+      .filter((order) => order.status === 'completed')
+      .reduce((sum, order) => sum + Number(order.total_amount || 0), 0),
+    [recentHistory],
   );
 
   const selectedOrder = useMemo(
@@ -1034,13 +1068,13 @@ export default function KitchenOrders() {
 
     return (
       <div className="min-h-screen bg-white">
-        <div className="mx-auto max-w-xl px-3 pb-8 pt-1">
+        <div className="mx-auto max-w-lg px-2.5 pb-6 pt-1">
           <div className="sticky top-0 z-20 -mx-3 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
             <button type="button" onClick={() => setSelectedOrderId(null)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
               <ChevronLeft className="h-5 w-5" />
             </button>
             <div className="min-w-0 px-2 text-center">
-              <h1 className="truncate text-xl font-black text-slate-900">#{order.id}</h1>
+              <h1 className="truncate text-lg font-black text-slate-900">#{order.id}</h1>
               <p className="text-[11px] text-slate-400">{formatUaeTime(order.created_at)}</p>
             </div>
             <button type="button" onClick={() => printReceipt(order, true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100" title="Print order">
@@ -1059,7 +1093,7 @@ export default function KitchenOrders() {
                     {isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}
                   </span>
                 </div>
-                <h2 className="mt-3 truncate text-2xl font-black text-slate-900">{order.customer_name}</h2>
+                <h2 className="mt-2 truncate text-xl font-black text-slate-900">{order.customer_name}</h2>
                 {order.customer_phone && <p className="mt-0.5 text-sm text-slate-500">{order.customer_phone}</p>}
               </div>
               <div className="shrink-0"><TimerCircle order={order} onBecameLate={announceLateOrder} /></div>
@@ -1082,7 +1116,7 @@ export default function KitchenOrders() {
                 {items.map((item, index) => (
                   <div key={`${order.id}-${index}`} className="flex items-start justify-between gap-3 py-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-base font-black text-slate-900">{item.quantity} × {item.name}</p>
+                      <p className="text-sm font-black text-slate-900">{item.quantity} × {item.name}</p>
                       {item.size && <p className="mt-0.5 text-sm text-slate-500">{item.quantity} × {item.size}</p>}
                       {item.extras.length > 0 && <p className="mt-0.5 text-xs leading-5 text-slate-500">{item.extras.join(', ')}</p>}
                     </div>
@@ -1103,8 +1137,8 @@ export default function KitchenOrders() {
               {taxAmount > 0 && <Line label="VAT (Incl.)" value={`AED ${money(taxAmount)}`} />}
             </div>
             <div className="mt-3 flex items-end justify-between border-t border-slate-300 pt-3">
-              <span className="text-lg font-medium text-slate-700">Total</span>
-              <span className="text-2xl font-black text-slate-900">AED {money(order.total_amount)}</span>
+              <span className="text-base font-medium text-slate-700">Total</span>
+              <span className="text-xl font-black text-slate-900">AED {money(order.total_amount)}</span>
             </div>
           </div>
 
@@ -1194,33 +1228,16 @@ export default function KitchenOrders() {
     );
   }
 
-  function renderHistory(ordersForDay: KitchenOrder[]) {
+  function renderHistory(ordersForDay: KitchenOrder[], heading: string) {
     const completedTotal = ordersForDay
       .filter((order) => order.status === 'completed')
       .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
 
     return (
-      <div className="mx-auto max-w-xl bg-white">
-        <div className="mb-4 grid grid-cols-2 border-b border-slate-200">
-          <button
-            type="button"
-            onClick={() => setViewMode('today')}
-            className={`py-3 text-center text-sm font-bold ${viewMode === 'today' ? 'border-b-2 border-slate-900 text-slate-900' : 'text-slate-500'}`}
-          >
-            Today
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('yesterday')}
-            className={`py-3 text-center text-sm font-bold ${viewMode === 'yesterday' ? 'border-b-2 border-slate-900 text-slate-900' : 'text-slate-500'}`}
-          >
-            Yesterday
-          </button>
-        </div>
-
-        <div className="px-1 pb-2">
-          <h2 className="text-3xl font-black tracking-tight text-slate-900">Recent orders</h2>
-          <p className="mt-1 text-sm font-medium text-slate-600">All - {ordersForDay.length} (AED {money(completedTotal)})</p>
+      <div className="mx-auto max-w-lg bg-white">
+        <div className="px-1 pb-2 pt-1">
+          <h2 className="text-2xl font-black tracking-tight text-slate-900">{heading}</h2>
+          <p className="mt-0.5 text-xs font-medium text-slate-600">All - {ordersForDay.length} (AED {money(completedTotal)})</p>
         </div>
 
         {ordersForDay.length === 0 ? (
@@ -1234,19 +1251,20 @@ export default function KitchenOrders() {
                   key={order.id}
                   type="button"
                   onClick={() => setSelectedOrderId(order.id)}
-                  className="grid w-full grid-cols-[64px_minmax(0,1fr)_auto] items-start gap-2 px-1 py-3 text-left hover:bg-slate-50"
+                  className="grid w-full grid-cols-[54px_minmax(0,1fr)_82px] items-center gap-2 px-1 py-2.5 text-left hover:bg-slate-50"
                 >
-                  <div className="pt-0.5 text-lg font-black text-slate-900">{formatUaeTime(order.updated_at || order.created_at)}</div>
+                  <div className="text-base font-black tabular-nums text-slate-900">{formatHistoryTime(order.updated_at || order.created_at)}</div>
                   <div className="min-w-0">
-                    <p className="text-sm font-black text-slate-900">#{order.id}</p>
-                    <p className="mt-1 truncate text-sm text-slate-600">{order.customer_name}</p>
+                    <p className="text-xs font-black text-slate-900">#{order.id}</p>
+                    <p className="mt-0.5 truncate text-xs text-slate-600">{order.customer_name}</p>
+                    {order.customer_phone && <p className="mt-0.5 truncate text-[10px] text-slate-400">{order.customer_phone}</p>}
                     {cancelInfo && <p className="mt-1 text-[11px] font-semibold text-red-600">{cancelInfo.by}: {cancelInfo.reason}</p>}
                   </div>
-                  <div className="min-w-[88px] text-right">
-                    <p className={`text-[10px] font-black uppercase tracking-wide ${order.status === 'completed' ? 'text-emerald-600' : DELIVERY_PENDING_STATUSES.has(order.status) ? 'text-sky-600' : 'text-red-600'}`}>
+                  <div className="min-w-[82px] text-right">
+                    <p className={`text-[9px] font-black uppercase tracking-wide ${order.status === 'completed' ? 'text-emerald-600' : DELIVERY_PENDING_STATUSES.has(order.status) ? 'text-sky-600' : 'text-red-600'}`}>
                       {order.status.replaceAll('_', ' ')}
                     </p>
-                    <p className="mt-1 text-base font-black text-slate-900">AED {money(order.total_amount)}</p>
+                    <p className="mt-0.5 text-sm font-black text-slate-900">AED {money(order.total_amount)}</p>
                   </div>
                 </button>
               );
@@ -1331,20 +1349,23 @@ export default function KitchenOrders() {
           </div>
         </div>
       )}
-      <div className="mx-auto max-w-xl px-3 pb-8 pt-2">
-        <header className="mb-3 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-1 py-2">
+      <div className="mx-auto max-w-lg px-2.5 pb-6 pt-1.5">
+        <header className="mb-2.5 flex items-center justify-between gap-2 border-b border-slate-200 bg-white px-0.5 py-1.5">
           <div className="flex items-center gap-3">
             {!selectedOrder && (
               <button type="button" onClick={() => setDrawerOpen(true)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
-                <Menu className="h-7 w-7" />
+                <Menu className="h-6 w-6" />
               </button>
             )}
             {selectedOrder ? (
               <button type="button" onClick={() => setSelectedOrderId(null)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
-                <ChevronLeft className="h-7 w-7" />
+                <ChevronLeft className="h-6 w-6" />
               </button>
             ) : null}
-            <ChefHat className="h-8 w-8 text-slate-500" />
+            <div className="leading-tight">
+              <p className="text-sm font-black text-slate-900">Fai Fai Juice</p>
+              <p className="text-[9px] font-semibold tracking-wide text-slate-400">Mahi Shah</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1355,7 +1376,7 @@ export default function KitchenOrders() {
             )}
             {!selectedOrder && (
               <button type="button" onClick={logoutKitchen} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
-                <LogOut className="h-6 w-6" />
+                <LogOut className="h-5 w-5" />
               </button>
             )}
           </div>
@@ -1379,31 +1400,29 @@ export default function KitchenOrders() {
           </div>
         )}
 
-        {!selectedOrder && (
-          <div className="mb-4 flex items-center justify-between px-1 text-sm text-slate-500">
-            <div className="flex items-center gap-2">
-              <Clock3 className="h-4 w-4" />
-              Last update: {formatUaeClockTime(lastRefresh)} UAE
-            </div>
-            <div>{nativePrinterAvailable() ? 'Printer connected' : 'Printer not connected'}</div>
-          </div>
-        )}
-
         {selectedOrder ? (
           renderOrderDetail(selectedOrder)
         ) : viewMode === 'menu' ? (
           <KitchenMenuPanel embedded />
         ) : viewMode === 'today' ? (
-          renderHistory(todayHistory)
+          renderHistory(todayHistory, 'Today orders')
         ) : viewMode === 'yesterday' ? (
-          renderHistory(yesterdayHistory)
+          renderHistory(recentHistory, 'Recent orders')
         ) : activeOrders.length === 0 ? (
           <EmptyState />
         ) : (
           <div>
             <BoardSection title="New" orders={newOrders} emptyText="No new orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
             <BoardSection title="Accepted" orders={acceptedOrders} emptyText="No accepted orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} onAdvance={(order) => void updateOrderStatus(order, order.status === 'accepted' ? 'preparing' : 'ready')} assignments={assignments} />
-            <BoardSection title="Upcoming" orders={upcomingOrders} emptyText="No upcoming orders" onOpen={setSelectedOrderId} onBecameLate={announceLateOrder} assignments={assignments} />
+            <BoardSection
+              title="Upcoming"
+              orders={upcomingOrders}
+              emptyText="No upcoming orders"
+              onOpen={setSelectedOrderId}
+              onBecameLate={announceLateOrder}
+              onCompletePickup={(order) => void updateOrderStatus(order, 'completed')}
+              assignments={assignments}
+            />
           </div>
         )}
       </div>
@@ -1411,23 +1430,20 @@ export default function KitchenOrders() {
       {drawerOpen && (
         <div className="fixed inset-0 z-50">
           <button type="button" className="absolute inset-0 bg-black/30" onClick={() => setDrawerOpen(false)} aria-label="Close menu" />
-          <aside className="absolute left-0 top-0 bottom-0 w-[82%] max-w-sm bg-white p-4 shadow-2xl">
-            <div className="mb-6 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="rounded-2xl bg-slate-100 p-3"><ChefHat className="h-6 w-6 text-slate-600" /></div>
-                <div>
-                  <p className="font-black text-slate-900">Kitchen</p>
-                  <p className="text-sm text-slate-500">Orders and history</p>
-                </div>
+          <aside className="absolute left-0 top-0 bottom-0 w-[78%] max-w-xs bg-white p-3 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-black text-slate-900">Fai Fai Juice</p>
+                <p className="text-[10px] font-semibold tracking-wide text-slate-400">Mahi Shah</p>
               </div>
               <button type="button" onClick={() => setDrawerOpen(false)} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2">
               {[
                 { key: 'live' as const, label: 'Live Kitchen', icon: LayoutGrid, note: `${activeOrders.length} active orders` },
                 { key: 'today' as const, label: 'Today Orders', icon: PackageCheck, note: `${todayHistory.length} orders · AED ${money(todayCompletedTotal)}` },
-                { key: 'yesterday' as const, label: 'Yesterday Orders', icon: History, note: `${yesterdayHistory.length} orders · AED ${money(yesterdayCompletedTotal)}` },
+                { key: 'yesterday' as const, label: 'Recent Orders', icon: History, note: `${recentHistory.length} orders · AED ${money(recentCompletedTotal)}` },
                 { key: 'menu' as const, label: 'Menu Availability', icon: UtensilsCrossed, note: 'Available / Sold out' },
               ].map((item) => {
                 const Icon = item.icon;
@@ -1439,14 +1455,14 @@ export default function KitchenOrders() {
                       setViewMode(item.key);
                       setDrawerOpen(false);
                     }}
-                    className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left ${viewMode === item.key ? 'border-slate-900 bg-slate-50' : 'border-slate-200 bg-white'}`}
+                    className={`flex w-full items-center gap-2.5 rounded-xl border p-3 text-left ${viewMode === item.key ? 'border-slate-900 bg-slate-50' : 'border-slate-200 bg-white'}`}
                   >
-                    <div className="rounded-2xl bg-slate-100 p-3"><Icon className="h-5 w-5 text-slate-700" /></div>
+                    <div className="rounded-xl bg-slate-100 p-2.5"><Icon className="h-4 w-4 text-slate-700" /></div>
                     <div className="flex-1">
-                      <p className="font-bold text-slate-900">{item.label}</p>
-                      <p className="text-sm text-slate-500">{item.note}</p>
+                      <p className="text-sm font-bold text-slate-900">{item.label}</p>
+                      <p className="text-xs text-slate-500">{item.note}</p>
                     </div>
-                    <ChevronRight className="h-5 w-5 text-slate-400" />
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
                   </button>
                 );
               })}
