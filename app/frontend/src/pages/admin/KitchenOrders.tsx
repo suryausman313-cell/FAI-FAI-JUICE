@@ -44,6 +44,7 @@ declare global {
       printReceipt: (payload: string) => string | void;
       startOrderAlarm?: (count: number) => void;
       stopOrderAlarm?: () => void;
+      speakText?: (text: string) => void;
     };
     webkitAudioContext?: typeof AudioContext;
   }
@@ -111,6 +112,9 @@ type ParsedItem = {
   size?: string;
   price?: number;
   totalPrice?: number;
+  originalPrice?: number;
+  itemDiscountAmount?: number;
+  itemDiscountLabel?: string;
   extras: string[];
 };
 
@@ -202,6 +206,9 @@ function parseItems(itemsJson: unknown): ParsedItem[] {
         size: String(item?.size || item?.selectedSize || ''),
         price: Number(item?.price || item?.unit_price || item?.menuItem?.price_medium || 0),
         totalPrice: Number(item?.totalPrice || item?.total_price || 0),
+        originalPrice: Number(item?.original_price || item?.originalPrice || item?.original_total_price || 0),
+        itemDiscountAmount: Number(item?.item_discount_amount || item?.itemDiscountAmount || item?.discount_amount || item?.item_discount || 0),
+        itemDiscountLabel: String(item?.item_discount_label || item?.discountLabel || ''),
         extras,
       };
     });
@@ -751,8 +758,9 @@ export default function KitchenOrders() {
         setAuthenticated(false);
         toast.error('Kitchen PIN expired. Please login again.');
       } else {
-        console.error('Kitchen order loading failed:', error);
-        toast.error('Orders could not be loaded. Please refresh again.');
+        // Dedicated Kitchen app must self-heal like a native POS.
+        // Do not ask staff to refresh; polling/focus/online recovery below retries silently.
+        console.error('Kitchen order loading failed; automatic retry will continue:', error);
       }
     } finally {
       setRefreshing(false);
@@ -779,13 +787,34 @@ export default function KitchenOrders() {
 
   useEffect(() => {
     if (!authenticated) return;
-    void loadOrders();
-    void loadRiderData();
-    const timer = setInterval(() => {
+
+    const refreshKitchenData = () => {
       void loadOrders();
       void loadRiderData();
-    }, 8000);
-    return () => clearInterval(timer);
+    };
+
+    // Initial load and continuous native-style background recovery.
+    refreshKitchenData();
+    const timer = window.setInterval(refreshKitchenData, 5000);
+
+    // If Wi-Fi/API comes back, or the installed Kitchen app returns to foreground,
+    // recover immediately without showing a manual Refresh instruction to staff.
+    const handleOnline = () => refreshKitchenData();
+    const handleFocus = () => refreshKitchenData();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshKitchenData();
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [authenticated, loadOrders, loadRiderData]);
 
   useEffect(() => {
@@ -988,6 +1017,10 @@ export default function KitchenOrders() {
         }, 250);
       }
 
+      if (status === 'ready') {
+        announceReadyOrder(order.id);
+      }
+
       if (status === 'cancelled') setSelectedOrderId(null);
       toast.success(`Order #${order.id} → ${status}`);
       setTimeout(() => void loadOrders(), 700);
@@ -1093,6 +1126,40 @@ export default function KitchenOrders() {
     if (selectedOrder?.status === 'new') setSelectedTime(10);
   }, [selectedOrderId]);
 
+  const speakKitchenMessage = useCallback((text: string) => {
+    const messageText = String(text || '').trim();
+    if (!messageText) return;
+
+    // Prefer the native Android bridge when available. Browser speech remains
+    // as a fallback for normal web/PWA use.
+    try {
+      if (window.VitaPrinter?.speakText) {
+        window.VitaPrinter.speakText(messageText);
+        return;
+      }
+    } catch { /* optional Android bridge */ }
+
+    try {
+      if (!('speechSynthesis' in window)) return;
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const message = new SpeechSynthesisUtterance(messageText);
+      message.lang = 'en-US';
+      message.rate = 0.9;
+      message.pitch = 1;
+      message.volume = 1;
+      const voices = synth.getVoices();
+      const englishVoice = voices.find((voice) => /^en(-|_)/i.test(voice.lang)) || voices[0];
+      if (englishVoice) message.voice = englishVoice;
+      synth.speak(message);
+      speechUnlockedRef.current = true;
+    } catch { /* voice is best-effort */ }
+  }, []);
+
+  const announceReadyOrder = useCallback((orderId: number) => {
+    speakKitchenMessage(`Order number ${orderId} is ready.`);
+  }, [speakKitchenMessage]);
+
   const announceLateOrder = useCallback((order: KitchenOrder) => {
     const key = `${order.id}_${order.promised_ready_at || 'deadline'}`;
     if (lateVoiceAnnouncedRef.current.has(key)) return;
@@ -1103,54 +1170,16 @@ export default function KitchenOrders() {
     lateVoiceAnnouncedRef.current.add(key);
     toast.warning(`Order #${order.id} is late — please make it Ready.`, { duration: 10000 });
 
-    // Native Kitchen bridge gives an audible fallback even if browser TTS is
-    // unavailable. The voice below then says the actual order number.
+    // Ring briefly, then say the exact order number and that it is late.
     try {
       window.VitaPrinter?.startOrderAlarm?.(1);
       window.setTimeout(() => window.VitaPrinter?.stopOrderAlarm?.(), 2500);
     } catch { /* optional Android bridge */ }
 
-    const speak = (attempt = 0) => {
-      try {
-        if (!('speechSynthesis' in window)) return;
-        const synth = window.speechSynthesis;
-
-        const message = new SpeechSynthesisUtterance(
-          `Order number ${order.id} is late. Time is finished. Please make order number ${order.id} ready.`,
-        );
-        message.lang = 'en-US';
-        message.rate = 0.9;
-        message.pitch = 1;
-        message.volume = 1;
-
-        const voices = synth.getVoices();
-        const englishVoice = voices.find((voice) => /^en(-|_)/i.test(voice.lang)) || voices[0];
-        if (englishVoice) message.voice = englishVoice;
-
-        message.onstart = () => {
-          speechUnlockedRef.current = true;
-        };
-        message.onerror = () => {
-          // Some mobile/PWA engines need a short retry after voices are loaded.
-          if (attempt < 2) window.setTimeout(() => speak(attempt + 1), 500 + attempt * 500);
-        };
-
-        synth.speak(message);
-
-        // Android Chrome occasionally queues an utterance without starting it.
-        // Retry shortly if it is neither speaking nor pending.
-        if (attempt < 2) {
-          window.setTimeout(() => {
-            if (!synth.speaking && !synth.pending) speak(attempt + 1);
-          }, 800 + attempt * 500);
-        }
-      } catch {
-        if (attempt < 2) window.setTimeout(() => speak(attempt + 1), 700);
-      }
-    };
-
-    speak();
-  }, []);
+    window.setTimeout(() => {
+      speakKitchenMessage(`Order number ${order.id} is late. Time is finished. Please make order number ${order.id} ready.`);
+    }, 500);
+  }, [speakKitchenMessage]);
 
   function renderOrderDetail(order: KitchenOrder) {
     const items = parseItems(order.items_json);
@@ -1262,11 +1291,11 @@ export default function KitchenOrders() {
                 {items.map((item, index) => (
                   <div key={`${order.id}-${index}`} className="flex items-start justify-between gap-3 py-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-lg font-black text-black">{item.quantity} × {item.name}</p>
-                      {item.size && <p className="mt-1 text-base font-bold text-black">{item.quantity} × {item.size}</p>}
+                      <p className="text-xl font-black text-black">{item.quantity} × {item.name}</p>
+                      {item.size && <p className="mt-1 text-lg font-bold text-black">{item.quantity} × {item.size}</p>}
                       {item.extras.length > 0 && <p className="mt-1 text-sm font-bold leading-6 text-black">{item.extras.join(', ')}</p>}
                     </div>
-                    <p className="shrink-0 text-lg font-black text-black">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
+                    <p className="shrink-0 text-xl font-black text-black">AED {money(item.totalPrice || (Number(item.price || 0) * item.quantity))}</p>
                   </div>
                 ))}
               </div>
