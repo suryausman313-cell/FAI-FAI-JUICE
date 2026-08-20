@@ -1,11 +1,10 @@
-import { ReactNode, useState, useEffect } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, UserRound, MapPin, Navigation, X } from 'lucide-react';
+import { Home, UtensilsCrossed, ShoppingCart, ClipboardList, UserRound } from 'lucide-react';
 import { getCartItemCount, getCart } from '@/lib/cart-store';
 import { useTranslation } from '@/lib/i18n';
 import { LanguageSwitcher } from '@/components/LanguagePicker';
 import FaiFaiWordmark from '@/components/FaiFaiWordmark';
-import { useBranch } from '@/contexts/BranchContext';
 
 interface CustomerLayoutProps {
   children: ReactNode;
@@ -15,8 +14,6 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
   const location = useLocation();
   const { t } = useTranslation();
   const [cartCount, setCartCount] = useState(0);
-  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
-  const { branches, selectedBranch, loading: branchLoading, needsChoice, chooseBranch, useNearestBranch } = useBranch();
 
   useEffect(() => {
     const updateCount = () => setCartCount(getCartItemCount(getCart()));
@@ -52,26 +49,10 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
             <FaiFaiWordmark compact className="text-xl" />
           </Link>
           <div className="flex items-center gap-2">
-            {branches.length > 0 && selectedBranch && (
-              <button
-                type="button"
-                onClick={() => setBranchPickerOpen(true)}
-                className="hidden sm:flex max-w-[210px] items-center gap-1.5 rounded-full border border-gray-700 bg-gray-900 px-3 py-1.5 text-xs text-white"
-                title="Change branch"
-              >
-                <MapPin className="h-3.5 w-3.5 text-red-500" />
-                <span className="truncate">{selectedBranch.name}</span>
-              </button>
-            )}
             <LanguageSwitcher />
           </div>
 
         </div>
-        {branches.length > 0 && selectedBranch && (
-          <button type="button" onClick={() => setBranchPickerOpen(true)} className="sm:hidden flex w-full items-center justify-center gap-1 border-t border-gray-900 py-1.5 text-[11px] text-gray-300">
-            <MapPin className="h-3 w-3 text-red-500" /> {selectedBranch.name}
-          </button>
-        )}
       </header>
 
       {/* Main Content */}
@@ -107,30 +88,6 @@ export default function CustomerLayout({ children }: CustomerLayoutProps) {
         </div>
       </nav>
 
-      {(branchPickerOpen || (!branchLoading && needsChoice && branches.length > 1)) && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-sm rounded-3xl border border-gray-800 bg-gray-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold text-white">Choose Fai Fai branch</h2>
-                <p className="mt-1 text-xs text-gray-400">Use your location for the nearest branch, or choose manually.</p>
-              </div>
-              {selectedBranch && <button type="button" onClick={() => setBranchPickerOpen(false)} className="rounded-full p-2 text-gray-400"><X className="h-5 w-5" /></button>}
-            </div>
-            <button type="button" onClick={() => { useNearestBranch(); setBranchPickerOpen(false); }} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-3 font-semibold text-white">
-              <Navigation className="h-4 w-4" /> Use nearest branch
-            </button>
-            <div className="mt-3 space-y-2">
-              {branches.map((branch) => (
-                <button key={branch.id} type="button" onClick={() => { chooseBranch(branch, true); setBranchPickerOpen(false); }} className={`w-full rounded-2xl border px-4 py-3 text-left ${selectedBranch?.id === branch.id ? 'border-red-500 bg-red-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                  <div className="font-semibold text-white">{branch.name}</div>
-                  {branch.address && <div className="mt-1 text-xs text-gray-400">{branch.address}</div>}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
