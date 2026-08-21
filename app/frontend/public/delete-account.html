@@ -1,14 +1,52 @@
-Fai Fai Juice - Account Deletion Request
-This page lets a Fai Fai Juice customer request deletion of their app account and associated personal data. You do not need to reinstall the app to make this request.
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delete Account - Fai Fai Juice</title>
+  <style>
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f7f8fa;color:#1f2937;line-height:1.6}
+    main{max-width:720px;margin:32px auto;padding:32px;background:#fff;border:1px solid #e5e7eb;border-radius:16px}
+    h1,h2{color:#111827} h1{margin-top:0}
+    label{display:block;margin-top:20px;font-weight:700}
+    input{width:100%;box-sizing:border-box;padding:14px;margin-top:8px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
+    button{width:100%;margin-top:20px;padding:14px 18px;border:0;border-radius:10px;background:#166534;color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+    .note{margin-top:20px;padding:16px;border-radius:12px;background:#f9fafb;border:1px solid #e5e7eb}
+    a{color:#b91c1c}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Fai Fai Juice - Account Deletion Request</h1>
+  <p>This page lets a Fai Fai Juice customer request deletion of their app account and associated personal data.</p>
 
-What will be deleted
-After we verify the request, we will delete the customer account and personal data associated with it that we are not legally required to retain. Some transaction, accounting, fraud-prevention, tax, or legal records may be retained for the period required by applicable obligations.
+  <h2>What will be deleted</h2>
+  <p>After we verify the request, we will delete the customer account and personal data that we are not legally required to retain. Some transaction, accounting, fraud-prevention, tax or legal records may be retained when required.</p>
 
-Registered mobile number
-+971 5X XXX XXXX
- Request account deletion on WhatsApp
-What happens next:
-A WhatsApp message will open with your deletion request. Send the message to Fai Fai Juice. We may ask you to verify that you own the account before deletion. Requests will be processed as soon as reasonably possible, normally within 30 days, subject to any lawful retention requirements.
+  <label for="phone">Registered mobile number</label>
+  <input id="phone" inputmode="tel" autocomplete="tel" placeholder="+971 5X XXX XXXX">
 
-Privacy questions: +971 52 109 1092
-Privacy Policy: Fai Fai Juice Privacy Policy
+  <button type="button" onclick="requestDeletion()">Request account deletion on WhatsApp</button>
+
+  <div class="note">
+    <strong>What happens next</strong>
+    <p>A WhatsApp message will open with your request. Send it to Fai Fai Juice. We may verify that you own the account before deletion. Requests will normally be handled within 30 days, subject to lawful retention requirements.</p>
+  </div>
+
+  <p>Privacy contact: <a href="https://wa.me/971521091092">+971 52 109 1092</a><br>
+  Privacy Policy: <a href="/privacy-policy.html">Fai Fai Juice Privacy Policy</a></p>
+</main>
+
+<script>
+function requestDeletion() {
+  const phone = document.getElementById('phone').value.trim();
+  if (!phone) {
+    alert('Please enter the mobile number registered with your Fai Fai Juice account.');
+    return;
+  }
+  const message = 'Hello Fai Fai Juice, I want to permanently delete my Fai Fai Juice customer account and associated personal data. My registered mobile number is: ' + phone + '. Please verify my request and process the account deletion.';
+  window.location.href = 'https://wa.me/971521091092?text=' + encodeURIComponent(message);
+}
+</script>
+</body>
+</html>
