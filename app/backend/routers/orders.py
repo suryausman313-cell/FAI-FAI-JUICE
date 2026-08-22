@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import os
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -206,14 +207,31 @@ async def place_order(
 
         # ===== PAYMENT METHOD RULES =====
         payment_text = str(data.payment_method or "").lower().strip()
-        if "cash" in payment_text:
+
+        # Ziina must be checked before the ordinary cash/card rules.
+        # The frontend sends "Ziina Online" for hosted online payments.
+        if payment_text.startswith("ziina online"):
+            payment_kind = "ziina"
+        elif "cash" in payment_text:
             payment_kind = "cash"
         elif "card" in payment_text:
             payment_kind = "card"
         else:
             raise HTTPException(status_code=400, detail="Invalid payment method")
 
-        if settings:
+        if payment_kind == "ziina":
+            ziina_enabled = str(os.getenv("ZIINA_PAYMENT_ENABLED", "false")).strip().lower() in {
+                "1", "true", "yes", "on"
+            }
+            ziina_test_mode = str(os.getenv("ZIINA_TEST_MODE", "true")).strip().lower() in {
+                "1", "true", "yes", "on"
+            }
+            if not ziina_enabled and not ziina_test_mode:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Online payment is currently unavailable",
+                )
+        elif settings:
             if normalized_order_type == "pickup":
                 allowed = (
                     settings.cash_enabled_pickup is not False
@@ -227,7 +245,10 @@ async def place_order(
                     else settings.card_enabled_delivery is not False
                 )
             if not allowed:
-                raise HTTPException(status_code=400, detail="Selected payment method is currently unavailable")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Selected payment method is currently unavailable",
+                )
 
         # ===== SERVER-SIDE CART VALIDATION / PRICING =====
         subtotal_amount, canonical_items = await validate_and_price_order_items(db, data.items_json)
@@ -798,4 +819,3 @@ async def get_my_feedbacks(
     except Exception as exc:
         logging.exception("Failed to load customer feedback history")
         raise HTTPException(status_code=500, detail="Could not load feedback history") from exc
-
