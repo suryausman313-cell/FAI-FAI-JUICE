@@ -57,9 +57,9 @@ const DEVICE_PHONE_KEY = 'vita_customer_registered_phone';
 const TOKEN_KEY = 'vita_customer_token';
 const CUSTOMER_KEY = 'vita_customer';
 
-const RESTAURANT_PHONE_DISPLAY = '+971 52 109 1092';
-const RESTAURANT_PHONE_TEL = '+971521091092';
-const RESTAURANT_WHATSAPP = '971521091092';
+const RESTAURANT_PHONE_DISPLAY = '+971 56 969 7233';
+const RESTAURANT_PHONE_TEL = '+971569697233';
+const RESTAURANT_WHATSAPP = '971569697233';
 
 function normalizePhone(value: string): string {
   const raw = value.trim();
