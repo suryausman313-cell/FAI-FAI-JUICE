@@ -273,7 +273,7 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
   // Only show for 'new' (pending) orders
   if (order.status !== 'new') return null;
 
-  const restaurantPhone = '+971521091092'; // Restaurant WhatsApp number
+  const restaurantPhone = '+971523187415'; // Restaurant WhatsApp number
   const whatsappMessage = encodeURIComponent(
     t('orders.whatsapp_pending_message').replace('{orderId}', String(order.id))
   );
