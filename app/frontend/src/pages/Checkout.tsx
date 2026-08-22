@@ -613,15 +613,35 @@ export default function Checkout() {
     }
   }, [deliveryAvailableNow, orderType]);
 
-  // Auto-select first available payment method when order type changes
+  // Keep checkout simple: only Cash + Card.
+  // When Ziina is enabled, the Card option uses Ziina online payment.
+  // If Ziina is disabled, the existing physical-card setting is used as fallback.
   useEffect(() => {
-    const methods = orderType === 'pickup'
-      ? [cashEnabledPickup && 'cash', cardEnabledPickup && 'card', ziinaEnabled && 'ziina'].filter(Boolean)
-      : [cashEnabledDelivery && 'cash', cardEnabledDelivery && 'card', ziinaEnabled && 'ziina'].filter(Boolean);
+    const cashAvailable =
+      orderType === 'pickup' ? cashEnabledPickup : cashEnabledDelivery;
+    const physicalCardAvailable =
+      orderType === 'pickup' ? cardEnabledPickup : cardEnabledDelivery;
+    const cardMethod = ziinaEnabled
+      ? 'ziina'
+      : (physicalCardAvailable ? 'card' : false);
+
+    const methods = [
+      cashAvailable && 'cash',
+      cardMethod,
+    ].filter(Boolean) as string[];
+
     if (methods.length > 0 && !methods.includes(paymentMethod)) {
-      setPaymentMethod(methods[0] as string);
+      setPaymentMethod(methods[0]);
     }
-  }, [orderType, cashEnabledPickup, cardEnabledPickup, cashEnabledDelivery, cardEnabledDelivery, ziinaEnabled]);
+  }, [
+    orderType,
+    cashEnabledPickup,
+    cardEnabledPickup,
+    cashEnabledDelivery,
+    cardEnabledDelivery,
+    ziinaEnabled,
+    paymentMethod,
+  ]);
 
   useEffect(() => {
     if (showMap && !mapInstanceRef.current) {
@@ -1137,20 +1157,32 @@ export default function Checkout() {
   const taxAddedToTotal = vatIncluded ? 0 : taxAmount;
   const total = subtotal + deliveryFee + serviceFee + smallOrderFee + taxAddedToTotal + tipAmount - discountAmount;
 
-  // Determine available payment methods based on order type
-  const availablePaymentMethods: { value: string; label: string; description: string }[] = [];
-  if (orderType === 'pickup') {
-    if (cashEnabledPickup) availablePaymentMethods.push({ value: 'cash', label: `💵 ${t('checkout.cash_on_pickup')}`, description: t('checkout.pay_cash_collect') });
-    if (cardEnabledPickup) availablePaymentMethods.push({ value: 'card', label: `💳 ${t('checkout.card_on_pickup')}`, description: t('checkout.pay_card_collect') });
-  } else {
-    if (cashEnabledDelivery) availablePaymentMethods.push({ value: 'cash', label: `💵 ${t('checkout.cash_on_delivery')}`, description: t('checkout.pay_cash_rider') });
-    if (cardEnabledDelivery) availablePaymentMethods.push({ value: 'card', label: `💳 ${t('checkout.card_on_delivery')}`, description: t('checkout.pay_card_rider') });
+  // Simple customer-facing payment choices: Cash + Card only.
+  const availablePaymentMethods: { value: string; label: string }[] = [];
+
+  const cashAvailable =
+    orderType === 'pickup' ? cashEnabledPickup : cashEnabledDelivery;
+  const physicalCardAvailable =
+    orderType === 'pickup' ? cardEnabledPickup : cardEnabledDelivery;
+
+  if (cashAvailable) {
+    availablePaymentMethods.push({
+      value: 'cash',
+      label: language === 'ar' ? '💵 نقداً' : '💵 Cash',
+    });
   }
+
+  // Ziina is the preferred Card option. We intentionally do not show
+  // a separate "Card on Pickup/Delivery" plus "Online Card" third option.
   if (ziinaEnabled) {
     availablePaymentMethods.push({
       value: 'ziina',
-      label: language === 'ar' ? '💳 الدفع بالبطاقة أونلاين' : '💳 Online Card Payment',
-      description: language === 'ar' ? 'ادفع بأمان عبر Ziina' : 'Pay securely online with Ziina',
+      label: language === 'ar' ? '💳 بطاقة' : '💳 Card',
+    });
+  } else if (physicalCardAvailable) {
+    availablePaymentMethods.push({
+      value: 'card',
+      label: language === 'ar' ? '💳 بطاقة' : '💳 Card',
     });
   }
 
@@ -1995,10 +2027,7 @@ export default function Checkout() {
                 {availablePaymentMethods.map(method => (
                   <label key={method.value} className="flex items-center gap-3 p-4 rounded-xl border border-gray-700 hover:border-gray-500 cursor-pointer">
                     <RadioGroupItem value={method.value} id={method.value} />
-                    <div>
-                      <div className="text-white font-medium">{method.label}</div>
-                      <div className="text-gray-500 text-sm">{method.description}</div>
-                    </div>
+                    <div className="text-white font-medium">{method.label}</div>
                   </label>
                 ))}
               </RadioGroup>
