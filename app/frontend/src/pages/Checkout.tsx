@@ -413,6 +413,7 @@ export default function Checkout() {
   const [carInfo, setCarInfo] = useState('');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [ziinaEnabled, setZiinaEnabled] = useState(false);
   const [orderType, setOrderType] = useState<'pickup' | 'delivery'>('pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
 
@@ -500,6 +501,97 @@ export default function Checkout() {
     loadActivePromoOffers();
   }, []);
 
+  // Read only the public Ziina ON/OFF state. The secret API key stays on Render.
+  useEffect(() => {
+    axios
+      .get(`${getAPIBaseURL().replace(/\/$/, '')}/api/v1/ziina/config`, { timeout: 10000 })
+      .then((response) => setZiinaEnabled(response?.data?.enabled === true))
+      .catch(() => setZiinaEnabled(false));
+  }, []);
+
+  // Ziina hosted checkout returns the customer to this same Checkout route.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ziinaResult = params.get('ziina');
+    const orderId = Number(params.get('order_id') || 0);
+    if (!ziinaResult || !orderId) return;
+
+    let disposed = false;
+    const apiBase = getAPIBaseURL().replace(/\/$/, '');
+    const token = localStorage.getItem('vita_customer_token') || '';
+    const authConfig = {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      timeout: 20000,
+    };
+
+    const finishZiinaReturn = async () => {
+      if (ziinaResult === 'success') {
+        try {
+          let finalStatus = '';
+
+          // Ziina may redirect a fraction of a second before its final status is visible.
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            const verification = await axios.post(
+              `${apiBase}/api/v1/ziina/verify-payment`,
+              { order_id: orderId },
+              authConfig,
+            );
+
+            finalStatus = String(verification?.data?.status || '').toLowerCase();
+            if (finalStatus === 'completed') break;
+            if (['failed', 'canceled', 'cancelled'].includes(finalStatus)) break;
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          }
+
+          if (disposed) return;
+
+          if (finalStatus === 'completed') {
+            clearCart();
+            window.dispatchEvent(new Event('cart-updated'));
+            toast.success(`${t('checkout.order_number')} #${orderId} — online payment successful`);
+            navigate('/order-confirmation', { replace: true, state: { orderId } });
+            return;
+          }
+
+          if (['failed', 'canceled', 'cancelled'].includes(finalStatus)) {
+            toast.error('Online payment was not completed.');
+            navigate('/checkout', { replace: true });
+            return;
+          }
+
+          toast.info('Payment is still processing. Please check My Orders shortly.');
+          navigate('/my-orders', { replace: true });
+        } catch (error: any) {
+          if (disposed) return;
+          toast.error(error?.response?.data?.detail || error?.message || 'Could not verify online payment.');
+          navigate('/my-orders', { replace: true });
+        }
+        return;
+      }
+
+      // Cancel/failure: keep the cart so the customer can retry or choose cash.
+      try {
+        await axios.post(
+          `${apiBase}/api/v1/ziina/cancel-payment-order`,
+          { order_id: orderId },
+          authConfig,
+        );
+      } catch {
+        // A cleanup failure must not delete the cart or trap the customer.
+      }
+
+      if (!disposed) {
+        toast.error(ziinaResult === 'failed' ? 'Online payment failed. Please try again.' : 'Online payment cancelled.');
+        navigate('/checkout', { replace: true });
+      }
+    };
+
+    void finishZiinaReturn();
+    return () => {
+      disposed = true;
+    };
+  }, [navigate]);
+
   useEffect(() => {
     void loadDeliverySettings();
   }, [selectedBranch?.id]);
@@ -524,12 +616,12 @@ export default function Checkout() {
   // Auto-select first available payment method when order type changes
   useEffect(() => {
     const methods = orderType === 'pickup'
-      ? [cashEnabledPickup && 'cash', cardEnabledPickup && 'card'].filter(Boolean)
-      : [cashEnabledDelivery && 'cash', cardEnabledDelivery && 'card'].filter(Boolean);
+      ? [cashEnabledPickup && 'cash', cardEnabledPickup && 'card', ziinaEnabled && 'ziina'].filter(Boolean)
+      : [cashEnabledDelivery && 'cash', cardEnabledDelivery && 'card', ziinaEnabled && 'ziina'].filter(Boolean);
     if (methods.length > 0 && !methods.includes(paymentMethod)) {
       setPaymentMethod(methods[0] as string);
     }
-  }, [orderType, cashEnabledPickup, cardEnabledPickup, cashEnabledDelivery, cardEnabledDelivery]);
+  }, [orderType, cashEnabledPickup, cardEnabledPickup, cashEnabledDelivery, cardEnabledDelivery, ziinaEnabled]);
 
   useEffect(() => {
     if (showMap && !mapInstanceRef.current) {
@@ -1054,6 +1146,13 @@ export default function Checkout() {
     if (cashEnabledDelivery) availablePaymentMethods.push({ value: 'cash', label: `💵 ${t('checkout.cash_on_delivery')}`, description: t('checkout.pay_cash_rider') });
     if (cardEnabledDelivery) availablePaymentMethods.push({ value: 'card', label: `💳 ${t('checkout.card_on_delivery')}`, description: t('checkout.pay_card_rider') });
   }
+  if (ziinaEnabled) {
+    availablePaymentMethods.push({
+      value: 'ziina',
+      label: language === 'ar' ? '💳 الدفع بالبطاقة أونلاين' : '💳 Online Card Payment',
+      description: language === 'ar' ? 'ادفع بأمان عبر Ziina' : 'Pay securely online with Ziina',
+    });
+  }
 
   // Allowed country codes from admin settings
   const [allowedCountryCodes, setAllowedCountryCodes] = useState<string[]>(['+971']);
@@ -1260,13 +1359,15 @@ export default function Checkout() {
           customer_phone: phone.trim(),
           order_notes: fullNotes,
           payment_method:
-            paymentMethod === 'cash'
-              ? orderType === 'delivery'
-                ? 'Cash on Delivery'
-                : 'Cash on Pickup'
-              : orderType === 'delivery'
-                ? 'Card on Delivery'
-                : 'Card on Pickup',
+            paymentMethod === 'ziina'
+              ? 'Ziina Online'
+              : paymentMethod === 'cash'
+                ? orderType === 'delivery'
+                  ? 'Cash on Delivery'
+                  : 'Cash on Pickup'
+                : orderType === 'delivery'
+                  ? 'Card on Delivery'
+                  : 'Card on Pickup',
           total_amount: Number(total.toFixed(2)),
           subtotal_amount: Number(subtotal.toFixed(2)),
           promo_code: promoApplied && promoOffer ? promoOffer.promo_code : '',
@@ -1295,8 +1396,56 @@ export default function Checkout() {
       );
 
       const orderId = response?.data?.order_id;
+
+      // Ziina online checkout: keep cart until backend confirms completed payment.
+      if (paymentMethod === 'ziina') {
+        localStorage.setItem('vita_customer_name', name.trim());
+        localStorage.setItem('vita_customer_phone', phone.trim());
+
+        try {
+          const payment = await axios.post(
+            `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/ziina/create-payment`,
+            { order_id: orderId },
+            {
+              headers: {
+                Authorization: `Bearer ${localStorage.getItem('vita_customer_token') || ''}`,
+              },
+              timeout: 20000,
+            },
+          );
+
+          if (payment?.data?.already_paid === true) {
+            clearCart();
+            window.dispatchEvent(new Event('cart-updated'));
+            navigate('/order-confirmation', { state: { orderId } });
+            return;
+          }
+
+          const redirectUrl = String(payment?.data?.redirect_url || '').trim();
+          if (!redirectUrl) throw new Error('Ziina payment link was not returned');
+
+          window.location.assign(redirectUrl);
+          return;
+        } catch (paymentError) {
+          try {
+            await axios.post(
+              `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/ziina/cancel-payment-order`,
+              { order_id: orderId },
+              {
+                headers: {
+                  Authorization: `Bearer ${localStorage.getItem('vita_customer_token') || ''}`,
+                },
+                timeout: 10000,
+              },
+            );
+          } catch {
+            // Keep the original payment error.
+          }
+          throw paymentError;
+        }
+      }
       
-      // Save customer info for next order auto-fill
+      // Existing cash/card-on-collection flow stays unchanged.
       localStorage.setItem('vita_customer_name', name.trim());
       localStorage.setItem('vita_customer_phone', phone.trim());
       
