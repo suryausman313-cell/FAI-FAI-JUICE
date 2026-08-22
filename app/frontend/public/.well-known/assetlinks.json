@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.faifaijuice.app",
+      "sha256_cert_fingerprints": [
+        "13:7C:FC:2C:82:2C:69:3B:10:4A:1B:2E:25:64:A9:9A:F8:A6:0A:20:E9:F9:FF:EF:72:04:00:02:61:4B:07:92"
+      ]
+    }
+  }
+]
