@@ -1,0 +1,395 @@
+# @File: backend/routers/ziina_payments.py
+# @Desc: Secure Ziina hosted online-card payment integration for Fai Fai Juice.
+
+import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.database import get_db
+from models.orders import Orders
+from routers.customer_auth import decode_customer_token, get_bearer_token
+from services.rider_assignment import auto_assign_order
+
+router = APIRouter(prefix="/api/v1/ziina", tags=["ziina-payments"])
+
+ZIINA_API_BASE = "https://api-v2.ziina.com/api"
+ZIINA_INTENT_MARKER = "Ziina Payment Intent:"
+ACTIVE_STATUSES = {"requires_payment_instrument", "requires_user_action", "pending"}
+FAILED_STATUSES = {"failed", "canceled", "cancelled"}
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def api_key() -> str:
+    value = str(os.getenv("ZIINA_API_KEY", "")).strip()
+    if not value:
+        raise HTTPException(status_code=503, detail="Ziina API key is not configured")
+    return value
+
+
+def public_frontend_url() -> str:
+    # FRONTEND_URL should be the public Fai Fai customer URL on Render.
+    return str(os.getenv("FRONTEND_URL", "https://fai-fai-juice.pages.dev")).strip().rstrip("/")
+
+
+def order_amount_fils(order: Orders) -> int:
+    amount = int(round(float(order.total_amount or 0) * 100))
+    if amount < 200:
+        raise HTTPException(status_code=400, detail="Online payment minimum is AED 2")
+    return amount
+
+
+def marker(intent_id: str) -> str:
+    return f"{ZIINA_INTENT_MARKER} {intent_id}"
+
+
+def latest_intent_id(order: Orders) -> str:
+    notes = str(order.order_notes or "")
+    matches = re.findall(r"Ziina Payment Intent:\s*([A-Za-z0-9_-]+)", notes)
+    return matches[-1] if matches else ""
+
+
+def append_note(existing: Optional[str], new_note: str) -> str:
+    current = str(existing or "").strip()
+    if new_note in current:
+        return current
+    return f"{current} | {new_note}".strip(" |")
+
+
+def is_delivery_order(order: Orders) -> bool:
+    explicit = str(getattr(order, "order_type", "") or "").strip().lower()
+    notes = str(getattr(order, "order_notes", "") or "").lower()
+    return explicit == "delivery" or "order type: delivery" in notes or "delivery address:" in notes
+
+
+def customer_user_id(authorization: Optional[str]) -> str:
+    payload = decode_customer_token(get_bearer_token(authorization))
+    subject = str(payload.get("sub") or "").strip()
+    if not subject:
+        raise HTTPException(status_code=401, detail="Customer login required")
+    return f"customer:{subject}"
+
+
+async def owned_order(
+    db: AsyncSession,
+    order_id: int,
+    authorization: Optional[str],
+) -> Orders:
+    owner_id = customer_user_id(authorization)
+    result = await db.execute(
+        select(Orders).where(Orders.id == order_id, Orders.user_id == owner_id)
+    )
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+async def ziina_request(
+    method: str,
+    path: str,
+    *,
+    payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    headers = {
+        "Authorization": f"Bearer {api_key()}",
+        "Accept": "application/json",
+    }
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            response = await client.request(
+                method,
+                f"{ZIINA_API_BASE}{path}",
+                headers=headers,
+                json=payload,
+            )
+    except httpx.RequestError as exc:
+        logging.exception("Ziina network request failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to Ziina. Please try again.",
+        ) from exc
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {"message": response.text[:500]}
+
+    if response.status_code >= 400:
+        detail = None
+        if isinstance(body, dict):
+            latest_error = body.get("latest_error")
+            if isinstance(latest_error, dict):
+                detail = latest_error.get("message")
+            detail = detail or body.get("detail") or body.get("message")
+        logging.error("Ziina API error %s %s: %s", method, path, body)
+        raise HTTPException(
+            status_code=502,
+            detail=str(detail or f"Ziina returned HTTP {response.status_code}"),
+        )
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=502, detail="Unexpected response from Ziina")
+    return body
+
+
+async def release_paid_order(
+    db: AsyncSession,
+    order: Orders,
+    intent: dict[str, Any],
+) -> str:
+    """Verify Ziina result and only then release the order to the shop."""
+    status = str(intent.get("status") or "").strip().lower()
+    intent_id = str(intent.get("id") or "").strip()
+
+    if not intent_id or marker(intent_id) not in str(order.order_notes or ""):
+        raise HTTPException(status_code=400, detail="Payment does not belong to this order")
+
+    if int(intent.get("amount") or 0) != order_amount_fils(order):
+        raise HTTPException(status_code=400, detail="Payment amount does not match order total")
+
+    if str(intent.get("currency_code") or "AED").upper() != "AED":
+        raise HTTPException(status_code=400, detail="Unexpected payment currency")
+
+    current_status = str(order.status or "").strip().lower()
+
+    if status == "completed":
+        if current_status == "payment_pending":
+            order.status = "new"
+            order.payment_method = "Ziina Online (Paid)"
+            # Kitchen timer starts after successful payment, not while customer is paying.
+            try:
+                order.created_at = datetime.now(timezone.utc)
+            except Exception:
+                pass
+            await db.commit()
+            await db.refresh(order)
+
+            # Delivery rider assignment also waits until payment is confirmed.
+            if is_delivery_order(order):
+                try:
+                    await auto_assign_order(db, order)
+                except Exception:
+                    logging.exception("Auto rider assignment failed after Ziina payment for order %s", order.id)
+                    await db.rollback()
+
+    elif status in FAILED_STATUSES:
+        if current_status == "payment_pending":
+            order.status = "cancelled"
+            order.payment_method = "Ziina Online (Failed/Cancelled)"
+            await db.commit()
+
+    return status
+
+
+class OrderPaymentRequest(BaseModel):
+    order_id: int = Field(ge=1)
+
+
+@router.get("/config")
+async def get_ziina_config():
+    # Never expose the API key to browser/mobile clients.
+    return {
+        "enabled": env_bool("ZIINA_PAYMENT_ENABLED", False),
+        "test_mode": env_bool("ZIINA_TEST_MODE", True),
+        "provider": "Ziina",
+    }
+
+
+@router.post("/create-payment")
+async def create_payment(
+    data: OrderPaymentRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    if not env_bool("ZIINA_PAYMENT_ENABLED", False):
+        raise HTTPException(status_code=503, detail="Online payment is currently disabled")
+
+    order = await owned_order(db, data.order_id, authorization)
+
+    if not str(order.payment_method or "").strip().lower().startswith("ziina online"):
+        raise HTTPException(status_code=400, detail="This order is not an online-payment order")
+
+    current_status = str(order.status or "").strip().lower()
+    if current_status == "new" and "ziina online (paid)" in str(order.payment_method or "").lower():
+        return {"success": True, "already_paid": True, "order_id": order.id, "status": "completed"}
+    if current_status != "payment_pending":
+        raise HTTPException(status_code=400, detail=f"Order cannot start payment in status '{order.status}'")
+
+    # Reuse the most recent still-active intent instead of creating duplicate payment pages.
+    previous_id = latest_intent_id(order)
+    if previous_id:
+        try:
+            previous = await ziina_request("GET", f"/payment_intent/{previous_id}")
+            previous_status = str(previous.get("status") or "").strip().lower()
+            if previous_status == "completed":
+                await release_paid_order(db, order, previous)
+                return {"success": True, "already_paid": True, "order_id": order.id, "status": "completed"}
+            if previous_status in ACTIVE_STATUSES and str(previous.get("redirect_url") or "").strip():
+                return {
+                    "success": True,
+                    "order_id": order.id,
+                    "payment_intent_id": previous_id,
+                    "redirect_url": str(previous.get("redirect_url")),
+                    "status": previous_status,
+                    "test_mode": env_bool("ZIINA_TEST_MODE", True),
+                    "reused": True,
+                }
+        except HTTPException:
+            # If an old intent cannot be fetched, creating a fresh one is safer for the customer.
+            logging.warning("Could not reuse previous Ziina intent for order %s", order.id)
+
+    base = public_frontend_url()
+    success_url = f"{base}/checkout?ziina=success&order_id={order.id}"
+    cancel_url = f"{base}/checkout?ziina=cancel&order_id={order.id}"
+    failure_url = f"{base}/checkout?ziina=failed&order_id={order.id}"
+
+    # Expire abandoned hosted checkouts after 30 minutes.
+    expiry_ms = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000)
+
+    payload = {
+        "amount": order_amount_fils(order),
+        "currency_code": "AED",
+        "message": f"Fai Fai Juice - Order #{order.id}",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "failure_url": failure_url,
+        "test": env_bool("ZIINA_TEST_MODE", True),
+        "expiry": str(expiry_ms),
+        "allow_tips": False,
+    }
+
+    intent = await ziina_request("POST", "/payment_intent", payload=payload)
+    intent_id = str(intent.get("id") or "").strip()
+    redirect_url = str(intent.get("redirect_url") or "").strip()
+    if not intent_id or not redirect_url:
+        raise HTTPException(status_code=502, detail="Ziina did not return a valid payment link")
+
+    order.order_notes = append_note(order.order_notes, marker(intent_id))
+    await db.commit()
+
+    return {
+        "success": True,
+        "order_id": order.id,
+        "payment_intent_id": intent_id,
+        "redirect_url": redirect_url,
+        "status": intent.get("status"),
+        "test_mode": env_bool("ZIINA_TEST_MODE", True),
+    }
+
+
+@router.post("/verify-payment")
+async def verify_payment(
+    data: OrderPaymentRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    order = await owned_order(db, data.order_id, authorization)
+    intent_id = latest_intent_id(order)
+    if not intent_id:
+        raise HTTPException(status_code=400, detail="No Ziina payment was started for this order")
+
+    intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+    status = await release_paid_order(db, order, intent)
+    return {
+        "success": True,
+        "order_id": order.id,
+        "payment_intent_id": intent_id,
+        "status": status,
+        "paid": status == "completed",
+    }
+
+
+@router.post("/cancel-payment-order")
+async def cancel_payment_order(
+    data: OrderPaymentRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    order = await owned_order(db, data.order_id, authorization)
+
+    if str(order.status or "").strip().lower() != "payment_pending":
+        return {"success": True, "order_id": order.id, "status": order.status}
+
+    intent_id = latest_intent_id(order)
+    if intent_id:
+        try:
+            intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+            status = await release_paid_order(db, order, intent)
+            if status == "completed":
+                return {"success": True, "order_id": order.id, "status": "new", "paid": True}
+        except HTTPException:
+            logging.warning("Ziina cancel check failed for order %s", order.id)
+
+    order.status = "cancelled"
+    order.payment_method = "Ziina Online (Cancelled)"
+    await db.commit()
+    return {"success": True, "order_id": order.id, "status": order.status}
+
+
+@router.post("/webhook")
+async def ziina_webhook(
+    request: Request,
+    x_hmac_signature: Optional[str] = Header(default=None, alias="X-Hmac-Signature"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Optional production webhook. Configure ZIINA_WEBHOOK_SECRET before live mode."""
+    raw_body = await request.body()
+    secret = str(os.getenv("ZIINA_WEBHOOK_SECRET", "")).strip()
+
+    if secret:
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        supplied = str(x_hmac_signature or "").strip()
+        if not supplied or not hmac.compare_digest(expected, supplied):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    elif not env_bool("ZIINA_TEST_MODE", True):
+        # Never accept unsigned live-payment webhooks.
+        raise HTTPException(status_code=503, detail="ZIINA_WEBHOOK_SECRET is not configured")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook body") from exc
+
+    if str(payload.get("event") or "") != "payment_intent.status.updated":
+        return {"success": True, "ignored": True}
+
+    event_data = payload.get("data") or {}
+    if not isinstance(event_data, dict):
+        return {"success": True, "ignored": True}
+
+    intent_id = str(event_data.get("id") or event_data.get("payment_intent_id") or "").strip()
+    if not intent_id:
+        return {"success": True, "ignored": True}
+
+    result = await db.execute(
+        select(Orders).where(Orders.order_notes.contains(marker(intent_id))).limit(1)
+    )
+    order = result.scalar_one_or_none()
+    if not order:
+        logging.warning("Ziina webhook order not found for intent %s", intent_id)
+        return {"success": True, "order_found": False}
+
+    # Always fetch the intent directly from Ziina before releasing an order.
+    intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+    status = await release_paid_order(db, order, intent)
+    return {"success": True, "order_found": True, "order_id": order.id, "status": status}

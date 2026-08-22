@@ -485,6 +485,10 @@ async def place_order(
                 "duplicate_prevented": True,
             }
 
+        # Ziina online orders must not reach Admin/Kitchen/Rider before payment.
+        is_ziina_online = str(data.payment_method or "").strip().lower().startswith("ziina online")
+        initial_status = "payment_pending" if is_ziina_online else "new"
+
         order = Orders(
             user_id=guest_user_id,
             customer_name=data.customer_name.strip(),
@@ -503,7 +507,7 @@ async def place_order(
             branch_name=branch.name if branch is not None else "",
             delivery_distance_km=delivery_distance_km if normalized_order_type == "delivery" else None,
             delivery_zone_name=delivery_zone_name if normalized_order_type == "delivery" else "",
-            status="new",
+            status=initial_status,
             total_amount=server_total,
             subtotal_amount=subtotal_amount,
             promo_code=promo_code,
@@ -523,7 +527,8 @@ async def place_order(
         await db.refresh(order)
 
         rider_assignment = None
-        if normalized_order_type == "delivery":
+        # For Ziina, rider assignment starts only after Ziina confirms payment.
+        if normalized_order_type == "delivery" and initial_status == "new":
             try:
                 rider_assignment = await auto_assign_order(db, order)
             except Exception:
@@ -592,7 +597,7 @@ async def cancel_order(
         # Status flow: new -> accepted -> preparing -> ready -> completed
         # By default: cancel allowed when status is 'new' (pending)
         # Admin can configure: allow_cancel_preparing, allow_cancel_ready
-        allowed_statuses = ['new']  # Always allow cancel when pending
+        allowed_statuses = ['new', 'payment_pending']  # Payment-pending Ziina orders can also be cancelled
 
         # Check admin settings from restaurant_settings
         from models.restaurant_settings import Restaurant_settings
