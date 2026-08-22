@@ -7,7 +7,9 @@
       "namespace": "android_app",
       "package_name": "com.faifaijuice.app",
       "sha256_cert_fingerprints": [
-        "13:7C:FC:2C:82:2C:69:3B:10:4A:1B:2E:25:64:A9:9A:F8:A6:0A:20:E9:F9:FF:EF:72:04:00:02:61:4B:07:92"
+        "13:7C:FC:2C:82:2C:69:3B:10:4A:1B:2E:25:64:A9:9A:F8:A6:0A:20:E9:F9:FF:EF:72:04:00:02:61:4B:07:92",
+        "74:9A:92:20:DA:AD:45:26:6C:C2:C1:3D:57:D8:F4:BC:61:11:97:26:97:2F:06:CB:83:42:2E:7A:16:73:1C:BE",
+        "BC:FE:3C:2D:E9:C8:8F:6B:FE:3B:11:8F:35:19:3F:78:F4:E5:E3:4C:C7:95:1C:44:2C:C0:56:21:8F:DE:2E:F2"
       ]
     }
   }
