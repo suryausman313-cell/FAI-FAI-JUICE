@@ -558,7 +558,7 @@ export default function AdminOrders() {
       .total{font-weight:bold;font-size:1.2em}</style></head>
       <body>
       <h2>Fai Fai Juice</h2>
-      <p style="text-align:center">Murbah, Fujairah, UAE<br>+971 54 294 0112</p>
+      <p style="text-align:center">Murbah, Fujairah, UAE<br>+971 56 969 7233</p>
       <div class="line"></div>
       <p><strong>Order #${order.id}</strong><br>
       Customer: ${order.customer_name}<br>

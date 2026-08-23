@@ -5,6 +5,7 @@ import {
   BellOff,
   CalendarDays,
   CheckCircle2,
+  DollarSign,
   Loader2,
   RefreshCw,
   Send,
@@ -43,6 +44,7 @@ interface RiderFinanceItem {
   is_active: boolean;
   totals: Record<string, number>;
   settlements: Record<string, number>;
+  payouts?: Record<string, number>;
   current_balance: Record<string, number>;
 }
 
@@ -56,6 +58,7 @@ interface Summary {
   totals: Record<string, number>;
   current_balance: Record<string, number>;
   settlements?: Record<string, number>;
+  payouts?: Record<string, number>;
   riders?: RiderFinanceItem[];
 }
 
@@ -141,6 +144,7 @@ export default function AdminFinance() {
   const [loading, setLoading] = useState(true);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [payoutSubmittingId, setPayoutSubmittingId] = useState<number | null>(null);
 
   const [pushState, setPushState] = useState<AdminPushState>({
     supported: true,
@@ -296,6 +300,48 @@ export default function AdminFinance() {
     }
   }
 
+  async function recordRiderPayout(rider: RiderFinanceItem) {
+    const remaining = Number(rider.current_balance?.rider_remaining_to_receive || 0);
+    if (remaining <= 0.009) {
+      toast.info('No Rider earning is due');
+      return;
+    }
+
+    const entered = window.prompt(
+      `Pay ${rider.rider_name} - amount (max AED ${money(remaining)}):`,
+      money(remaining),
+    );
+    if (entered === null) return;
+
+    const amount = Number(entered);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > remaining + 0.01) {
+      toast.error(`Enter amount from AED 0.01 to AED ${money(remaining)}`);
+      return;
+    }
+
+    const note = window.prompt('Optional payment note:', '') || '';
+    if (!window.confirm(`Record AED ${money(amount)} paid to ${rider.rider_name}?`)) return;
+
+    setPayoutSubmittingId(rider.rider_id);
+    try {
+      await apiRequest(`/api/v1/finance/admin/riders/${rider.rider_id}/payouts`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount,
+          note,
+          paid_by: adminName(),
+          payment_method: 'cash',
+        }),
+      });
+      toast.success('Rider payment recorded');
+      await loadSummary(period);
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not record Rider payment');
+    } finally {
+      setPayoutSubmittingId(null);
+    }
+  }
+
   async function handleEnablePush() {
     setPushWorking(true);
     try {
@@ -360,14 +406,17 @@ export default function AdminFinance() {
 
   const totals = summary?.totals || {};
   const settlements = summary?.settlements || {};
+  const payouts = summary?.payouts || {};
   const currentBalance = summary?.current_balance || {};
 
   const cards = [
     ['Cash Due (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
-    ['Approved (Period)', settlements.approved_cash, 'text-green-300'],
-    ['Awaiting Approval (Current)', currentBalance.awaiting_approval, 'text-yellow-300'],
+    ['Approved Cash (Period)', settlements.approved_cash, 'text-green-300'],
     ['Still With Riders (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
-    ['Total Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],
+    ['Shop Cash Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],
+    ['Rider Earned (All Time)', currentBalance.rider_earnings_total, 'text-purple-300'],
+    ['Paid to Riders (Period)', payouts.paid_to_rider, 'text-green-300'],
+    ['Owed to Riders (Current)', currentBalance.rider_remaining_to_receive, 'text-yellow-300'],
   ] as const;
 
   return (
@@ -531,7 +580,7 @@ export default function AdminFinance() {
           <div className="py-12 text-center text-gray-400">Loading finance...</div>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
               {cards.map(([title, value, color]) => (
                 <Card key={title} className="bg-gray-900 border-gray-800 p-4">
                   <p className="text-gray-500 text-xs">{title}</p>
@@ -545,7 +594,7 @@ export default function AdminFinance() {
                 <div>
                   <h2 className="text-white font-semibold">Cash Status by Rider</h2>
                   <p className="text-gray-500 text-xs mt-1">
-                    See who still has shop cash, who submitted it, and how much was approved.
+                    Shop cash and Rider earnings are tracked separately. Admin pays Rider earnings here.
                   </p>
                 </div>
               </div>
@@ -609,6 +658,30 @@ export default function AdminFinance() {
                               AED {money(riderBalance.total_pending_cash)}
                             </p>
                           </div>
+                        </div>
+
+                        <div className="mt-3 pt-3 border-t border-gray-800 grid grid-cols-2 md:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-stretch">
+                          <div className="rounded-lg bg-purple-950/20 border border-purple-900/40 p-3">
+                            <p className="text-purple-300/70 text-[10px]">RIDER EARNED (ALL TIME)</p>
+                            <p className="text-purple-300 font-bold mt-1">AED {money(riderBalance.rider_earnings_total)}</p>
+                          </div>
+                          <div className="rounded-lg bg-green-950/20 border border-green-900/40 p-3">
+                            <p className="text-green-300/70 text-[10px]">PAID TO RIDER</p>
+                            <p className="text-green-300 font-bold mt-1">AED {money(riderBalance.rider_paid_total)}</p>
+                          </div>
+                          <div className="rounded-lg bg-yellow-950/20 border border-yellow-900/40 p-3">
+                            <p className="text-yellow-300/70 text-[10px]">OWED TO RIDER</p>
+                            <p className="text-yellow-300 font-bold mt-1">AED {money(riderBalance.rider_remaining_to_receive)}</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            disabled={payoutSubmittingId === rider.rider_id || Number(riderBalance.rider_remaining_to_receive || 0) <= 0.009}
+                            onClick={() => void recordRiderPayout(rider)}
+                            className="h-full min-h-14 bg-purple-600 hover:bg-purple-700 text-white"
+                          >
+                            {payoutSubmittingId === rider.rider_id ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <DollarSign className="w-4 h-4 mr-1" />}
+                            Pay Rider
+                          </Button>
                         </div>
                       </Card>
                     );
