@@ -96,7 +96,6 @@ export default function Index() {
   // Only show loading spinner if we have NO cached data
   const [loading, setLoading] = useState(!cached);
   const [showWelcome, setShowWelcome] = useState(() => {
-    if (cached) return false;
     try { return sessionStorage.getItem('fai_fai_welcome_seen') !== '1'; } catch { return true; }
   });
 
@@ -133,23 +132,26 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    // If we have cache, still refresh in background but don't block UI
+    // If cache exists, paint immediately and refresh silently.
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      // Cache is fresh enough, refresh silently in background
       setLoading(false);
-      // Background refresh after a short delay
-      const timer = setTimeout(loadData, 2000);
-      return () => clearTimeout(timer);
-    } else {
-      // No cache or stale - load immediately
-      loadData();
+      const timer = window.setTimeout(loadData, 1200);
+      return () => window.clearTimeout(timer);
     }
+
+    // On a first/uncached launch, start the network request immediately but never
+    // keep the customer stuck on the plain spinner. The 4-second welcome animation
+    // stays visible while data loads, then the home shell can render while a slow
+    // backend request finishes in the background.
+    void loadData();
+    const revealTimer = window.setTimeout(() => setLoading(false), 3800);
+    return () => window.clearTimeout(revealTimer);
   }, [loadData]);
 
   useEffect(() => {
     if (!showWelcome) return;
     try { sessionStorage.setItem('fai_fai_welcome_seen', '1'); } catch { /* optional storage */ }
-    const timer = window.setTimeout(() => setShowWelcome(false), 1100);
+    const timer = window.setTimeout(() => setShowWelcome(false), 4000);
     return () => window.clearTimeout(timer);
   }, [showWelcome]);
 
@@ -198,18 +200,9 @@ export default function Index() {
   );
 
   if (loading) {
-    if (showWelcome) return welcomeOverlay;
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-4xl font-black mb-2">
-            <FaiFaiWordmark name={settings?.restaurant_name} />
-          </div>
-          <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-2" />
-          <p className="text-gray-500 text-sm mt-2">{t('home.loading')}</p>
-        </div>
-      </div>
-    );
+    // Keep the proper Fai Fai welcome visible while first-launch data is loading.
+    // Do not flash the plain logo + spinner screen between launch and Home.
+    return welcomeOverlay;
   }
 
   const restaurantStatus = effectiveRestaurantStatus(settings);
