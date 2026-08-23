@@ -46,6 +46,23 @@ HEARTBEAT_MAX_AGE_SECONDS = 60
 GPS_MAX_AGE_SECONDS = 120
 
 
+async def cancel_order_assignments(db: AsyncSession, order_id: int) -> int:
+    """Close every active rider assignment when an order is cancelled."""
+    rows = (
+        await db.execute(
+            select(Delivery_assignments).where(
+                Delivery_assignments.order_id == order_id,
+                Delivery_assignments.status.in_(ACTIVE_ASSIGNMENT_STATUSES),
+            )
+        )
+    ).scalars().all()
+
+    for assignment in rows:
+        assignment.status = "cancelled"
+
+    return len(rows)
+
+
 def is_delivery_order(order: Orders) -> bool:
     explicit = str(getattr(order, "order_type", "") or "").lower().strip()
     notes = str(getattr(order, "order_notes", "") or "").lower()
