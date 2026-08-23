@@ -34,8 +34,8 @@ export const DEFAULT_BRAND_SETTINGS: BrandSettings = {
   shop_name: 'Fai Fai Juice',
   short_name: 'Fai Fai',
   slogan: 'Fresh Juices, Desserts & Beverages',
-  phone: '+971 52 109 1092',
-  whatsapp: '971521091092',
+  phone: '+971 56 969 7233',
+  whatsapp: '971569697233',
   address: 'Murbah, Fujairah, UAE',
 
   logo_url: '',

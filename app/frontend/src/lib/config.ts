@@ -1,85 +1,48 @@
-// Runtime configuration
-let runtimeConfig: {
-  API_BASE_URL: string;
-} | null = null;
+// Runtime configuration. The app always has a usable production fallback, so
+// loading /api/config must never delay the first screen.
+let runtimeConfig: { API_BASE_URL: string } | null = null;
 
-// Configuration loading state
-let configLoading = true;
-
-// Default fallback configuration
 const defaultConfig = {
-  API_BASE_URL: 'https://vita-napoli-backend-usman.onrender.com', // Production fallback for Fai Fai
+  API_BASE_URL: 'https://vita-napoli-backend-usman.onrender.com',
 };
 
-// Function to load runtime configuration
 export async function loadRuntimeConfig(): Promise<void> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 1500);
+
   try {
-    console.log('🔧 DEBUG: Starting to load runtime config...');
-    // Try to load configuration from a config endpoint
-    const response = await fetch('/api/config');
-    if (response.ok) {
-      const contentType = response.headers.get('content-type');
-      // Only parse as JSON if the response is actually JSON
-      if (contentType && contentType.includes('application/json')) {
-        runtimeConfig = await response.json();
-        console.log('Runtime config loaded successfully');
-      } else {
-        console.log(
-          'Config endpoint returned non-JSON response, skipping runtime config'
-        );
-      }
-    } else {
-      console.log(
-        '🔧 DEBUG: Config fetch failed with status:',
-        response.status
-      );
-    }
-  } catch (error) {
-    console.log('Failed to load runtime config, using defaults:', error);
+    const response = await fetch('/api/config', {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) return;
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return;
+
+    const data = await response.json();
+    const apiBaseUrl = String(data?.API_BASE_URL || '').trim();
+    if (apiBaseUrl) runtimeConfig = { API_BASE_URL: apiBaseUrl };
+  } catch {
+    // Defaults stay active when runtime config is slow or unavailable.
   } finally {
-    configLoading = false;
-    console.log(
-      '🔧 DEBUG: Config loading finished, configLoading set to false'
-    );
+    window.clearTimeout(timeout);
   }
 }
 
-// Get current configuration
 export function getConfig() {
-  // If config is still loading, return default config to avoid using stale Vite env vars
-  if (configLoading) {
-    console.log('Config still loading, using default config');
-    return defaultConfig;
-  }
+  if (runtimeConfig) return runtimeConfig;
 
-  // First try runtime config (for Lambda)
-  if (runtimeConfig) {
-    console.log('Using runtime config');
-    return runtimeConfig;
-  }
-
-  // Then try Vite environment variables (for local development)
   if (import.meta.env.VITE_API_BASE_URL) {
-    const viteConfig = {
-      API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
-    };
-    console.log('Using Vite environment config');
-    return viteConfig;
+    return { API_BASE_URL: import.meta.env.VITE_API_BASE_URL };
   }
 
-  // Finally fall back to default
-  console.log('Using default config');
   return defaultConfig;
 }
 
-// Dynamic API_BASE_URL getter - this will always return the current config
 export function getAPIBaseURL(): string {
   return getConfig().API_BASE_URL;
 }
-
-// For backward compatibility, but this should be avoided
-// Removed static export to prevent using stale config values
-// export const API_BASE_URL = getAPIBaseURL();
 
 export const config = {
   get API_BASE_URL() {
