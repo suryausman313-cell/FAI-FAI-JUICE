@@ -33,8 +33,8 @@ class BrandSettingsUpdate(BaseModel):
     shop_name: str = Field(min_length=1, max_length=200)
     short_name: str = Field(default="Fai Fai", max_length=80)
     slogan: str = Field(default="Fresh Juices, Desserts & Beverages", max_length=300)
-    phone: str = Field(default="+971 52 109 1092", max_length=80)
-    whatsapp: str = Field(default="971521091092", max_length=80)
+    phone: str = Field(default="+971 56 969 7233", max_length=80)
+    whatsapp: str = Field(default="971569697233", max_length=80)
     address: str = Field(default=ADDRESS, max_length=500)
 
     # When Cloudinary is not configured the frontend stores a compressed WebP
@@ -94,8 +94,8 @@ async def ensure_brand_settings_table(db: AsyncSession) -> None:
                 shop_name VARCHAR(200) NOT NULL DEFAULT 'Fai Fai Juice',
                 short_name VARCHAR(80) NOT NULL DEFAULT 'Fai Fai',
                 slogan VARCHAR(300) NOT NULL DEFAULT 'Fresh Juices, Desserts & Beverages',
-                phone VARCHAR(80) NOT NULL DEFAULT '+971 52 109 1092',
-                whatsapp VARCHAR(80) NOT NULL DEFAULT '971521091092',
+                phone VARCHAR(80) NOT NULL DEFAULT '+971 56 969 7233',
+                whatsapp VARCHAR(80) NOT NULL DEFAULT '971569697233',
                 address VARCHAR(500) NOT NULL DEFAULT 'Murbah, Fujairah, UAE',
 
                 logo_url TEXT NOT NULL DEFAULT '',
@@ -129,6 +129,37 @@ async def ensure_brand_settings_table(db: AsyncSession) -> None:
             INSERT INTO brand_settings (id)
             VALUES (1)
             ON CONFLICT (id) DO NOTHING
+            """
+        )
+    )
+
+    # Migrate only the old hard-coded defaults. Any number set manually by
+    # Admin is preserved.
+    await db.execute(
+        text(
+            """
+            UPDATE brand_settings
+            SET phone = '+971 56 969 7233'
+            WHERE id = 1 AND phone IN (
+                '+971 52 109 1092',
+                '+971521091092',
+                '+971 54 294 0112',
+                '+971542940112',
+                '+971523187415'
+            )
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            UPDATE brand_settings
+            SET whatsapp = '971569697233'
+            WHERE id = 1 AND whatsapp IN (
+                '971521091092',
+                '971542940112',
+                '971523187415'
+            )
             """
         )
     )

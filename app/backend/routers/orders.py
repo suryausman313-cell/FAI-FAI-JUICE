@@ -14,7 +14,8 @@ from core.database import get_db
 from models.orders import Orders
 from models.menu_items import Menu_items
 from models.offers import Offers
-from services.rider_assignment import auto_assign_order
+from services.rider_assignment import auto_assign_order, cancel_order_assignments
+from services.order_notes import public_order_notes
 from routers.customer_auth import (
     decode_customer_token,
     get_bearer_token,
@@ -165,19 +166,18 @@ async def place_order(
         now_dubai = datetime.now(dubai_tz)
         current_minutes = now_dubai.hour * 60 + now_dubai.minute
         status_lower = str(getattr(settings, "restaurant_status", "open") or "open").lower().strip()
-        if status_lower == "closed":
-            raise HTTPException(
-                status_code=403,
-                detail="Sorry, the restaurant is currently closed. Please try again during opening hours.",
-            )
+        auto_enabled = bool(settings and getattr(settings, "auto_schedule_enabled", False))
 
-        # Explicit Admin OPEN remains an override, matching the current customer UI.
-        if (
-            settings
-            and bool(settings.auto_schedule_enabled)
-            and status_lower != "open"
-            and not within_schedule(current_minutes, settings.auto_open_time, settings.auto_close_time)
-        ):
+        # Auto Open/Close is authoritative when enabled. A stale manual `open`
+        # can no longer accept orders after closing time, and a stale `closed`
+        # no longer prevents the configured automatic opening.
+        if auto_enabled:
+            if not within_schedule(current_minutes, settings.auto_open_time, settings.auto_close_time):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Sorry, the restaurant is currently closed. Please try again during opening hours.",
+                )
+        elif status_lower == "closed":
             raise HTTPException(
                 status_code=403,
                 detail="Sorry, the restaurant is currently closed. Please try again during opening hours.",
@@ -658,16 +658,8 @@ async def cancel_order(
         separator = ' | ' if existing_notes else ''
         order.order_notes = f"{existing_notes}{separator}Cancelled by customer: {reason}"
 
-        # Any rider assignment for this cancelled order must disappear from the rider's active list.
-        from models.delivery_assignments import Delivery_assignments
-        assignment_rows = (await db.execute(
-            select(Delivery_assignments).where(
-                Delivery_assignments.order_id == order.id,
-                Delivery_assignments.status.in_(["assigned", "accepted", "picked_up", "on_the_way"]),
-            )
-        )).scalars().all()
-        for assignment in assignment_rows:
-            assignment.status = "rejected"
+        # Keep Rider app in sync immediately when the customer cancels.
+        await cancel_order_assignments(db, order.id)
 
         await db.commit()
         return {"success": True, "message": "Order cancelled successfully"}
@@ -735,7 +727,7 @@ async def get_my_orders(
                 "customer_name": order.customer_name,
                 "customer_phone": order.customer_phone,
                 "estimated_time": order.pickup_time or "",
-                "order_notes": order.order_notes or "",
+                "order_notes": public_order_notes(order.order_notes),
                 "payment_method": order.payment_method,
                 "order_type": getattr(order, "order_type", "pickup") or "pickup",
                 "customer_lat": getattr(order, "customer_lat", None),

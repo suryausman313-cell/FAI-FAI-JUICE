@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from models.orders import Orders
 from services.customer_push_service import notify_customer_order_ready_safely
+from services.rider_assignment import cancel_order_assignments
+from services.order_notes import public_order_notes
 
 router = APIRouter(prefix="/api/v1/order-workflow", tags=["order-workflow"])
 
@@ -72,7 +74,7 @@ def serialize_order(order: Orders) -> dict:
         "customer_name": order.customer_name,
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
-        "order_notes": order.order_notes or "",
+        "order_notes": public_order_notes(order.order_notes),
         "branch_id": getattr(order, "branch_id", None),
         "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
@@ -152,6 +154,8 @@ async def update_workflow_order_status(
     if new_status == "cancelled" and data.cancel_reason:
         existing = order.order_notes or ""
         order.order_notes = f"{existing} | Cancelled by shop: {data.cancel_reason}".strip(" |")
+    if new_status == "cancelled":
+        await cancel_order_assignments(db, order.id)
 
     try:
         await db.commit()

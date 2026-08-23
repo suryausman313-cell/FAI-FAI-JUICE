@@ -18,6 +18,8 @@ from models.orders import Orders
 from models.branches import Branches
 from models.customer_sessions import Customer_sessions
 from services.customer_push_service import notify_customer_order_update_safely
+from services.rider_assignment import cancel_order_assignments
+from services.order_notes import public_order_notes
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -105,7 +107,7 @@ def serialize_order(order: Orders) -> dict:
         "customer_name": order.customer_name,
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
-        "order_notes": order.order_notes or "",
+        "order_notes": public_order_notes(order.order_notes),
         "payment_method": order.payment_method,
         "order_type": (
             str(getattr(order, "order_type", "") or "").lower().strip()
@@ -287,6 +289,9 @@ async def update_kitchen_order_status(
                 f"{existing_notes}{separator}Cancelled by kitchen: {data.cancel_reason}"
             )
 
+        if new_status == "cancelled":
+            await cancel_order_assignments(db, order.id)
+
         await db.commit()
         await db.refresh(order)
 
@@ -450,7 +455,10 @@ async def update_order_status(
         # Append cancel reason to notes if cancelling
         if new_status == 'cancelled' and data.cancel_reason:
             existing_notes = order.order_notes or ''
-            order.order_notes = f"{existing_notes} | Cancelled by admin: {data.cancel_reason}"
+            separator = " | " if existing_notes else ""
+            order.order_notes = f"{existing_notes}{separator}Cancelled by admin: {data.cancel_reason}"
+        if new_status == "cancelled":
+            await cancel_order_assignments(db, order.id)
         await db.commit()
         await db.refresh(order)
 

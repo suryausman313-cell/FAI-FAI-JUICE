@@ -14,6 +14,8 @@ from core.database import get_db
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.riders import Riders
+from services.rider_assignment import cancel_order_assignments
+from services.order_notes import public_order_notes
 
 router = APIRouter(prefix="/api/v1/admin-order-control", tags=["admin-order-control"])
 
@@ -53,7 +55,7 @@ def serialize_order(order: Orders, assignment: Optional[dict] = None) -> dict:
         "customer_name": order.customer_name,
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
-        "order_notes": order.order_notes or "",
+        "order_notes": public_order_notes(order.order_notes),
         "branch_id": getattr(order, "branch_id", None),
         "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
@@ -306,6 +308,8 @@ async def update_status(data: StatusRequest, db: AsyncSession = Depends(get_db))
     if new_status == "cancelled" and data.cancel_reason:
         existing = order.order_notes or ""
         order.order_notes = f"{existing}{' | ' if existing else ''}Cancelled by admin: {data.cancel_reason}"
+    if new_status == "cancelled":
+        await cancel_order_assignments(db, order.id)
 
     await db.commit()
     await db.refresh(order)

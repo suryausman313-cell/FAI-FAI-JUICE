@@ -19,6 +19,8 @@ from models.branches import Branches
 from services.branch_kitchen_auth import verify_branch_kitchen_pin
 from models.restaurant_settings import Restaurant_settings
 from services.customer_push_service import notify_customer_order_update_safely
+from services.rider_assignment import cancel_order_assignments
+from services.order_notes import public_order_notes
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +127,7 @@ def serialize_order(order: Orders) -> dict:
         "customer_name": order.customer_name,
         "customer_phone": order.customer_phone,
         "estimated_time": order.pickup_time or "",
-        "order_notes": order.order_notes or "",
+        "order_notes": public_order_notes(order.order_notes),
         "branch_id": getattr(order, "branch_id", None),
         "branch_name": getattr(order, "branch_name", "") or "",
         "payment_method": order.payment_method,
@@ -271,6 +273,9 @@ async def update_kitchen_order_status(
         order.order_notes = (
             f"{current_notes}{separator}Cancelled by kitchen: {data.cancel_reason.strip()}"
         )
+
+    if new_status == "cancelled":
+        await cancel_order_assignments(db, order.id)
 
     try:
         await db.commit()

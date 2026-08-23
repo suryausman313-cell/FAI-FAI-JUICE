@@ -16,6 +16,7 @@ from services.rider_auth import require_rider_id
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
+from models.rider_payouts import Rider_payouts
 from models.riders import Riders
 
 router = APIRouter(prefix="/api/v1/finance", tags=["finance"])
@@ -42,6 +43,13 @@ class CashSubmissionReview(BaseModel):
     status: Literal["approved", "rejected"]
     admin_note: Optional[str] = Field(default="", max_length=500)
     reviewed_by: Optional[str] = Field(default="Admin", max_length=200)
+
+
+class RiderPayoutCreate(BaseModel):
+    amount: float = Field(gt=0, le=100000)
+    note: Optional[str] = Field(default="", max_length=500)
+    paid_by: Optional[str] = Field(default="Admin", max_length=200)
+    payment_method: Literal["cash", "bank", "other"] = "cash"
 
 
 def _uae_day_start(day: date) -> datetime:
@@ -265,10 +273,11 @@ def _order_financials(
     is_cash = "cash" in payment_method
     cash_collected = total if is_cash else 0.0
 
-    # Only cash physically collected by a delivered rider is payable
-    # through the rider settlement system. Pickup cash is already at shop.
+    # Rider cash and Rider earnings are two separate ledgers. The Rider must
+    # submit the full customer cash to the shop; delivery charge + Rider tip
+    # remain Rider earnings and are paid separately by Admin.
     rider_cash_payable = (
-        max(round(cash_collected - rider_earning, 2), 0.0)
+        round(cash_collected, 2)
         if is_cash and rider_has_delivered
         else 0.0
     )
@@ -509,6 +518,33 @@ async def _get_settlement_totals(
     }
 
 
+async def _get_payout_totals(
+    db: AsyncSession,
+    rider_id: Optional[int] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> dict:
+    query = select(Rider_payouts)
+
+    if rider_id is not None:
+        query = query.where(Rider_payouts.rider_id == rider_id)
+
+    query = _apply_datetime_filter(
+        query,
+        Rider_payouts.paid_at,
+        start,
+        end,
+    )
+
+    payouts = (await db.execute(query)).scalars().all()
+    total = round(sum(_money(item.amount) for item in payouts), 2)
+
+    return {
+        "paid_to_rider": total,
+        "payments": len(payouts),
+    }
+
+
 async def _get_current_rider_balance(
     db: AsyncSession,
     rider_id: int,
@@ -524,6 +560,7 @@ async def _get_current_rider_balance(
         db,
         rider_id,
     )
+    payout_totals = await _get_payout_totals(db, rider_id)
 
     cash_due = _money(all_time["cash_payable_to_shop"])
     approved = _money(settlement_totals["approved_cash"])
@@ -539,12 +576,22 @@ async def _get_current_rider_balance(
         0.0,
     )
 
+    rider_earnings_total = _money(all_time["rider_earnings"])
+    rider_paid_total = _money(payout_totals["paid_to_rider"])
+    rider_remaining_to_receive = max(
+        round(rider_earnings_total - rider_paid_total, 2),
+        0.0,
+    )
+
     return {
         "cash_due_to_shop": cash_due,
         "approved_cash": approved,
         "awaiting_approval": awaiting,
         "remaining_to_submit": remaining_to_submit,
         "total_pending_cash": total_pending_cash,
+        "rider_earnings_total": rider_earnings_total,
+        "rider_paid_total": rider_paid_total,
+        "rider_remaining_to_receive": rider_remaining_to_receive,
     }
 
 
@@ -558,6 +605,9 @@ async def _get_admin_current_balance(
         "awaiting_approval": 0.0,
         "remaining_to_submit": 0.0,
         "total_pending_cash": 0.0,
+        "rider_earnings_total": 0.0,
+        "rider_paid_total": 0.0,
+        "rider_remaining_to_receive": 0.0,
     }
 
     for rider in riders:
@@ -613,6 +663,12 @@ async def get_rider_finance_summary(
         start,
         end,
     )
+    period_payouts = await _get_payout_totals(
+        db,
+        rider_id,
+        start,
+        end,
+    )
 
     current_balance = await _get_current_rider_balance(
         db,
@@ -633,6 +689,7 @@ async def get_rider_finance_summary(
         },
         "totals": period_totals,
         "settlements": period_settlements,
+        "payouts": period_payouts,
         "current_balance": current_balance,
     }
 
@@ -807,6 +864,12 @@ async def get_admin_finance_summary(
             start,
             end,
         )
+        period_payouts = await _get_payout_totals(
+            db,
+            rider.id,
+            start,
+            end,
+        )
 
         current_balance = await _get_current_rider_balance(
             db,
@@ -821,11 +884,18 @@ async def get_admin_finance_summary(
                 "is_active": bool(rider.is_active),
                 "totals": totals,
                 "settlements": period_settlements,
+                "payouts": period_payouts,
                 "current_balance": current_balance,
             }
         )
 
     all_settlements = await _get_settlement_totals(
+        db,
+        None,
+        start,
+        end,
+    )
+    all_payouts = await _get_payout_totals(
         db,
         None,
         start,
@@ -846,6 +916,7 @@ async def get_admin_finance_summary(
         },
         "totals": overall,
         "settlements": all_settlements,
+        "payouts": all_payouts,
         "current_balance": current_balance,
         "riders": rider_items,
         "rules": {
@@ -859,6 +930,8 @@ async def get_admin_finance_summary(
             "rider_earning": (
                 "delivery_charge_plus_rider_tip"
             ),
+            "rider_cash_to_shop": "full_cash_customer_total",
+            "rider_payout": "admin_records_separately",
         },
     }
 
@@ -986,3 +1059,118 @@ async def review_cash_submission(
             ),
         },
     }
+
+@router.post("/admin/riders/{rider_id}/payouts", status_code=201)
+async def record_rider_payout(
+    rider_id: int,
+    data: RiderPayoutCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    rider = (
+        await db.execute(select(Riders).where(Riders.id == rider_id))
+    ).scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found.")
+
+    balance = await _get_current_rider_balance(db, rider_id)
+    remaining = _money(balance["rider_remaining_to_receive"])
+    if remaining <= 0:
+        raise HTTPException(status_code=400, detail="No Rider earning is currently due.")
+
+    amount = round(float(data.amount), 2)
+    if amount > remaining + 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Payment cannot exceed Rider balance AED {remaining:.2f}.",
+        )
+
+    payout = Rider_payouts(
+        rider_id=rider_id,
+        amount=amount,
+        note=(data.note or "").strip(),
+        paid_by=(data.paid_by or "Admin").strip(),
+        payment_method=data.payment_method,
+        paid_at=datetime.now(timezone.utc),
+    )
+    db.add(payout)
+    await db.commit()
+    await db.refresh(payout)
+
+    return {
+        "success": True,
+        "message": "Rider payment recorded.",
+        "payout": {
+            "id": payout.id,
+            "rider_id": payout.rider_id,
+            "amount": _money(payout.amount),
+            "note": payout.note or "",
+            "paid_by": payout.paid_by or "",
+            "payment_method": payout.payment_method or "",
+            "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
+        },
+    }
+
+
+@router.get("/admin/rider-payouts")
+async def get_admin_rider_payouts(
+    rider_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    query = (
+        select(Rider_payouts, Riders)
+        .join(Riders, Riders.id == Rider_payouts.rider_id)
+        .order_by(desc(Rider_payouts.paid_at))
+    )
+    if rider_id is not None:
+        query = query.where(Rider_payouts.rider_id == rider_id)
+
+    rows = (await db.execute(query.limit(limit))).all()
+    return {
+        "items": [
+            {
+                "id": payout.id,
+                "rider_id": rider.id,
+                "rider_name": rider.name,
+                "amount": _money(payout.amount),
+                "note": payout.note or "",
+                "paid_by": payout.paid_by or "",
+                "payment_method": payout.payment_method or "",
+                "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
+            }
+            for payout, rider in rows
+        ]
+    }
+
+
+@router.get("/rider/{rider_id}/payouts")
+async def get_rider_payouts(
+    rider_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    require_rider_id(authorization, rider_id)
+    items = (
+        await db.execute(
+            select(Rider_payouts)
+            .where(Rider_payouts.rider_id == rider_id)
+            .order_by(desc(Rider_payouts.paid_at))
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "rider_id": item.rider_id,
+                "amount": _money(item.amount),
+                "note": item.note or "",
+                "paid_by": item.paid_by or "",
+                "payment_method": item.payment_method or "",
+                "paid_at": item.paid_at.isoformat() if item.paid_at else None,
+            }
+            for item in items
+        ]
+    }
+
