@@ -49,22 +49,16 @@ async function initializeApp() {
     return;
   }
 
-  try {
-    await loadRuntimeConfig();
-    console.log('Runtime configuration loaded successfully');
-  } catch (error) {
-    console.warn(
-      'Failed to load runtime configuration, using defaults:',
-      error,
-    );
-  }
-
   createRoot(document.getElementById('root')!).render(
     <>
       <FaiFaiBranding />
       <App />
     </>,
   );
+
+  // Do not block the first screen on /api/config. The production fallback is
+  // immediately usable; runtime config refreshes in the background.
+  void loadRuntimeConfig();
 }
 
 void initializeApp();
