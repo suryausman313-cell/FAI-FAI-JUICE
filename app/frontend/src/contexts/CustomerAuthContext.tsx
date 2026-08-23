@@ -58,13 +58,21 @@ export function CustomerAuthProvider({
       customerAuthApi.getSavedCustomer()
     );
 
-  const [loading, setLoading] = useState(true);
+  // A saved customer can be shown immediately. Verify the token in the
+  // background instead of blocking the whole app behind a spinner.
+  const [loading, setLoading] = useState(() =>
+    !customerAuthApi.getSavedCustomer() && Boolean(customerAuthApi.getToken())
+  );
   const [error, setError] =
     useState<string | null>(null);
 
   const refreshCustomer = async () => {
     try {
-      setLoading(true);
+      // Only block when there is no locally saved customer. Returning users
+      // can open the home screen immediately while the session is verified.
+      if (!customerAuthApi.getSavedCustomer()) {
+        setLoading(true);
+      }
       setError(null);
 
       const currentCustomer =
@@ -150,7 +158,11 @@ export function CustomerAuthProvider({
   };
 
   useEffect(() => {
-    void refreshCustomer();
+    if (customerAuthApi.getToken()) {
+      void refreshCustomer();
+    } else {
+      setLoading(false);
+    }
 
     const handleAuthChange = () => {
       void refreshCustomer();
