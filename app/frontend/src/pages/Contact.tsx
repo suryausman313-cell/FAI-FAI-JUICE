@@ -22,7 +22,7 @@ export default function Contact() {
     loadSettings();
   }, []);
 
-  const phone = settings?.phone || '+971 54 294 0112';
+  const phone = settings?.phone || '+971 56 969 7233';
   const address = settings?.address || 'Murbah, Fujairah, UAE';
   const hours = settings?.opening_hours || 'Daily 3:00 PM – 2:00 AM';
 

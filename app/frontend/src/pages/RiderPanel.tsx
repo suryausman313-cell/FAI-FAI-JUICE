@@ -119,6 +119,14 @@ interface FinanceCurrentBalance {
   awaiting_approval: number;
   remaining_to_submit: number;
   total_pending_cash: number;
+  rider_earnings_total: number;
+  rider_paid_total: number;
+  rider_remaining_to_receive: number;
+}
+
+interface FinancePayoutTotals {
+  paid_to_rider: number;
+  payments: number;
 }
 
 interface RiderFinanceSummary {
@@ -131,6 +139,7 @@ interface RiderFinanceSummary {
   };
   totals: FinanceTotals;
   settlements: FinanceSettlementTotals;
+  payouts: FinancePayoutTotals;
   current_balance: FinanceCurrentBalance;
 }
 
@@ -1093,6 +1102,31 @@ export default function RiderPanel() {
                     <p className="text-gray-500 text-xs">My Earning</p>
                   </Card>
                 </div>
+
+                <Card className="bg-gray-900 border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-green-400" /> My Rider Payment
+                  </h3>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="bg-purple-600/10 border border-purple-600/30 rounded-xl p-3">
+                      <p className="text-purple-300/70 text-xs">Earned All Time</p>
+                      <p className="text-purple-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_earnings_total || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-green-600/10 border border-green-600/30 rounded-xl p-3">
+                      <p className="text-green-300/70 text-xs">Paid by Shop</p>
+                      <p className="text-green-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_paid_total || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-yellow-600/10 border border-yellow-600/30 rounded-xl p-3">
+                      <p className="text-yellow-300/70 text-xs">Still Owed to Me</p>
+                      <p className="text-yellow-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_remaining_to_receive || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-xl p-3">
+                      <p className="text-gray-500 text-xs">Paid This Period</p>
+                      <p className="text-white font-bold mt-1">AED {(financeSummary.payouts?.paid_to_rider || 0).toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-500 text-xs mt-3">Delivery charge + Rider tip are my earnings. Customer cash is submitted to the shop separately.</p>
+                </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">

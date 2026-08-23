@@ -23,6 +23,40 @@ function customerImageUrl(value?: string | null): string {
   return `${base}/${raw.replace(/^\//, '')}`;
 }
 
+function getUaeMinutesNow(): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Dubai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const hour = Number(parts.find(part => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find(part => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+}
+
+function scheduleAllowsOrders(settings: RestaurantSettings | null): boolean {
+  if (!settings?.auto_schedule_enabled || !settings.auto_open_time || !settings.auto_close_time) return true;
+  const toMinutes = (value: string) => {
+    const [hour, minute] = String(value).split(':').map(Number);
+    return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : -1;
+  };
+  const open = toMinutes(settings.auto_open_time);
+  const close = toMinutes(settings.auto_close_time);
+  if (open < 0 || close < 0 || open === close) return true;
+  const now = getUaeMinutesNow();
+  return close < open ? now >= open || now < close : now >= open && now < close;
+}
+
+function effectiveRestaurantStatus(settings: RestaurantSettings | null): string {
+  const manual = String(settings?.restaurant_status || 'open').toLowerCase().trim();
+  if (settings?.auto_schedule_enabled) {
+    if (!scheduleAllowsOrders(settings)) return 'closed';
+    return manual === 'busy' ? 'busy' : 'open';
+  }
+  return ['open', 'busy', 'closed'].includes(manual) ? manual : 'open';
+}
+
 interface CachedData {
   settings: RestaurantSettings | null;
   featuredItems: MenuItem[];
@@ -62,6 +96,7 @@ export default function Index() {
   // Only show loading spinner if we have NO cached data
   const [loading, setLoading] = useState(!cached);
   const [showWelcome, setShowWelcome] = useState(() => {
+    if (cached) return false;
     try { return sessionStorage.getItem('fai_fai_welcome_seen') !== '1'; } catch { return true; }
   });
 
@@ -114,7 +149,7 @@ export default function Index() {
   useEffect(() => {
     if (!showWelcome) return;
     try { sessionStorage.setItem('fai_fai_welcome_seen', '1'); } catch { /* optional storage */ }
-    const timer = window.setTimeout(() => setShowWelcome(false), 4000);
+    const timer = window.setTimeout(() => setShowWelcome(false), 1100);
     return () => window.clearTimeout(timer);
   }, [showWelcome]);
 
@@ -177,7 +212,7 @@ export default function Index() {
     );
   }
 
-  const restaurantStatus = settings?.restaurant_status || 'open';
+  const restaurantStatus = effectiveRestaurantStatus(settings);
   const visibleQuickActionCount = [
     settings?.show_menu_action !== false,
     settings?.show_deals_action !== false,
@@ -451,7 +486,7 @@ export default function Index() {
           </div>
           <div className="flex items-start gap-3">
             <Phone className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0" />
-            <p className="text-gray-300 text-sm">{settings?.phone || '+971 54 294 0112'}</p>
+            <p className="text-gray-300 text-sm">{settings?.phone || '+971 56 969 7233'}</p>
           </div>
           <a
             href={shopMapUrl()}

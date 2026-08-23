@@ -875,47 +875,36 @@ export default function Checkout() {
         const s = items[0] as any;
 
         // ===== SHOP STATUS CHECK =====
-        const status = (s.restaurant_status || '').toLowerCase().trim();
-        if (status === 'closed') {
+        const status = String(s.restaurant_status || 'open').toLowerCase().trim();
+        let effectiveStatus = status;
+
+        if (s.auto_schedule_enabled && s.auto_open_time && s.auto_close_time) {
+          const now = new Date();
+          const uaeTime = new Date(
+            now.getTime() + (4 * 60 * 60 * 1000) + (now.getTimezoneOffset() * 60 * 1000),
+          );
+          const isOpenBySchedule = isWithinDailySchedule(
+            String(s.auto_open_time),
+            String(s.auto_close_time),
+            uaeTime,
+          );
+          effectiveStatus = isOpenBySchedule ? (status === 'busy' ? 'busy' : 'open') : 'closed';
+        }
+
+        if (effectiveStatus === 'closed') {
           setShopClosed(true);
-          setShopClosedMessage(s.busy_message || t('checkout.shop_closed_message'));
-        } else if (status === 'busy') {
-          // Busy but still accepting orders - show warning
+          setShopClosedMessage(
+            s.busy_message
+              || (s.auto_schedule_enabled && s.auto_open_time && s.auto_close_time
+                ? `We are currently closed. Opening hours: ${s.auto_open_time} - ${s.auto_close_time}`
+                : t('checkout.shop_closed_message')),
+          );
+        } else if (effectiveStatus === 'busy') {
+          setShopClosed(false);
           setShopClosedMessage(s.busy_message || t('checkout.shop_busy_message'));
         } else {
           setShopClosed(false);
           setShopClosedMessage('');
-        }
-
-        // Check auto-schedule
-        if (s.auto_schedule_enabled && s.auto_open_time && s.auto_close_time) {
-          const now = new Date();
-          // UAE is UTC+4
-          const uaeTime = new Date(now.getTime() + (4 * 60 * 60 * 1000) + (now.getTimezoneOffset() * 60 * 1000));
-          const currentMinutes = uaeTime.getHours() * 60 + uaeTime.getMinutes();
-
-          const parseTime = (t: string) => {
-            const match = t.match(/(\d{1,2}):(\d{2})/);
-            return match ? parseInt(match[1]) * 60 + parseInt(match[2]) : -1;
-          };
-
-          const openMin = parseTime(s.auto_open_time);
-          const closeMin = parseTime(s.auto_close_time);
-
-          if (openMin >= 0 && closeMin >= 0) {
-            let isOpen: boolean;
-            if (closeMin < openMin) {
-              // Overnight (e.g., 15:00 - 02:00)
-              isOpen = currentMinutes >= openMin || currentMinutes < closeMin;
-            } else {
-              isOpen = currentMinutes >= openMin && currentMinutes < closeMin;
-            }
-
-            if (!isOpen && status !== 'open') {
-              setShopClosed(true);
-              setShopClosedMessage(s.busy_message || `We are currently closed. Opening hours: ${s.auto_open_time} - ${s.auto_close_time}`);
-            }
-          }
         }
         // ===== END SHOP STATUS CHECK =====
 
