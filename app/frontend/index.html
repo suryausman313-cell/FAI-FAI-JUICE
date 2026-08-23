@@ -66,10 +66,40 @@
     <meta data-mgx-overview="twitter:title" name="twitter:title" content="Fai Fai Juice" />
     <meta data-mgx-overview="twitter:description" name="twitter:description" content="Fresh juices, desserts and beverages" />
     <meta data-mgx-overview="twitter:image" name="twitter:image" content="/icon-customer-512.png" />
+
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; background: #030712; }
+      body { min-height: 100vh; }
+      .fai-boot-splash {
+        min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: radial-gradient(circle at 80% 12%, rgba(239,68,68,.18), transparent 30%),
+                    radial-gradient(circle at 15% 86%, rgba(34,197,94,.14), transparent 32%),
+                    #030712; color: white; font-family: Arial, sans-serif; text-align: center;
+      }
+      .fai-boot-badge {
+        width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 20px;
+        display: flex; align-items: center; justify-content: center; font-size: 21px; font-weight: 900;
+        background: linear-gradient(135deg, #ef4444, #f97316 50%, #22c55e);
+        box-shadow: 0 18px 55px rgba(0,0,0,.45);
+      }
+      .fai-boot-kicker { margin: 0 0 9px; color: rgba(255,255,255,.52); font-size: 12px; font-weight: 800; letter-spacing: .32em; }
+      .fai-boot-name { margin: 0; font-size: 38px; line-height: 1; font-weight: 900; }
+      .fai-boot-name span:last-child { color: #f97316; }
+      .fai-boot-tag { margin: 13px 0 0; color: rgba(255,255,255,.54); font-size: 14px; font-weight: 600; }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="fai-boot-splash" aria-label="Welcome to Fai Fai Juice">
+        <div>
+          <div class="fai-boot-badge">FF</div>
+          <p class="fai-boot-kicker">WELCOME TO</p>
+          <h1 class="fai-boot-name"><span>Fai Fai </span><span>Juice</span></h1>
+          <p class="fai-boot-tag">Fresh Juices • Desserts • Beverages</p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
