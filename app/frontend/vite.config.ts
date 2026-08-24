@@ -14,10 +14,10 @@ function escapeHtmlAttr(str: string): string {
 }
 
 process.env.VITE_APP_TITLE ??=
-  process.env.OVERVIEW_TITLE ?? 'Vita Napoli Pizza';
+  process.env.OVERVIEW_TITLE ?? 'Fai Fai Juice';
 
 process.env.VITE_APP_DESCRIPTION ??=
-  process.env.OVERVIEW_DESCRIPTION ?? 'Vita Napoli Pizza';
+  process.env.OVERVIEW_DESCRIPTION ?? 'Fai Fai Juice';
 
 process.env.VITE_APP_TITLE = escapeHtmlAttr(
   process.env.VITE_APP_TITLE
