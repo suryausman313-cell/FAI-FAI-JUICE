@@ -265,17 +265,9 @@ export default function Index() {
 
   if (loading) {
     if (showWelcome) return welcomeOverlay;
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-4xl font-black mb-2">
-            <FaiFaiWordmark name={settings?.restaurant_name} />
-          </div>
-          <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-2" />
-          <p className="text-gray-500 text-sm mt-2">{t('home.loading')}</p>
-        </div>
-      </div>
-    );
+    // After the one approved welcome finishes, keep any remaining data-load
+    // moment neutral instead of showing a second branded splash.
+    return <div className="min-h-screen bg-gray-950" aria-busy="true" />;
   }
 
   const restaurantStatus = settings?.restaurant_status || 'open';
