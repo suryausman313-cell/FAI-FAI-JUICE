@@ -989,7 +989,7 @@ function LocationMap({
       draggable: true,
     }).addTo(map);
 
-    marker.bindPopup('Vita Napoli').openPopup();
+    marker.bindPopup('Fai Fai Juice').openPopup();
     marker.on('dragend', () => {
       const position = marker.getLatLng();
       onLocationChange(position.lat, position.lng);

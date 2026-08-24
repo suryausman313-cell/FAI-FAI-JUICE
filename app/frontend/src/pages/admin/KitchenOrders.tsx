@@ -36,6 +36,7 @@ import { getAPIBaseURL } from '@/lib/config';
 import type { Order } from '@/lib/api';
 import { formatUaeTime as formatUaeClockTime } from '@/lib/uae-time';
 import { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
+import { paymentDisplayLabel } from '@/lib/payment-display';
 import KitchenMenuPanel from './KitchenMenuPanel';
 
 declare global {
@@ -342,10 +343,7 @@ function totalItems(order: KitchenOrder): number {
 }
 
 function paymentLabel(order: KitchenOrder): string {
-  const raw = String(order.payment_method || 'Cash').toLowerCase();
-  if (raw.includes('cash')) return isDeliveryOrder(order) ? 'Cash on delivery' : 'Cash on pickup';
-  if (raw.includes('card')) return 'Card';
-  return String(order.payment_method || 'Cash');
+  return paymentDisplayLabel(order.payment_method);
 }
 
 function TimerCircle({

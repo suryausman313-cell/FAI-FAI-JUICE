@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import { paymentDisplayLabel } from '@/lib/payment-display';
 import {
   DEFAULT_RECEIPT_SETTINGS,
   loadReceiptSettings,
@@ -391,7 +392,7 @@ export default function KitchenHistoryPanel({
 
                   <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-800">
                     <p className="text-gray-500 text-xs">
-                      {order.payment_method || 'Cash'}
+                      {paymentDisplayLabel(order.payment_method)}
                     </p>
                     <p
                       className={`font-bold ${

@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { getAPIBaseURL } from '@/lib/config';
+import { paymentDisplayLabel } from '@/lib/payment-display';
 
 type FinancePeriod =
   | 'today'
@@ -621,7 +622,7 @@ export default function AdminSales() {
       order.created_at,
       order.customer_name,
       order.customer_phone,
-      order.payment_method,
+      paymentDisplayLabel(order.payment_method),
       order.status,
       order.order_type,
       numeric(order.subtotal_amount),
@@ -976,7 +977,7 @@ export default function AdminSales() {
                       </div>
 
                       <p className="text-gray-300 text-sm mt-1 truncate">
-                        {order.customer_name || 'Guest'} · {order.payment_method || '-'}
+                        {order.customer_name || 'Guest'} · {paymentDisplayLabel(order.payment_method)}
                       </p>
                       <p className="text-gray-600 text-[11px] mt-1">
                         {formatDate(order.created_at)}

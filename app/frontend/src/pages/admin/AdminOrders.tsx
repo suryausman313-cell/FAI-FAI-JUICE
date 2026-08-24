@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import { paymentDisplayLabel } from '@/lib/payment-display';
 import { formatUaeDateTime, formatUaeTime, uaeAge } from '@/lib/uae-time';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -564,7 +565,7 @@ export default function AdminOrders() {
       Customer: ${order.customer_name}<br>
       Phone: ${order.customer_phone}<br>
       ${order.estimated_time ? `Ready in: ${displayEstimatedTime(order.estimated_time)}<br>` : ''}
-      Payment: ${order.payment_method}</p>
+      Payment: ${paymentDisplayLabel(order.payment_method)}</p>
       <div class="line"></div>
       ${items.map(i => `<div class="item"><span>${i.quantity}x ${i.name} (${i.size})</span><span>AED ${i.price?.toFixed(2)}</span></div>${i.extras?.length ? `<div style="font-size:0.8em;color:#666;margin-left:10px">+ ${i.extras.join(', ')}</div>` : ''}`).join('')}
       <div class="line"></div>
@@ -1220,7 +1221,7 @@ export default function AdminOrders() {
 
                 <div className="flex items-center justify-between pt-3 border-t border-gray-800">
                   <div className="text-sm text-gray-500">
-                    {order.payment_method}
+                    {paymentDisplayLabel(order.payment_method)}
                     <br />
                     {formatUaeDateTime(order.created_at)} UAE
                   </div>
