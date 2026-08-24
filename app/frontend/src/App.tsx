@@ -20,7 +20,6 @@ import {
 
 import { I18nProvider } from '@/lib/i18n';
 import { LanguagePickerModal } from '@/components/LanguagePicker';
-import FaiFaiWordmark from '@/components/FaiFaiWordmark';
 import { CustomerHeartbeatProvider } from '@/components/CustomerHeartbeatProvider';
 import { CustomerAuthProvider } from '@/contexts/CustomerAuthContext';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
@@ -191,26 +190,9 @@ const queryClient = new QueryClient({
 });
 
 function PageLoader() {
-  // Fallback only for lazily loaded secondary pages. Do not show the old
-  // spinning circle that made the customer app look stuck.
-  return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-6">
-      <div className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-red-500 via-orange-500 to-green-500 text-xl font-black text-white shadow-2xl">
-          FF
-        </div>
-        <div className="mb-2 text-xs font-extrabold tracking-[0.34em] text-gray-500">
-          WELCOME TO
-        </div>
-        <div className="text-4xl font-black">
-          <FaiFaiWordmark name="Fai Fai Juice" />
-        </div>
-        <p className="mt-3 text-sm font-medium text-gray-500">
-          Fresh Juices • Desserts • Beverages
-        </p>
-      </div>
-    </div>
-  );
+  // Keep route/auth loading visually neutral so the customer sees only the
+  // single approved welcome artwork owned by pages/Index.tsx.
+  return <div className="min-h-screen bg-gray-950" aria-busy="true" />;
 }
 
 interface ProtectedCustomerRouteProps {
