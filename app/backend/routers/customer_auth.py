@@ -376,7 +376,7 @@ async def change_pin(data: ChangePinRequest, db: AsyncSession = Depends(get_db))
 async def forgot_pin_reset_removed():
     raise HTTPException(
         status_code=410,
-        detail="For security, contact Vita Napoli to reset a forgotten PIN",
+        detail="For security, contact Fai Fai Juice to reset a forgotten PIN",
     )
 
 

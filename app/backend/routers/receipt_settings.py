@@ -23,7 +23,7 @@ class ReceiptSettingsUpdate(BaseModel):
     paper_width: str = Field(default="80mm", pattern=r"^(58mm|80mm)$")
     auto_print_on_accept: bool = True
 
-    restaurant_name: str = Field(default="Vita Napoli", max_length=200)
+    restaurant_name: str = Field(default="Fai Fai Juice", max_length=200)
     show_logo: bool = False
     logo_url: str = Field(default="", max_length=MAX_LOGO_VALUE_LENGTH)
     header_text: str = Field(default="Kitchen Order", max_length=1000)

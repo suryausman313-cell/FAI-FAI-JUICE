@@ -306,7 +306,7 @@ async def test_notification(db: AsyncSession = Depends(get_db)):
     sent = await send_admin_push(
         db,
         kind="test",
-        title="Vita Napoli Admin",
+        title="Fai Fai Admin",
         body="Admin background notifications are working.",
         url="/admin/finance",
         tag="admin-push-test",
