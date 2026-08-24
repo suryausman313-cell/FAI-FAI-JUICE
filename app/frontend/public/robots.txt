@@ -1,5 +1,5 @@
-# Vita Napoli
+# Fai Fai Juice
 User-agent: *
 Allow: /
 
-Sitemap: https://vita-napoli-free.pages.dev/sitemap.xml
+Sitemap: https://fai-fai-juice.pages.dev/sitemap.xml

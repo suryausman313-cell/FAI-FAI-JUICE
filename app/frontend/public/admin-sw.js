@@ -16,12 +16,12 @@ self.addEventListener('push', event => {
     payload = event.data ? event.data.json() : {};
   } catch {
     payload = {
-      title: 'Vita Napoli Admin',
+      title: 'Fai Fai Admin',
       body: event.data ? event.data.text() : 'New Admin notification',
     };
   }
 
-  const title = payload.title || 'Vita Napoli Admin';
+  const title = payload.title || 'Fai Fai Admin';
   const options = {
     body: payload.body || 'New Admin notification',
     icon: '/icon-192.png',
