@@ -30,7 +30,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'Reviews',
 
     // Homepage
-    'home.tagline': 'Authentic Italian Pizza',
+    'home.tagline': 'Fresh Juices • Desserts • Beverages',
     'home.special_offers': 'Special Offers',
     'home.popular_items': 'Popular Items',
     'home.view_all': 'View All',
@@ -40,7 +40,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'Open Now',
     'home.busy': 'Busy',
     'home.closed': 'Closed',
-    'home.closed_message': 'Sorry, Vita Napoli Pizza is currently closed.',
+    'home.closed_message': 'Sorry, Fai Fai Juice is currently closed.',
     'home.closed_subtitle': 'You can browse the menu but cannot place orders.',
     'home.from_aed': 'From AED',
     'home.out_of_stock': 'Out of Stock',
@@ -274,7 +274,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'المراجعات',
 
     // Homepage
-    'home.tagline': 'بيتزا إيطالية أصلية',
+    'home.tagline': 'عصائر طازجة • حلويات • مشروبات',
     'home.special_offers': 'عروض خاصة',
     'home.popular_items': 'الأصناف المميزة',
     'home.view_all': 'عرض الكل',
@@ -284,7 +284,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'مفتوح الآن',
     'home.busy': 'مشغول',
     'home.closed': 'مغلق',
-    'home.closed_message': 'عذراً، فيتا نابولي بيتزا مغلق حالياً.',
+    'home.closed_message': 'عذراً، فاي فاي جوس مغلق حالياً.',
     'home.closed_subtitle': 'يمكنك تصفح القائمة لكن لا يمكنك تقديم طلبات.',
     'home.from_aed': 'من د.إ',
     'home.out_of_stock': 'غير متوفر',
@@ -518,7 +518,7 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.reviews': 'جائزے',
 
     // Homepage
-    'home.tagline': 'اصلی اطالوی پیزا',
+    'home.tagline': 'تازہ جوس • ڈیزرٹس • مشروبات',
     'home.special_offers': 'خصوصی آفرز',
     'home.popular_items': 'مقبول آئٹمز',
     'home.view_all': 'سب دیکھیں',
@@ -528,7 +528,7 @@ const translations: Record<Language, Record<string, string>> = {
     'home.open_now': 'ابھی کھلا ہے',
     'home.busy': 'مصروف',
     'home.closed': 'بند',
-    'home.closed_message': 'معذرت، ویٹا نیپولی پیزا ابھی بند ہے۔',
+    'home.closed_message': 'معذرت، فائی فائی جوس ابھی بند ہے۔',
     'home.closed_subtitle': 'آپ مینو دیکھ سکتے ہیں لیکن آرڈر نہیں دے سکتے۔',
     'home.from_aed': 'سے AED',
     'home.out_of_stock': 'دستیاب نہیں',

@@ -2,6 +2,7 @@ import { toast } from 'sonner';
 
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
+import { paymentDisplayLabel } from '@/lib/payment-display';
 
 export interface ReceiptSettings {
   id?: number;
@@ -212,9 +213,7 @@ function browserReceiptHtml(
   const preserveLines = (value: unknown) =>
     escapeHtml(value).replace(/\r?\n/g, '<br />');
 
-  const displayPayment = String(order.payment_method || 'Cash')
-    .replaceAll('_', ' ')
-    .replace(/\b\w/g, character => character.toUpperCase());
+  const displayPayment = paymentDisplayLabel(order.payment_method);
 
   const brandNameHtml = /fai\s*fai\s*juice/i.test(settings.restaurant_name)
     ? '<span class="brand-green">Fai</span> <span class="brand-orange">Fai</span> <span class="brand-black">Juice</span>'
@@ -508,7 +507,7 @@ function payloadFor(
       customerPhone: order.customer_phone || '',
       customerAddress: notes.address,
       customerNote: notes.customerNote,
-      paymentMethod: order.payment_method || 'Cash',
+      paymentMethod: paymentDisplayLabel(order.payment_method),
       items,
       serviceFee: money(order.service_fee),
       smallOrderFee: money(order.small_order_fee),
