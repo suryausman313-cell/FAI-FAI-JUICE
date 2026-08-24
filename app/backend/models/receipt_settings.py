@@ -18,7 +18,7 @@ class Receipt_settings(Base):
     paper_width = Column(String(10), nullable=False, default="80mm", server_default="80mm")
     auto_print_on_accept = Column(Boolean, nullable=False, default=True, server_default="true")
 
-    restaurant_name = Column(String(200), nullable=False, default="Vita Napoli", server_default="Vita Napoli")
+    restaurant_name = Column(String(200), nullable=False, default="Fai Fai Juice", server_default="Fai Fai Juice")
     show_logo = Column(Boolean, nullable=False, default=False, server_default="false")
     logo_url = Column(Text, nullable=False, default="", server_default="")
     header_text = Column(Text, nullable=False, default="Kitchen Order", server_default="Kitchen Order")
