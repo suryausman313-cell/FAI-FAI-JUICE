@@ -26,7 +26,7 @@ from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
 from models.riders import Riders
-from services.customer_push_service import notify_customer_order_update_safely
+from services.rider_push_service import notify_rider_assignment_safely
 
 logger = logging.getLogger(__name__)
 
@@ -351,11 +351,11 @@ async def auto_assign_order(
     db.add(assignment)
     await db.commit()
     await db.refresh(assignment)
-    await notify_customer_order_update_safely(
+    await notify_rider_assignment_safely(
         db,
-        order,
-        "rider_assigned",
-        rider_name=rider.name or "",
+        rider_id=int(assignment.rider_id),
+        order_id=int(assignment.order_id),
+        customer_name=str(assignment.customer_name or ""),
     )
 
     logger.info(
