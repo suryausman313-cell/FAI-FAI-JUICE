@@ -25,6 +25,7 @@ from services.rider_assignment import (
     rider_live_status,
 )
 from services.rider_push_service import notify_rider_assignment_safely
+from services.customer_push_service import notify_customer_order_update_safely
 
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
 
@@ -357,6 +358,8 @@ async def update_delivery_status(
         elif new_status in ("picked_up", "on_the_way"):
             # Kitchen work is finished, but the sale is not final yet.
             order.status = "out_for_delivery"
+            if new_status == "picked_up" and getattr(order, "rider_picked_up_at", None) is None:
+                order.rider_picked_up_at = datetime.now(timezone.utc)
         elif new_status == "delivered":
             # Only Rider Delivered finalizes a delivery sale.
             order.status = "completed"
@@ -365,6 +368,20 @@ async def update_delivery_status(
         await db.commit()
         await db.refresh(assignment)
         await db.refresh(order)
+
+        # Customer delivery alerts must follow the Rider's real status changes.
+        if new_status in {"accepted", "picked_up", "on_the_way", "delivered"}:
+            rider_result = await db.execute(select(Riders).where(Riders.id == logged_rider_id))
+            rider = rider_result.scalar_one_or_none()
+            customer_event = {
+                "accepted": "rider_accepted",
+                "picked_up": "picked_up",
+                "on_the_way": "on_the_way",
+                "delivered": "delivered",
+            }[new_status]
+            await notify_customer_order_update_safely(
+                db, order, customer_event, rider_name=(rider.name if rider else "")
+            )
 
         auto_reassigned = None
         if new_status == "rejected":
@@ -546,6 +563,9 @@ async def assign_delivery(
             rider_id=int(assignment.rider_id),
             order_id=int(assignment.order_id),
             customer_name=str(assignment.customer_name or ""),
+        )
+        await notify_customer_order_update_safely(
+            db, order, "rider_assigned", rider_name=str(rider.name or "")
         )
         return {
             "success": True,
@@ -1196,6 +1216,13 @@ async def reassign_delivery(
             order_id=int(assignment.order_id),
             customer_name=str(assignment.customer_name or ""),
         )
+        reassigned_order = (
+            await db.execute(select(Orders).where(Orders.id == assignment.order_id))
+        ).scalar_one_or_none()
+        if reassigned_order is not None:
+            await notify_customer_order_update_safely(
+                db, reassigned_order, "rider_assigned", rider_name=str(new_rider.name or "")
+            )
         return {
             "success": True,
             "new_rider_name": new_rider.name,
