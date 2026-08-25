@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from models.customer_push import Customer_push_subscriptions
+from models.customer_push import Customer_native_push_tokens, Customer_push_subscriptions
 from routers.customer_auth import decode_customer_token, get_bearer_token
 from services.admin_push_service import get_or_create_vapid_settings
 from services.customer_push_service import customer_phone_key
@@ -26,6 +26,11 @@ class SubscribeRequest(BaseModel):
 
 class UnsubscribeRequest(BaseModel):
     endpoint: str = Field(min_length=20, max_length=5000)
+
+
+class NativeTokenRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=5000)
+    platform: str = Field(default="android", min_length=2, max_length=20)
 
 
 def customer_identity(authorization: Optional[str]) -> tuple[int, str]:
@@ -104,5 +109,74 @@ async def unsubscribe(
     ).scalar_one_or_none()
     if subscription:
         subscription.is_active = False
+        await db.commit()
+    return {"success": True}
+
+
+@router.post("/native-subscribe")
+async def native_subscribe(
+    data: NativeTokenRequest,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Register/refresh the Android FCM token for the logged-in customer."""
+
+    account_id, phone_key = customer_identity(authorization)
+    token = data.token.strip()
+    platform = data.platform.strip().lower()[:20] or "android"
+
+    item = (
+        await db.execute(
+            select(Customer_native_push_tokens).where(
+                Customer_native_push_tokens.token == token
+            )
+        )
+    ).scalar_one_or_none()
+
+    user_agent = request.headers.get("user-agent", "")[:2000]
+    if item:
+        # A phone may be handed to another customer. The newest authenticated
+        # registration owns this installation token.
+        item.customer_account_id = account_id
+        item.customer_phone_key = phone_key
+        item.platform = platform
+        item.is_active = True
+        item.user_agent = user_agent
+    else:
+        item = Customer_native_push_tokens(
+            customer_account_id=account_id,
+            customer_phone_key=phone_key,
+            token=token,
+            platform=platform,
+            is_active=True,
+            user_agent=user_agent,
+        )
+        db.add(item)
+
+    await db.commit()
+    return {"success": True, "platform": platform}
+
+
+@router.post("/native-unsubscribe")
+async def native_unsubscribe(
+    data: NativeTokenRequest,
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Disable one native token without deleting order/customer history."""
+
+    account_id, _phone_key = customer_identity(authorization)
+    token = data.token.strip()
+    item = (
+        await db.execute(
+            select(Customer_native_push_tokens).where(
+                Customer_native_push_tokens.token == token,
+                Customer_native_push_tokens.customer_account_id == account_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if item:
+        item.is_active = False
         await db.commit()
     return {"success": True}
