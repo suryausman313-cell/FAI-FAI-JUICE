@@ -28,7 +28,6 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { getAPIBaseURL } from '@/lib/config';
-import { paymentDisplayLabel } from '@/lib/payment-display';
 
 type FinancePeriod =
   | 'today'
@@ -54,6 +53,7 @@ interface FinanceTotals {
   shop_tips: number;
   rider_earnings: number;
   cash_collected: number;
+  card_collected: number;
   cash_payable_to_shop: number;
   cash_orders: number;
   card_orders: number;
@@ -105,6 +105,7 @@ interface ReportOrder {
   delivery_zone_name?: string;
   items_json?: string;
   created_at?: string;
+  updated_at?: string | null;
   accepted_at?: string | null;
   promised_ready_at?: string | null;
   preparing_at?: string | null;
@@ -125,7 +126,7 @@ const PERIODS: Array<{ key: FinancePeriod; label: string }> = [
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
   { key: 'week', label: '7 Days' },
-  { key: 'month', label: 'Month' },
+  { key: 'month', label: '30 Days' },
   { key: 'year', label: 'Year' },
   { key: 'all', label: 'All Time' },
   { key: 'custom', label: 'Custom' },
@@ -146,6 +147,7 @@ const EMPTY_TOTALS: FinanceTotals = {
   shop_tips: 0,
   rider_earnings: 0,
   cash_collected: 0,
+  card_collected: 0,
   cash_payable_to_shop: 0,
   cash_orders: 0,
   card_orders: 0,
@@ -193,6 +195,7 @@ function buildFallbackTotals(orders: ReportOrder[]): FinanceTotals {
       totals.shop_food_sale += Math.max(subtotal - discount, 0);
       totals.service_fee += serviceFee;
       totals.small_order_fee += smallOrderFee;
+      totals.developer_fees += serviceFee + smallOrderFee;
       totals.delivery_charges += deliveryCharge;
       totals.rider_tips += riderTip;
       totals.shop_tips += shopTip;
@@ -201,8 +204,10 @@ function buildFallbackTotals(orders: ReportOrder[]): FinanceTotals {
       if (isCashPayment(order.payment_method)) {
         totals.cash_collected += customerTotal;
         totals.cash_orders += 1;
-        totals.cash_payable_to_shop += Math.max(customerTotal - (isDelivery ? deliveryCharge + riderTip : 0), 0);
+        // Only delivery cash is physically held by the Rider. Pickup cash is already at the shop.
+        if (isDelivery) totals.cash_payable_to_shop += customerTotal;
       } else {
+        totals.card_collected += customerTotal;
         totals.card_orders += 1;
       }
 
@@ -214,11 +219,35 @@ function buildFallbackTotals(orders: ReportOrder[]): FinanceTotals {
 
 function isCountedOrder(order: ReportOrder): boolean {
   const status = String(order.status || '').toLowerCase();
-  return status === 'completed';
+  return status === 'completed' || status === 'delivered';
+}
+
+function reportDateValue(order: ReportOrder): string | undefined {
+  return isCountedOrder(order)
+    ? (order.delivered_at || order.updated_at || order.created_at)
+    : order.created_at;
+}
+
+function orderFoodSale(order: ReportOrder): number {
+  const subtotal = numeric(order.subtotal_amount);
+  const discount = numeric(order.discount_amount);
+  if (subtotal > 0) return Math.max(subtotal - discount, 0);
+  return Math.max(
+    numeric(order.total_amount)
+      - numeric(order.service_fee)
+      - numeric(order.small_order_fee)
+      - numeric(order.delivery_charge)
+      - numeric(order.tip_amount),
+    0,
+  );
 }
 
 function isCashPayment(method: string | undefined): boolean {
   return String(method || '').toLowerCase().includes('cash');
+}
+
+function paymentLabel(method: string | undefined): string {
+  return isCashPayment(method) ? 'Cash' : 'Card Payment';
 }
 
 function isDeliveryReportOrder(order: ReportOrder): boolean {
@@ -234,23 +263,6 @@ function isDeliveryReportOrder(order: ReportOrder): boolean {
   );
 }
 
-function orderShopGross(order: ReportOrder): number {
-  const total = numeric(order.total_amount);
-  const delivery = numeric(order.delivery_charge);
-  const riderTip =
-    String(order.tip_type || '').toLowerCase() === 'rider'
-      ? numeric(order.tip_amount)
-      : 0;
-  return Math.max(total - delivery - riderTip, 0);
-}
-
-function orderCommission(order: ReportOrder): number {
-  const shopTip =
-    String(order.tip_type || '').toLowerCase() === 'shop'
-      ? numeric(order.tip_amount)
-      : 0;
-  return numeric(order.service_fee) + numeric(order.small_order_fee) + shopTip;
-}
 
 function formatDate(value: string | undefined): string {
   if (!value) return '-';
@@ -410,7 +422,7 @@ export default function AdminSales() {
     nextDay.setDate(nextDay.getDate() + 1);
 
     return orders.filter(order => {
-      const created = parseBackendDate(order.created_at);
+      const created = parseBackendDate(reportDateValue(order));
       if (Number.isNaN(created.getTime())) return false;
 
       if (period === 'today') {
@@ -430,10 +442,9 @@ export default function AdminSales() {
       }
 
       if (period === 'month') {
-        return (
-          created.getFullYear() === now.getFullYear() &&
-          created.getMonth() === now.getMonth()
-        );
+        const start = new Date(todayStart);
+        start.setDate(start.getDate() - 29);
+        return created >= start;
       }
 
       if (period === 'year') {
@@ -473,22 +484,6 @@ export default function AdminSales() {
     [periodOrders],
   );
 
-  const paymentStats = useMemo(() => {
-    return countedOrders.reduce(
-      (result, order) => {
-        const amount = numeric(order.total_amount);
-        if (isCashPayment(order.payment_method)) {
-          result.cashAmount += amount;
-          result.cashOrders += 1;
-        } else {
-          result.cardAmount += amount;
-          result.cardOrders += 1;
-        }
-        return result;
-      },
-      { cashAmount: 0, cardAmount: 0, cashOrders: 0, cardOrders: 0 },
-    );
-  }, [countedOrders]);
 
   const bestSellers = useMemo(() => {
     const items = new Map<string, { quantity: number; revenue: number }>();
@@ -531,7 +526,7 @@ export default function AdminSales() {
     const grouped = new Map<string, DailyPoint>();
 
     countedOrders.forEach(order => {
-      const key = dateKey(order.created_at);
+      const key = dateKey(reportDateValue(order));
       if (!key) return;
 
       const current = grouped.get(key) || {
@@ -544,7 +539,7 @@ export default function AdminSales() {
         orders: 0,
       };
 
-      current.revenue += orderShopGross(order);
+      current.revenue += orderFoodSale(order);
       current.orders += 1;
       grouped.set(key, current);
     });
@@ -564,7 +559,7 @@ export default function AdminSales() {
       if (!isDeliveryReportOrder(order)) return;
       const area = orderAreaName(order);
       const current = grouped.get(area) || { sales: 0, orders: 0, distanceTotal: 0, distanceCount: 0 };
-      current.sales += Math.max(orderShopGross(order) - orderCommission(order), 0);
+      current.sales += orderFoodSale(order);
       current.orders += 1;
       const distance = Number(order.delivery_distance_km);
       if (Number.isFinite(distance) && distance > 0) { current.distanceTotal += distance; current.distanceCount += 1; }
@@ -577,24 +572,18 @@ export default function AdminSales() {
   }, [countedOrders]);
 
 
-  const totals = useMemo(
+  const fallbackTotals = useMemo(
     () => buildFallbackTotals(periodOrders),
     [periodOrders],
+  );
+  const totals = useMemo(
+    () => summary?.totals ? { ...EMPTY_TOTALS, ...summary.totals } : fallbackTotals,
+    [summary, fallbackTotals],
   );
   const averageOrder =
     totals.orders > 0 ? totals.customer_total / totals.orders : 0;
 
-  const grossShopSale = useMemo(
-    () => countedOrders.reduce((sum, order) => sum + orderShopGross(order), 0),
-    [countedOrders],
-  );
-
-  const appCommission = useMemo(
-    () => countedOrders.reduce((sum, order) => sum + orderCommission(order), 0),
-    [countedOrders],
-  );
-
-  const netShopSale = Math.max(grossShopSale - appCommission, 0);
+  const appCommission = Number(totals.developer_fees || 0);
 
   function exportCsv(): void {
     const headers = [
@@ -619,10 +608,10 @@ export default function AdminSales() {
 
     const rows = visibleOrders.map(order => [
       order.id,
-      order.created_at,
+      reportDateValue(order),
       order.customer_name,
       order.customer_phone,
-      paymentDisplayLabel(order.payment_method),
+      paymentLabel(order.payment_method),
       order.status,
       order.order_type,
       numeric(order.subtotal_amount),
@@ -747,54 +736,47 @@ export default function AdminSales() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
           <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-emerald-300 text-[11px] uppercase font-semibold">
-                Gross Sale
-              </p>
-              <CircleDollarSign className="w-4 h-4 text-emerald-400" />
+              <p className="text-emerald-300 text-[11px] uppercase font-semibold">Food Sale</p>
+              <PackageCheck className="w-4 h-4 text-emerald-400" />
             </div>
-            <p className="text-white text-2xl font-black mt-2">
-              AED {money(grossShopSale)}
-            </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              Delivery charges excluded
-            </p>
+            <p className="text-white text-2xl font-black mt-2">AED {money(totals.shop_food_sale)}</p>
+            <p className="text-gray-500 text-[11px] mt-1">Food after discount only</p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Commission</p>
-              <Percent className="w-4 h-4 text-amber-400" />
+              <p className="text-gray-400 text-[11px] uppercase">Cash Collected</p>
+              <Banknote className="w-4 h-4 text-green-400" />
             </div>
-            <p className="text-amber-400 text-xl font-black mt-2">
-              - AED {money(appCommission)}
-            </p>
+            <p className="text-green-400 text-xl font-black mt-2">AED {money(totals.cash_collected)}</p>
+            <p className="text-gray-500 text-[11px] mt-1">Pickup + Delivery cash · {totals.cash_orders} orders</p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Net Shop Sale</p>
-              <PackageCheck className="w-4 h-4 text-green-400" />
+              <p className="text-gray-400 text-[11px] uppercase">Card Collected</p>
+              <CreditCard className="w-4 h-4 text-blue-400" />
             </div>
-            <p className="text-green-400 text-xl font-black mt-2">
-              AED {money(netShopSale)}
-            </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              Gross Sale - Commission
-            </p>
+            <p className="text-blue-400 text-xl font-black mt-2">AED {money(totals.card_collected)}</p>
+            <p className="text-gray-500 text-[11px] mt-1">Pickup + Delivery card · {totals.card_orders} orders</p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
               <p className="text-gray-400 text-[11px] uppercase">Completed Orders</p>
-              <ShoppingBag className="w-4 h-4 text-blue-400" />
+              <ShoppingBag className="w-4 h-4 text-cyan-400" />
             </div>
-            <p className="text-white text-xl font-black mt-2">
-              {totals.orders}
-            </p>
-            <p className="text-gray-500 text-[11px] mt-1">
-              Pickup + delivered orders
-            </p>
+            <p className="text-white text-xl font-black mt-2">{totals.orders}</p>
+            <p className="text-gray-500 text-[11px] mt-1">Counted on completion date</p>
           </Card>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Service + Small Fee</p><p className="text-amber-300 font-bold mt-1">AED {money(appCommission)}</p></Card>
+          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Delivery Charges</p><p className="text-purple-300 font-bold mt-1">AED {money(totals.delivery_charges)}</p></Card>
+          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Rider Tips</p><p className="text-pink-300 font-bold mt-1">AED {money(totals.rider_tips)}</p></Card>
+          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Shop Tips</p><p className="text-green-300 font-bold mt-1">AED {money(totals.shop_tips)}</p></Card>
+          <Card className="bg-gray-900 border-gray-800 p-3 col-span-2 md:col-span-1"><p className="text-gray-500 text-[10px] uppercase">Customer Paid Total</p><p className="text-white font-bold mt-1">AED {money(totals.customer_total)}</p></Card>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
@@ -977,10 +959,10 @@ export default function AdminSales() {
                       </div>
 
                       <p className="text-gray-300 text-sm mt-1 truncate">
-                        {order.customer_name || 'Guest'} · {paymentDisplayLabel(order.payment_method)}
+                        {order.customer_name || 'Guest'} · {paymentLabel(order.payment_method)}
                       </p>
                       <p className="text-gray-600 text-[11px] mt-1">
-                        {formatDate(order.created_at)}
+                        {formatDate(reportDateValue(order))}
                       </p>
                       {(() => {
                         const kitchenResult = timingResult(order.ready_at, order.promised_ready_at);

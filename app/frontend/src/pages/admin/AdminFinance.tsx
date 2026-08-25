@@ -34,6 +34,7 @@ type Period =
   | 'yesterday'
   | 'week'
   | 'thirty_days'
+  | 'year'
   | 'all'
   | 'custom';
 
@@ -79,6 +80,7 @@ const periods: Array<{ key: Period; label: string }> = [
   { key: 'yesterday', label: 'Yesterday' },
   { key: 'week', label: '7 Days' },
   { key: 'thirty_days', label: '30 Days' },
+  { key: 'year', label: 'Year' },
   { key: 'all', label: 'All Time' },
   { key: 'custom', label: 'Custom' },
 ];
@@ -410,7 +412,13 @@ export default function AdminFinance() {
   const currentBalance = summary?.current_balance || {};
 
   const cards = [
-    ['Cash Due (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
+    ['Food Sale (Period)', totals.shop_food_sale, 'text-emerald-300'],
+    ['Cash Collected (Period)', totals.cash_collected, 'text-green-300'],
+    ['Card Collected (Period)', totals.card_collected, 'text-blue-300'],
+    ['Service + Small Fee', totals.developer_fees, 'text-amber-300'],
+    ['Delivery Charges', totals.delivery_charges, 'text-purple-300'],
+    ['Rider Tips', totals.rider_tips, 'text-pink-300'],
+    ['Rider Cash to Shop (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
     ['Approved Cash (Period)', settlements.approved_cash, 'text-green-300'],
     ['Still With Riders (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
     ['Shop Cash Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],

@@ -22,8 +22,8 @@ export default function AdminOrderSettings() {
   const [form, setForm] = useState({
     order_accept_timeout_minutes: local.order_accept_timeout_minutes,
     order_expire_timeout_minutes: local.order_expire_timeout_minutes,
-    allow_cancel_preparing: local.allow_cancel_preparing,
-    allow_cancel_ready: local.allow_cancel_ready,
+    allow_cancel_preparing: false,
+    allow_cancel_ready: false,
     allow_modify_preparing: local.allow_modify_preparing,
   });
   const [saving, setSaving] = useState(false);
@@ -46,9 +46,8 @@ export default function AdminOrderSettings() {
           settings.order_expire_timeout_minutes ||
             current.order_expire_timeout_minutes,
         ),
-        allow_cancel_preparing:
-          settings.allow_cancel_preparing === true,
-        allow_cancel_ready: settings.allow_cancel_ready === true,
+        allow_cancel_preparing: false,
+        allow_cancel_ready: false,
         allow_modify_preparing:
           settings.allow_modify_preparing === true,
       }));
@@ -67,6 +66,8 @@ export default function AdminOrderSettings() {
     try {
       await updateRestaurantSettings(settingsId, {
         ...form,
+        allow_cancel_preparing: false,
+        allow_cancel_ready: false,
         order_accept_timeout_minutes: integerValue(
           form.order_accept_timeout_minutes,
           5,
@@ -141,19 +142,14 @@ export default function AdminOrderSettings() {
 
         <Card className="bg-gray-900 border-gray-800 p-6">
           <div className="space-y-3">
+            <div className="p-4 rounded-lg bg-green-600/10 border border-green-600/30">
+              <Label className="text-green-300">Customer cancellation is locked after Accept</Label>
+              <p className="text-green-300/70 text-xs mt-1">
+                Customer can cancel only while the order is New/payment pending. Accepted, Preparing and Ready orders can only be cancelled by staff/Admin.
+              </p>
+            </div>
+
             {[
-              {
-                key: 'allow_cancel_preparing',
-                title: 'Allow Cancel During Preparing',
-                description:
-                  'Customer may cancel after preparation starts',
-              },
-              {
-                key: 'allow_cancel_ready',
-                title: 'Allow Cancel When Ready',
-                description:
-                  'Customer may cancel after order becomes ready',
-              },
               {
                 key: 'allow_modify_preparing',
                 title: 'Allow Modify During Preparing',

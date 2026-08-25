@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send } from 'lucide-react';
+import { ArrowLeft, Printer, RefreshCw, Bell, Clock, Check, X, Bike, MapPin, Navigation, Trash2, MessageSquare, Send, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Order } from '@/lib/api';
 import { getAPIBaseURL } from '@/lib/config';
-import { paymentDisplayLabel } from '@/lib/payment-display';
 import { formatUaeDateTime, formatUaeTime, uaeAge } from '@/lib/uae-time';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -59,6 +58,27 @@ function isDeliveryOrder(order: AdminOrder): boolean {
   if (String(order.order_type || '').toLowerCase() === 'delivery') return true;
   const notes = String(order.order_notes || '').toLowerCase();
   return notes.includes('order type: delivery') || notes.includes('delivery address:');
+}
+
+function isZiinaOrder(order: AdminOrder): boolean {
+  return String(order.payment_method || '').toLowerCase().startsWith('ziina online');
+}
+
+function refundState(order: AdminOrder): 'completed' | 'pending' | 'failed' | 'none' {
+  const payment = String(order.payment_method || '').toLowerCase();
+  if (payment.includes('refunded')) return 'completed';
+  if (payment.includes('refund pending')) return 'pending';
+  if (payment.includes('refund failed')) return 'failed';
+  return 'none';
+}
+
+function paymentDisplayLabel(method?: string | null): string {
+  const raw = String(method || '').toLowerCase();
+  if (raw.includes('cash')) return 'Cash';
+  if (raw.includes('refunded')) return 'Card Payment · Refunded';
+  if (raw.includes('refund pending')) return 'Card Payment · Refund Pending';
+  if (raw.includes('refund failed')) return 'Card Payment · Refund Failed';
+  return 'Card Payment';
 }
 
 function getCancelInfo(order: AdminOrder): { by: string; reason: string } | null {
@@ -181,6 +201,7 @@ export default function AdminOrders() {
   const [cancelOtherReason, setCancelOtherReason] = useState('');
   const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
   const [savingAutoAssign, setSavingAutoAssign] = useState(false);
+  const [refundingOrder, setRefundingOrder] = useState<number | null>(null);
   const riderMapContainerRef = useRef<HTMLDivElement>(null);
   const riderMapRef = useRef<L.Map | null>(null);
   const riderMapLayerRef = useRef<L.LayerGroup | null>(null);
@@ -505,6 +526,57 @@ export default function AdminOrders() {
     }
   }
 
+  async function refundCardPayment(order: AdminOrder) {
+    const reason = window.prompt('Refund reason:', 'Customer requested refund');
+    if (reason === null) return;
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 2) {
+      toast.error('Refund reason is required');
+      return;
+    }
+    if (!window.confirm(`Refund full Card Payment AED ${Number(order.total_amount || 0).toFixed(2)} for Order #${order.id}?`)) return;
+
+    setRefundingOrder(order.id);
+    try {
+      const result = await adminRequest<{ status?: string; amount_aed?: number }>(
+        '/api/v1/ziina/admin/refund',
+        'POST',
+        { order_id: order.id, reason: cleanReason },
+      );
+      if (result.status === 'completed') {
+        toast.success(`Order #${order.id} card refund completed`);
+      } else if (result.status === 'pending') {
+        toast.success(`Order #${order.id} refund submitted to Ziina`);
+      } else {
+        toast.error(`Refund status: ${result.status || 'unknown'}`);
+      }
+      await loadOrders();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Card refund failed');
+    } finally {
+      setRefundingOrder(null);
+    }
+  }
+
+  async function checkRefundStatus(order: AdminOrder) {
+    setRefundingOrder(order.id);
+    try {
+      const result = await adminRequest<{ status?: string }>(
+        `/api/v1/ziina/admin/refund-status/${order.id}`,
+        'GET',
+      );
+      if (result.status === 'completed') toast.success('Refund completed');
+      else if (result.status === 'pending') toast.info('Refund is still pending');
+      else if (result.status === 'failed') toast.error('Refund failed. You can retry.');
+      else toast.info('No refund started');
+      await loadOrders();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not check refund');
+    } finally {
+      setRefundingOrder(null);
+    }
+  }
+
   async function deleteOrder(orderId: number) {
     try {
       recentlyUpdatedRef.current.set(orderId, Date.now());
@@ -565,7 +637,7 @@ export default function AdminOrders() {
       Customer: ${order.customer_name}<br>
       Phone: ${order.customer_phone}<br>
       ${order.estimated_time ? `Ready in: ${displayEstimatedTime(order.estimated_time)}<br>` : ''}
-      Payment: ${paymentDisplayLabel(order.payment_method)}</p>
+      Payment: ${order.payment_method}</p>
       <div class="line"></div>
       ${items.map(i => `<div class="item"><span>${i.quantity}x ${i.name} (${i.size})</span><span>AED ${i.price?.toFixed(2)}</span></div>${i.extras?.length ? `<div style="font-size:0.8em;color:#666;margin-left:10px">+ ${i.extras.join(', ')}</div>` : ''}`).join('')}
       <div class="line"></div>
@@ -1235,6 +1307,35 @@ export default function AdminOrders() {
                     <span className="text-red-400 font-bold">Total: AED {order.total_amount?.toFixed(2)}</span>
                   </div>
                   <div className="flex items-center gap-2">
+                    {isZiinaOrder(order) && refundState(order) === 'completed' && (
+                      <span className="text-[10px] rounded-full border border-green-700 bg-green-950/40 px-2 py-1 text-green-300">Refunded</span>
+                    )}
+                    {isZiinaOrder(order) && refundState(order) === 'pending' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={refundingOrder === order.id}
+                        onClick={() => void checkRefundStatus(order)}
+                        className="border-amber-700 text-amber-300 text-xs"
+                      >
+                        <RotateCcw className={`w-3 h-3 mr-1 ${refundingOrder === order.id ? 'animate-spin' : ''}`} />
+                        Check Refund
+                      </Button>
+                    )}
+                    {isZiinaOrder(order) && ['none', 'failed'].includes(refundState(order)) && ['cancelled', 'completed'].includes(String(order.status || '').toLowerCase()) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={refundingOrder === order.id}
+                        onClick={() => void refundCardPayment(order)}
+                        className="border-blue-700 text-blue-300 text-xs"
+                        title="Refund full card payment through Ziina"
+                      >
+                        <RotateCcw className={`w-3 h-3 mr-1 ${refundingOrder === order.id ? 'animate-spin' : ''}`} />
+                        Refund Card
+                      </Button>
+                    )}
+
                     {/* Staff note button */}
                     {noteOrder !== order.id && (
                       <Button
@@ -1284,7 +1385,7 @@ export default function AdminOrders() {
                     )}
 
                     {/* Cancel button for active orders (not new, not completed/cancelled) */}
-                    {order.status !== 'new' && order.status !== 'completed' && order.status !== 'cancelled' && cancellingOrder !== order.id && (
+                    {order.status !== 'new' && order.status !== 'cancelled' && cancellingOrder !== order.id && (
                       <Button
                         size="sm"
                         variant="ghost"

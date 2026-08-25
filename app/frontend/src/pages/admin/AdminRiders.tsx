@@ -113,7 +113,7 @@ export default function AdminRiders() {
   const [editShiftStart, setEditShiftStart] = useState('');
   const [editShiftEnd, setEditShiftEnd] = useState('');
   const [timeLimit, setTimeLimit] = useState('30'); // minutes
-  const [reportPeriod, setReportPeriod] = useState<'today' | 'yesterday' | 'week' | 'thirty_days' | 'all' | 'custom'>('today');
+  const [reportPeriod, setReportPeriod] = useState<'today' | 'yesterday' | 'week' | 'thirty_days' | 'year' | 'all' | 'custom'>('today');
   const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [expandedRiderId, setExpandedRiderId] = useState<number | null>(null);
@@ -351,6 +351,7 @@ export default function AdminRiders() {
               ['yesterday', 'Yesterday'],
               ['week', '7 Days'],
               ['thirty_days', '30 Days'],
+              ['year', 'Year'],
               ['all', 'All Time'],
               ['custom', 'Custom'],
             ].map(([key, label]) => (
@@ -649,7 +650,7 @@ export default function AdminRiders() {
                       </div>
 
                       <p className="text-gray-600 text-[10px] mt-3">
-                        Period values follow Today / Yesterday / 7 Days / 30 Days / All Time / Custom. Current pending cash always shows what the rider still owes now.
+                        Period values follow Today / Yesterday / 7 Days / 30 Days / Year / All Time / Custom. Current pending cash always shows what the rider still owes now.
                       </p>
                     </div>
                   )}
