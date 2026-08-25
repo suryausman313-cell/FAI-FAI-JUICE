@@ -49,6 +49,7 @@ declare global {
       handlesLateAlerts?: () => boolean;
     };
     webkitAudioContext?: typeof AudioContext;
+    faiFaiKitchenBack?: () => boolean;
   }
 }
 
@@ -590,36 +591,48 @@ export default function KitchenOrders() {
   const lateVoiceAnnouncedRef = useRef<Set<string>>(new Set());
   const speechUnlockedRef = useRef(false);
 
-  // Android Kitchen hardware Back should behave like the on-screen Back button.
-  // It closes the current detail/drawer/dialog or returns Today/Yesterday/Menu to Live.
-  // At the real Live root it is intentionally consumed so the kiosk app does not exit.
+  // Android Kitchen hardware Back:
+  // - closes the open Kitchen UI first (order/dialog/menu/history),
+  // - at the real Live root returns false so Android can show the device home screen.
+  // The legacy event stays for older APK builds; the new APK calls faiFaiKitchenBack()
+  // directly so it knows whether Kitchen handled the Back press.
   useEffect(() => {
-    const handleNativeBack = () => {
+    const handleNativeBack = (): boolean => {
       if (cancelOrderTarget) {
         setCancelOrderTarget(null);
         setCancelPreset('');
         setCancelOtherReason('');
-        return;
+        return true;
       }
       if (statusDialogOpen) {
         setStatusDialogOpen(false);
-        return;
+        return true;
       }
       if (drawerOpen) {
         setDrawerOpen(false);
-        return;
+        return true;
       }
       if (selectedOrderId !== null) {
         setSelectedOrderId(null);
-        return;
+        return true;
       }
       if (viewMode !== 'live') {
         setViewMode('live');
+        return true;
       }
+      return false;
     };
 
-    window.addEventListener('fai-fai-kitchen-back', handleNativeBack);
-    return () => window.removeEventListener('fai-fai-kitchen-back', handleNativeBack);
+    window.faiFaiKitchenBack = handleNativeBack;
+    const legacyBack = () => { void handleNativeBack(); };
+    window.addEventListener('fai-fai-kitchen-back', legacyBack);
+
+    return () => {
+      window.removeEventListener('fai-fai-kitchen-back', legacyBack);
+      if (window.faiFaiKitchenBack === handleNativeBack) {
+        delete window.faiFaiKitchenBack;
+      }
+    };
   }, [cancelOrderTarget, statusDialogOpen, drawerOpen, selectedOrderId, viewMode]);
 
   // Mobile Chrome/PWA may block speech until the page has received a real user
