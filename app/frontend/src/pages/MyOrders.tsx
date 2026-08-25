@@ -1,36 +1,35 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff, Minus, Plus } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import CustomerLayout from '@/components/CustomerLayout';
-import { client, Order, MenuItem, Extra, getItemSizes, getItemExtras } from '@/lib/api';
+import { client, Order, CartItem } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
-import { addToCart } from '@/lib/cart-store';
+import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
-import { formatUaeDate, formatUaeDateTime, parseApiDate } from '@/lib/uae-time';
 import {
   enableCustomerPush,
   syncCustomerPushIfAllowed,
 } from '@/lib/customer-push';
 
 const PICKUP_STEPS = [
-  { key: 'new', labelKey: 'orders.status.placed', icon: Store },
-  { key: 'accepted', labelKey: 'orders.status.accepted', icon: CheckCircle },
-  { key: 'preparing', labelKey: 'orders.status.preparing', icon: ChefHat },
-  { key: 'ready', labelKey: 'orders.status.ready', icon: Package },
+  { key: 'new', label: 'Order Placed', icon: Store },
+  { key: 'accepted', label: 'Accepted', icon: CheckCircle },
+  { key: 'preparing', label: 'Preparing', icon: ChefHat },
+  { key: 'ready', label: 'Ready!', icon: Package },
 ];
 
 const DELIVERY_STEPS = [
-  { key: 'new', labelKey: 'orders.status.placed', icon: Store },
-  { key: 'accepted', labelKey: 'orders.status.confirmed', icon: CheckCircle },
-  { key: 'preparing', labelKey: 'orders.status.preparing', icon: ChefHat },
-  { key: 'ready', labelKey: 'orders.status.ready', icon: Package },
-  { key: 'picked_up', labelKey: 'orders.status.picked_up', icon: Bike },
-  { key: 'on_the_way', labelKey: 'orders.status.on_the_way', icon: Navigation },
-  { key: 'delivered', labelKey: 'orders.status.delivered', icon: CheckCircle },
+  { key: 'new', label: 'Order Placed', icon: Store },
+  { key: 'accepted', label: 'Confirmed', icon: CheckCircle },
+  { key: 'preparing', label: 'Preparing', icon: ChefHat },
+  { key: 'ready', label: 'Ready', icon: Package },
+  { key: 'picked_up', label: 'Picked Up', icon: Bike },
+  { key: 'on_the_way', label: 'On the Way', icon: Navigation },
+  { key: 'delivered', label: 'Delivered', icon: CheckCircle },
 ];
 
 function getStepIndex(status: string, steps: typeof PICKUP_STEPS): number {
@@ -49,27 +48,40 @@ function getDeliveryStepIndex(orderStatus: string, deliveryStatus: string | null
   return -1;
 }
 
-/** Format all customer order dates in UAE time, independent of device timezone. */
+/** Format date safely - handles 1970/epoch dates */
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return 'Date unavailable';
-  const date = parseApiDate(dateStr);
-  if (date.getUTCFullYear() < 2000 || Number.isNaN(date.getTime())) return 'Date unavailable';
-  return `${formatUaeDateTime(dateStr)} UAE`;
+  try {
+    const date = new Date(dateStr);
+    // Check for epoch/1970 dates (before year 2000)
+    if (date.getFullYear() < 2000 || isNaN(date.getTime())) {
+      return 'Date unavailable';
+    }
+    return date.toLocaleString();
+  } catch {
+    return 'Date unavailable';
+  }
 }
 
 /** Format date for past orders (short format) */
 function formatDateShort(dateStr: string | null | undefined): string {
   if (!dateStr) return 'Date unavailable';
-  const date = parseApiDate(dateStr);
-  if (date.getUTCFullYear() < 2000 || Number.isNaN(date.getTime())) return 'Date unavailable';
-  return formatUaeDate(dateStr);
+  try {
+    const date = new Date(dateStr);
+    if (date.getFullYear() < 2000 || isNaN(date.getTime())) {
+      return 'Date unavailable';
+    }
+    return date.toLocaleDateString();
+  } catch {
+    return 'Date unavailable';
+  }
 }
 
 /** Calculate elapsed minutes since order was placed */
 function getElapsedMinutes(createdAt: string | null | undefined): number {
   if (!createdAt) return 0;
   try {
-    const date = parseApiDate(createdAt);
+    const date = new Date(createdAt);
     if (date.getFullYear() < 2000 || isNaN(date.getTime())) return 0;
     return Math.floor((Date.now() - date.getTime()) / 60000);
   } catch {
@@ -77,14 +89,17 @@ function getElapsedMinutes(createdAt: string | null | undefined): number {
   }
 }
 
-function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery, deliveryStatus, deliveryEtaSeconds, deliveryEtaCalculatedAt, deliveryDistanceKm, riderLocationIsFresh }: { status: string; estimatedTime: string; referenceTime?: string; isDelivery: boolean; deliveryStatus: string | null; deliveryEtaSeconds?: number | null; deliveryEtaCalculatedAt?: string | null; deliveryDistanceKm?: number | null; riderLocationIsFresh?: boolean }) {
-  const { t, language } = useTranslation();
+function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery, deliveryStatus, deliveryEtaSeconds, deliveryEtaCalculatedAt }: { status: string; estimatedTime: string; referenceTime?: string; isDelivery: boolean; deliveryStatus: string | null; deliveryEtaSeconds?: number | null; deliveryEtaCalculatedAt?: string | null }) {
+  const { t } = useTranslation();
   const steps = isDelivery ? DELIVERY_STEPS : PICKUP_STEPS;
   const currentStep = isDelivery
     ? getDeliveryStepIndex(status, deliveryStatus)
     : getStepIndex(status, steps);
-  const deliveryTravelStage = isDelivery &&
-    ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''));
+  const deliveryTravelStage = isDelivery && (
+    status === 'ready' ||
+    status === 'out_for_delivery' ||
+    ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''))
+  );
   
   if (status === 'completed' || status === 'cancelled') return null;
   if (isDelivery && deliveryStatus === 'delivered') return null;
@@ -93,29 +108,16 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
     <div className="py-4">
       {/* Live countdown. Zero does not mean ready until Kitchen marks it Ready. */}
       {deliveryTravelStage ? (
-        deliveryStatus === 'assigned' ? (
-          <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
-            <Bike className="w-5 h-5 text-blue-400 shrink-0" />
-            <div>
-              <p className="text-blue-300 font-bold text-sm">
-                {language === 'ar' ? 'تم اختيار السائق' : 'Rider selected'}
-              </p>
-              <p className="text-blue-300/60 text-xs">
-                {language === 'ar' ? 'بانتظار قبول السائق للطلب' : 'Waiting for the rider to accept the delivery'}
-              </p>
-            </div>
-          </div>
-        ) : deliveryEtaSeconds ? (
+        deliveryEtaSeconds ? (
           <LiveDeliveryEta
             seconds={deliveryEtaSeconds}
             calculatedAt={deliveryEtaCalculatedAt}
-            nearby={riderLocationIsFresh === true && deliveryDistanceKm != null && Number(deliveryDistanceKm) <= 0.5 && ['picked_up', 'on_the_way'].includes(String(deliveryStatus || ''))}
           />
         ) : (
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
             <Navigation className="w-5 h-5 text-blue-400 shrink-0 animate-pulse" />
             <div>
-              <p className="text-blue-300 font-bold text-sm">{t('orders.rider_on_the_way')}</p>
+              <p className="text-blue-300 font-bold text-sm">Rider on the way</p>
               <p className="text-blue-300/60 text-xs">{t('orders.eta_waiting_gps')}</p>
             </div>
           </div>
@@ -155,10 +157,10 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
                 <p className={`text-sm font-medium ${
                   isCompleted ? 'text-white' : 'text-gray-500'
                 } ${isCurrent ? 'text-green-400' : ''}`}>
-                  {t(step.labelKey)}
+                  {step.label}
                 </p>
                 {isCurrent && (
-                  <p className="text-green-400/60 text-xs mt-0.5">{t('orders.current_status')}</p>
+                  <p className="text-green-400/60 text-xs mt-0.5">Current status</p>
                 )}
               </div>
             </div>
@@ -178,9 +180,8 @@ function normalizeUaeWhatsAppNumber(phone: string): string {
 }
 
 function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderPhone: string }) {
-  const { t, language } = useTranslation();
   const waPhone = normalizeUaeWhatsAppNumber(riderPhone);
-  const message = encodeURIComponent(language === 'ar' ? `مرحباً ${riderName}، أتواصل معك بخصوص طلب التوصيل من Fai Fai Juice.` : `Hello ${riderName}, I am contacting you about my Fai Fai Juice delivery.`);
+  const message = encodeURIComponent(`Hello ${riderName}, I am contacting you about my Fai Fai Juice delivery.`);
   const whatsappUrl = `https://wa.me/${waPhone}?text=${message}`;
 
   return (
@@ -196,7 +197,7 @@ function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderP
           <Bike className="w-5 h-5 text-blue-400" />
         </div>
         <div>
-          <p className="text-blue-400 font-bold text-sm">{t('orders.your_rider')}</p>
+          <p className="text-blue-400 font-bold text-sm">Your Rider</p>
           <p className="text-white font-semibold">{riderName}</p>
           <p className="text-blue-300/70 text-xs">{riderPhone}</p>
         </div>
@@ -205,14 +206,14 @@ function RiderContactCard({ riderName, riderPhone }: { riderName: string; riderP
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
             <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
           </svg>
-          {t('orders.whatsapp_rider')}
+          WhatsApp Rider
       </div>
     </a>
   );
 }
 
-function LiveDeliveryEta({ seconds, calculatedAt, nearby }: { seconds?: number | null; calculatedAt?: string | null; nearby?: boolean }) {
-  const { t, language } = useTranslation();
+function LiveDeliveryEta({ seconds, calculatedAt }: { seconds?: number | null; calculatedAt?: string | null }) {
+  const { t } = useTranslation();
   const [now, setNow] = useState(Date.now());
   const baseMs = calculatedAt ? new Date(calculatedAt).getTime() : Date.now();
   const deadlineMs = baseMs + Math.max(0, Number(seconds || 0)) * 1000;
@@ -227,21 +228,17 @@ function LiveDeliveryEta({ seconds, calculatedAt, nearby }: { seconds?: number |
   const remaining = Math.max(0, Math.floor((deadlineMs - now) / 1000));
   const minutes = Math.floor(remaining / 60);
   const secs = remaining % 60;
-  const nearbyLabel = language === 'ar' ? 'السائق قريب منك' : 'Rider nearby';
-  const liveLabel = language === 'ar' ? 'يتم تحديث الوقت من موقع السائق المباشر' : 'Updates from the rider’s live location';
 
   return (
     <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 mb-4 flex items-center gap-3">
       <Navigation className="w-5 h-5 text-blue-400 shrink-0" />
       <div>
         <p className="text-blue-300 font-bold text-sm">
-          {nearby
-            ? `${nearbyLabel} · ${minutes}:${String(secs).padStart(2, '0')}`
-            : remaining > 0
-              ? `${t('orders.rider_arriving_in')} ${minutes}:${String(secs).padStart(2, '0')}`
-              : t('orders.rider_arriving_soon')}
+          {remaining > 0
+            ? `Rider arriving in ${minutes}:${String(secs).padStart(2, '0')}`
+            : 'Rider arriving soon'}
         </p>
-        <p className="text-blue-300/60 text-xs">{liveLabel}</p>
+        <p className="text-blue-300/60 text-xs">{t('orders.eta_live_location')}</p>
       </div>
     </div>
   );
@@ -273,11 +270,11 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
   // Only show for 'new' (pending) orders
   if (order.status !== 'new') return null;
 
-  const restaurantPhone = '+971569697233'; // Restaurant WhatsApp number
+  const restaurantPhone = '0523187415'; // Fai Fai Juice shop WhatsApp
   const whatsappMessage = encodeURIComponent(
     t('orders.whatsapp_pending_message').replace('{orderId}', String(order.id))
   );
-  const whatsappUrl = `https://wa.me/${restaurantPhone.replace('+', '')}?text=${whatsappMessage}`;
+  const whatsappUrl = `https://wa.me/${normalizeUaeWhatsAppNumber(restaurantPhone)}?text=${whatsappMessage}`;
 
   // Show warning after acceptTimeout minutes
   if (elapsedMinutes >= acceptTimeout && elapsedMinutes < expireTimeout) {
@@ -326,7 +323,7 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
               {t('orders.expired_title')}
             </p>
             <p className="text-red-400/70 text-xs mt-1">
-              {expireTimeout}+ {t('orders.expired_subtitle')}
+              {expireTimeout}+ minutes wait • Order auto-cancelled
             </p>
           </div>
         </div>
@@ -341,103 +338,68 @@ function OrderTimerNotification({ order, acceptTimeout, expireTimeout, onExpired
         <Clock className="w-5 h-5 text-blue-400" />
       </div>
       <div>
-        <p className="text-blue-400 font-bold text-sm">{t('orders.waiting_restaurant')}</p>
-        <p className="text-blue-300/70 text-xs">
-          {elapsedMinutes} {t('orders.minute_elapsed')} • {t('orders.usually_within')} {acceptTimeout} min
-        </p>
+        <p className="text-blue-400 font-bold text-sm">Waiting for restaurant to accept</p>
+        <p className="text-blue-300/70 text-xs">{elapsedMinutes} min elapsed • Usually accepted within {acceptTimeout} min</p>
       </div>
     </div>
   );
-}
-
-function getCancellationInfo(order: OrderWithDelivery): { by: string; reason: string } | null {
-  const notes = String(order.order_notes || '');
-  const match = notes.match(/Cancelled by\s+(customer|admin|kitchen|rider(?:\s+[^:|]+)?)\s*:\s*([^|]+)/i);
-  if (!match) return null;
-  const actor = match[1].toLowerCase();
-  return {
-    by: actor.startsWith('rider ')
-      ? `Rider ${match[1].trim().slice(6)}`
-      : actor === 'customer'
-        ? 'Customer'
-        : actor === 'admin'
-          ? 'Admin'
-          : 'Kitchen',
-    reason: match[2].trim(),
-  };
 }
 
 /** Cancel order confirmation dialog */
 function CancelOrderDialog({ orderId, orderStatus, onCancel, onClose }: {
   orderId: number;
   orderStatus: string;
-  onCancel: (orderId: number, reason: string) => Promise<void>;
+  onCancel: (orderId: number, reason: string) => void;
   onClose: () => void;
 }) {
-  const { language } = useTranslation();
-  const ar = language === 'ar';
-  const reasons = ar
-    ? ['غيّرت رأيي', 'تم الطلب بالخطأ', 'الطلب يستغرق وقتاً طويلاً', 'تفاصيل الطلب غير صحيحة', 'أخرى']
-    : ['Changed my mind', 'Ordered by mistake', 'Taking too long', 'Wrong order details', 'Other'];
-  const otherLabel = ar ? 'أخرى' : 'Other';
-  const [preset, setPreset] = useState('');
-  const [otherReason, setOtherReason] = useState('');
+  const [reason, setReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
-  const finalReason = preset === otherLabel ? otherReason.trim() : preset.trim();
 
   async function handleCancel() {
-    if (!finalReason) return;
     setCancelling(true);
-    try {
-      await onCancel(orderId, finalReason);
-      onClose();
-    } finally {
-      setCancelling(false);
-    }
+    await onCancel(orderId, reason);
+    setCancelling(false);
+    onClose();
   }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-5 max-w-sm w-full">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-white font-bold text-lg">
-            {ar ? `إلغاء الطلب #${orderId}` : `Cancel Order #${orderId}`}
-          </h3>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white cursor-pointer">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white font-bold text-lg">Cancel Order #{orderId}?</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
         <p className="text-gray-400 text-sm mb-4">
-          {ar ? 'اختر سبب الإلغاء. السبب مطلوب.' : 'Select why you are cancelling. A reason is required.'}
+          {orderStatus === 'new'
+            ? 'Your order has not been accepted yet. Are you sure you want to cancel?'
+            : `Your order is currently "${orderStatus}". Are you sure you want to cancel?`}
         </p>
-        <div className="grid grid-cols-1 gap-2 mb-3">
-          {reasons.map(reason => (
-            <button
-              type="button"
-              key={reason}
-              onClick={() => { setPreset(reason); if (reason !== otherLabel) setOtherReason(''); }}
-              className={`rounded-xl border px-3 py-2.5 text-sm text-left ${preset === reason ? 'border-red-500 bg-red-600/15 text-red-300' : 'border-gray-700 bg-gray-800 text-gray-300'}`}
-            >
-              {reason}
-            </button>
-          ))}
-        </div>
-        {preset === otherLabel && (
+        <div className="mb-4">
+          <label className="text-gray-300 text-sm block mb-1">Reason (optional)</label>
           <textarea
-            value={otherReason}
-            onChange={e => setOtherReason(e.target.value)}
-            maxLength={300}
-            placeholder={ar ? 'اكتب سبب الإلغاء...' : 'Write the cancellation reason...'}
-            className="w-full bg-gray-800 border border-gray-700 rounded-xl p-3 text-white text-sm resize-none mb-3"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="e.g. Changed my mind, taking too long..."
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm resize-none"
             rows={2}
           />
-        )}
+        </div>
         <div className="flex gap-3">
-          <Button onClick={onClose} variant="outline" className="flex-1 border-gray-600 text-gray-300 cursor-pointer">
-            {ar ? 'الاحتفاظ بالطلب' : 'Keep Order'}
+          <Button
+            onClick={onClose}
+            variant="outline"
+            className="flex-1 border-gray-600 text-gray-300 cursor-pointer"
+          >
+            Keep Order
           </Button>
-          <Button onClick={() => void handleCancel()} disabled={cancelling || !finalReason} className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer disabled:opacity-50">
-            {cancelling ? (ar ? 'جارٍ الإلغاء...' : 'Cancelling...') : (ar ? 'تأكيد الإلغاء' : 'Cancel Order')}
+          <Button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="flex-1 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+          >
+            {cancelling ? 'Cancelling...' : 'Yes, Cancel'}
           </Button>
         </div>
       </div>
@@ -453,75 +415,26 @@ interface OrderWithDelivery extends Order {
   rider_lng?: number | null;
   delivery_eta_seconds?: number | null;
   delivery_eta_calculated_at?: string | null;
-  delivery_distance_km?: number | null;
-  rider_location_is_fresh?: boolean;
-}
-
-type ReorderDraftItem = {
-  key: string;
-  sourceName: string;
-  menuItem: MenuItem | null;
-  size: string;
-  extras: Extra[];
-  quantity: number;
-  unavailableReason?: string;
-};
-
-function normalizeReorderSizeKey(value: unknown): string {
-  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (key === 's' || key === 'small') return 'small';
-  if (key === 'm' || key === 'medium' || key === 'med') return 'medium';
-  if (key === 'l' || key === 'large') return 'large';
-  if (key === 'r' || key === 'regular' || key === 'one' || key === 'onesize') return 'regular';
-  return key;
-}
-
-function hasCurrentOrderablePrice(item: MenuItem | null | undefined): boolean {
-  if (!item) return false;
-  return getItemSizes(item).some((size) => Number(size.price || 0) > 0);
-}
-
-function resolveReorderSize(item: MenuItem, requestedSize: unknown): { name: string; price: number } | null {
-  const sizes = getItemSizes(item).filter((size) => Number(size.price || 0) > 0);
-  if (sizes.length === 0) return null;
-
-  const requestedKey = normalizeReorderSizeKey(requestedSize);
-  if (requestedKey) {
-    const match = sizes.find((size) => normalizeReorderSizeKey(size.name) === requestedKey);
-    if (match) return { name: String(match.name), price: Number(match.price) };
-  }
-
-  // Old orders may store M/Medium differently. If there is only one current
-  // valid size, it is safe to use that instead of creating an AED 0 cart line.
-  if (sizes.length === 1) {
-    return { name: String(sizes[0].name), price: Number(sizes[0].price) };
-  }
-
-  // For legacy orders with a missing/renamed size, prefer the first currently
-  // saleable size rather than a stale zero-price option. The review popup shows
-  // the resolved size before the customer confirms.
-  return { name: String(sizes[0].name), price: Number(sizes[0].price) };
 }
 
 export default function MyOrders() {
   const navigate = useNavigate();
-  const { t, language } = useTranslation();
+  const { t } = useTranslation();
   const [orders, setOrders] = useState<OrderWithDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [reviewedOrders, setReviewedOrders] = useState<Set<number>>(new Set());
   const [cancelDialogOrder, setCancelDialogOrder] = useState<OrderWithDelivery | null>(null);
-  const [reorderOrder, setReorderOrder] = useState<OrderWithDelivery | null>(null);
-  const [reorderItems, setReorderItems] = useState<ReorderDraftItem[]>([]);
-  const [reorderLoading, setReorderLoading] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState<
     'checking' | 'login_required' | 'available' | 'enabling' | 'enabled' | 'blocked' | 'unsupported' | 'error'
   >('checking');
   const [notificationMessage, setNotificationMessage] = useState('');
 
   // Admin-configured timeouts
-  const [acceptTimeout, setAcceptTimeout] = useState(5); // minutes
+  const [acceptTimeout] = useState(2); // fixed: show WhatsApp Restaurant after 2 minutes
   const [expireTimeout, setExpireTimeout] = useState(15); // minutes
+  const [allowCancelPreparing, setAllowCancelPreparing] = useState(false);
+  const [allowCancelReady, setAllowCancelReady] = useState(false);
 
   useEffect(() => {
     void loadInitialData();
@@ -586,8 +499,10 @@ export default function MyOrders() {
       const items = res?.data?.items || [];
       if (items.length > 0) {
         const s = items[0] as any;
-        if (s.order_accept_timeout_minutes) setAcceptTimeout(Number(s.order_accept_timeout_minutes) || 5);
+        // Customer WhatsApp escalation is fixed at 2 minutes for Fai Fai Juice.
         if (s.order_expire_timeout_minutes) setExpireTimeout(Number(s.order_expire_timeout_minutes) || 15);
+        setAllowCancelPreparing(s.allow_cancel_preparing === true);
+        setAllowCancelReady(s.allow_cancel_ready === true);
       }
     } catch {
       // Use defaults
@@ -625,24 +540,19 @@ export default function MyOrders() {
 
           try {
             const etaRes = await client.apiCall.invoke({
-              url: `/api/v1/rider/delivery-eta/${order.id}?session_id=${encodeURIComponent(getGuestSessionId())}`,
+              url: `/api/v1/rider/delivery-eta/${order.id}`,
               method: 'GET',
             });
             const eta = etaRes?.data || {};
-            const etaStatus = eta.status === 'no_rider' ? order.delivery_status : eta.status;
-            const customerTrackingActive = ['picked_up', 'on_the_way'].includes(String(etaStatus || ''));
             return {
               ...order,
-              delivery_status: etaStatus,
+              delivery_status: eta.status === 'no_rider' ? order.delivery_status : eta.status,
               rider_name: eta.rider_name || order.rider_name,
               rider_phone: eta.rider_phone || order.rider_phone,
-              // Never retain/expose old rider coordinates before Kitchen pickup.
-              rider_lat: customerTrackingActive ? (eta.rider_lat ?? null) : null,
-              rider_lng: customerTrackingActive ? (eta.rider_lng ?? null) : null,
-              delivery_eta_seconds: customerTrackingActive ? (Number(eta.eta_seconds || 0) || null) : null,
-              delivery_eta_calculated_at: customerTrackingActive ? (eta.calculated_at || null) : null,
-              delivery_distance_km: customerTrackingActive ? (Number(eta.customer_distance_km ?? eta.distance_km) || null) : null,
-              rider_location_is_fresh: customerTrackingActive && eta.rider_location_is_fresh === true,
+              rider_lat: eta.rider_lat ?? order.rider_lat,
+              rider_lng: eta.rider_lng ?? order.rider_lng,
+              delivery_eta_seconds: Number(eta.eta_seconds || 0) || null,
+              delivery_eta_calculated_at: eta.calculated_at || null,
             };
           } catch {
             return order;
@@ -684,150 +594,60 @@ export default function MyOrders() {
       });
       await loadOrders();
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.data?.detail || 'Failed to cancel order';
+      const msg = e?.data?.detail || 'Failed to cancel order';
       alert(msg);
-      throw e;
     }
   }
 
-  /** Customer can cancel only before the shop accepts the order. */
+  /** Determine if customer can cancel this order */
   function canCancelOrder(order: OrderWithDelivery): boolean {
-    return order.status === 'new' || order.status === 'payment_pending';
+    if (order.status === 'new') return true; // Always can cancel pending
+    if (order.status === 'accepted') return true; // Can cancel before preparing starts
+    if (order.status === 'preparing' && allowCancelPreparing) return true;
+    if (order.status === 'ready' && allowCancelReady) return true;
+    return false;
   }
 
-  /** Order Again - review past items first, then choose quantities before adding to cart. */
-  async function handleOrderAgain(order: OrderWithDelivery) {
-    setReorderOrder(order);
-    setReorderItems([]);
-    setReorderLoading(true);
-
+  /** Order Again - adds items from a past order back to cart */
+  function handleOrderAgain(order: OrderWithDelivery) {
     try {
-      let sourceItems: any[] = [];
-      try {
-        sourceItems = JSON.parse(order.items_json);
-      } catch {
-        sourceItems = [];
-      }
+      let items: any[] = [];
+      try { items = JSON.parse(order.items_json); } catch { return; }
+      if (items.length === 0) return;
 
-      if (!Array.isArray(sourceItems) || sourceItems.length === 0) {
-        setReorderItems([]);
-        return;
-      }
-
-      const menuResponse = await client.entities.menu_items.query({
-        query: { is_active: true },
-        sort: 'sort_order',
-        limit: 500,
-      });
-      const menuItems = (menuResponse?.data?.items || []) as MenuItem[];
-
-      const drafts: ReorderDraftItem[] = sourceItems.map((source, index) => {
-        const sourceName = String(source?.name || 'Item').trim();
-        const sourceId = Number(source?.menu_item_id || source?.menuItem?.id || 0);
-        const isDeal = source?.is_deal === true || source?.deal_id;
-
-        if (isDeal) {
-          return {
-            key: `${order.id}-${index}`,
-            sourceName,
-            menuItem: null,
-            size: String(source?.size || 'Deal'),
-            extras: [],
-            quantity: 0,
-            unavailableReason: language === 'ar' ? 'أعد اختيار العرض من صفحة العروض' : 'Please rebuild this deal from the Deals page',
-          };
-        }
-
-        const idCandidate = menuItems.find((item) => Number(item.id) === sourceId) || null;
-        const sameNameCandidates = menuItems.filter(
-          (item) => String(item.name || '').trim().toLowerCase() === sourceName.toLowerCase(),
-        );
-
-        // Prefer the original ID only when it still has a real current price.
-        // This fixes old duplicate menu rows where the historical ID is still
-        // active but contains AED 0 while the current item with the same name
-        // has the proper price.
-        const menuItem = (hasCurrentOrderablePrice(idCandidate) ? idCandidate : null)
-          || sameNameCandidates.find((item) => hasCurrentOrderablePrice(item))
-          || idCandidate
-          || sameNameCandidates[0]
-          || null;
-
-        if (!menuItem) {
-          return {
-            key: `${order.id}-${index}`,
-            sourceName,
-            menuItem: null,
-            size: String(source?.size || ''),
-            extras: [],
-            quantity: 0,
-            unavailableReason: language === 'ar' ? 'هذا الصنف غير متوفر الآن' : 'This item is not available now',
-          };
-        }
-
-        const resolvedSize = resolveReorderSize(menuItem, source?.size);
-        if (!resolvedSize || resolvedSize.price <= 0) {
-          return {
-            key: `${order.id}-${index}`,
-            sourceName,
-            menuItem: null,
-            size: String(source?.size || ''),
-            extras: [],
-            quantity: 0,
-            unavailableReason: language === 'ar'
-              ? 'السعر الحالي لهذا الصنف غير متوفر'
-              : 'Current price for this item is not available',
-          };
-        }
-        const selectedSize = resolvedSize.name;
-
-        const availableExtras = getItemExtras(menuItem, []);
-        const oldExtraNames = Array.isArray(source?.extras)
-          ? source.extras.map((extra: any) => typeof extra === 'string' ? extra : String(extra?.name || '')).filter(Boolean)
-          : [];
-        const selectedExtras = availableExtras.filter((extra) =>
-          oldExtraNames.some((name: string) => name.trim().toLowerCase() === String(extra.name || '').trim().toLowerCase()),
-        );
-
-        return {
-          key: `${order.id}-${index}`,
-          sourceName,
-          menuItem,
-          size: selectedSize,
-          extras: selectedExtras,
-          quantity: Math.max(1, Number(source?.quantity || 1)),
+      const cart = getCart();
+      for (const item of items) {
+        const unitPrice = item.price / (item.quantity || 1);
+        const newCartItem: CartItem = {
+          id: `reorder-${order.id}-${item.name}-${item.size}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          menuItem: {
+            id: 0,
+            category_id: 0,
+            name: item.name,
+            description: '',
+            price: unitPrice,
+            image_url: '',
+            is_active: true,
+            has_extras: false,
+            sort_order: 0,
+          } as any,
+          size: item.size || 'Regular',
+          extras: (item.extras || []).map((eName: string, idx: number) => ({
+            id: idx,
+            name: eName,
+            price: 0,
+          })),
+          quantity: item.quantity || 1,
+          totalPrice: item.price,
         };
-      });
-
-      setReorderItems(drafts);
-    } catch (error) {
-      console.error('Failed to prepare reorder:', error);
-      setReorderItems([]);
-    } finally {
-      setReorderLoading(false);
+        cart.push(newCartItem);
+      }
+      saveCart(cart);
+      window.dispatchEvent(new Event('cart-updated'));
+      navigate('/cart');
+    } catch (e) {
+      console.error('Failed to reorder:', e);
     }
-  }
-
-  function updateReorderQuantity(key: string, delta: number) {
-    setReorderItems((items) => items.map((item) =>
-      item.key === key
-        ? { ...item, quantity: Math.max(0, Math.min(99, item.quantity + delta)) }
-        : item,
-    ));
-  }
-
-  function confirmOrderAgain() {
-    const selected = reorderItems.filter((item) => item.menuItem && item.quantity > 0);
-    if (selected.length === 0) return;
-
-    for (const item of selected) {
-      addToCart(item.menuItem!, item.size, item.extras, item.quantity);
-    }
-
-    window.dispatchEvent(new Event('cart-updated'));
-    setReorderOrder(null);
-    setReorderItems([]);
-    navigate('/cart');
   }
 
   if (loading) {
@@ -859,7 +679,7 @@ export default function MyOrders() {
     <CustomerLayout>
       <div className="bg-black min-h-screen px-4 py-6 max-w-2xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-white text-2xl font-bold">{t('orders.title')}</h1>
+          <h1 className="text-white text-2xl font-bold">My Orders</h1>
           <Button
             variant="ghost"
             size="sm"
@@ -891,19 +711,19 @@ export default function MyOrders() {
             <div className="flex-1">
               <p className="text-white font-semibold text-sm">
                 {notificationStatus === 'enabled'
-                  ? t('orders.notifications_ready_enabled')
+                  ? 'Ready notifications enabled'
                   : notificationStatus === 'blocked'
-                    ? t('orders.notifications_blocked')
+                    ? 'Notifications are blocked'
                     : notificationStatus === 'unsupported'
-                      ? t('orders.notifications_unsupported')
-                      : t('orders.notifications_get_ready')}
+                      ? 'Notifications are not supported'
+                      : 'Get notified when your order is ready'}
               </p>
               <p className="text-gray-400 text-xs mt-1">
                 {notificationStatus === 'enabled'
-                  ? t('orders.notifications_enabled_desc')
+                  ? 'You will receive a phone alert when Kitchen marks your order Ready.'
                   : notificationStatus === 'blocked'
-                    ? t('orders.notifications_blocked_desc')
-                    : notificationMessage || t('orders.notifications_enable_desc')}
+                    ? 'Open browser settings and allow notifications for Fai Fai Juice.'
+                    : notificationMessage || 'Enable once to receive Ready alerts even when the app is in background.'}
               </p>
               {!['enabled', 'blocked', 'unsupported', 'checking'].includes(notificationStatus) && (
                 <Button
@@ -914,10 +734,10 @@ export default function MyOrders() {
                 >
                   <Bell className="w-4 h-4 mr-2" />
                   {notificationStatus === 'login_required'
-                    ? t('orders.notifications_login')
+                    ? 'Login to Enable'
                     : notificationStatus === 'enabling'
-                      ? t('orders.notifications_enabling')
-                      : t('orders.notifications_enable')}
+                      ? 'Enabling...'
+                      : 'Enable Notifications'}
                 </Button>
               )}
             </div>
@@ -927,42 +747,42 @@ export default function MyOrders() {
         {orders.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-5xl mb-4">🥤</div>
-            <p className="text-gray-400 text-lg font-medium">{t('orders.no_orders')}</p>
-            <p className="text-gray-600 text-sm mt-2">{t('orders.no_orders_subtitle')}</p>
+            <p className="text-gray-400 text-lg font-medium">No orders yet</p>
+            <p className="text-gray-600 text-sm mt-2">Your orders will appear here after you place them</p>
           </div>
         ) : (
           <div className="space-y-6">
             {/* Active Orders */}
             {activeOrders.length > 0 && (
               <div>
-                <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">{t('orders.active_orders')}</h2>
+                <h2 className="text-green-400 font-semibold text-sm uppercase tracking-wider mb-3">Active Orders</h2>
                 <div className="space-y-4">
                   {activeOrders.map(order => {
                     let items: any[] = [];
                     try { items = JSON.parse(order.items_json); } catch { /* */ }
                     const isDelivery = isDeliveryOrder(order);
                     const showRiderContact = isDelivery && order.rider_name && order.rider_phone &&
-                      ['accepted', 'picked_up', 'on_the_way'].includes(String(order.delivery_status || ''));
+                      !['rejected', 'delivered'].includes(String(order.delivery_status || ''));
 
                     return (
                       <Card key={order.id} className="bg-gray-900 border-green-600/20 border p-4">
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-white font-bold text-lg">{t('orders.order')} #{order.id}</span>
+                            <span className="text-white font-bold text-lg">Order #{order.id}</span>
                             {isDelivery && (
                               <Badge className="bg-blue-600/20 text-blue-400 border border-blue-600/30 text-xs">
-                                <Bike className="w-3 h-3 mr-1" /> {t('orders.delivery')}
+                                <Bike className="w-3 h-3 mr-1" /> Delivery
                               </Badge>
                             )}
                           </div>
                           <div className="flex flex-col items-end">
                             {order.delivery_charge > 0 && (
-                              <span className="text-[10px] text-gray-400">{t('orders.delivery_charge')}: {t('common.aed')} {order.delivery_charge?.toFixed(2)}</span>
+                              <span className="text-[10px] text-gray-400">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
                             )}
                             {order.tip_amount > 0 && (
-                              <span className="text-[10px] text-green-400">{t('orders.tip')}: {t('common.aed')} {order.tip_amount?.toFixed(2)}</span>
+                              <span className="text-[10px] text-green-400">Tip: AED {order.tip_amount?.toFixed(2)}</span>
                             )}
-                            <span className="text-red-400 font-bold">{t('common.aed')} {order.total_amount?.toFixed(2)}</span>
+                            <span className="text-red-400 font-bold">AED {order.total_amount?.toFixed(2)}</span>
                           </div>
                         </div>
                         <p className="text-gray-500 text-xs mb-3">
@@ -986,7 +806,7 @@ export default function MyOrders() {
                         )}
 
                         {/* Track Live Button for delivery orders */}
-                        {isDelivery && ['picked_up', 'on_the_way'].includes(String(order.delivery_status || '')) && (
+                        {isDelivery && order.delivery_status && order.delivery_status !== 'delivered' && (
                           <Button
                             onClick={() => navigate(`/track/${order.id}`)}
                             className="w-full mb-3 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
@@ -994,8 +814,8 @@ export default function MyOrders() {
                           >
                             <Navigation className="w-4 h-4 mr-2" />
                             {order.rider_lat != null && order.rider_lng != null
-                              ? t('orders.track_rider_live')
-                              : t('orders.open_rider_tracking')}
+                              ? 'Track Rider Live on Map'
+                              : 'Open Rider Tracking'}
                           </Button>
                         )}
 
@@ -1008,13 +828,11 @@ export default function MyOrders() {
                           deliveryStatus={order.delivery_status || null}
                           deliveryEtaSeconds={order.delivery_eta_seconds}
                           deliveryEtaCalculatedAt={order.delivery_eta_calculated_at}
-                          deliveryDistanceKm={order.delivery_distance_km}
-                          riderLocationIsFresh={order.rider_location_is_fresh}
                         />
 
                         {/* Items */}
                         <div className="border-t border-gray-800 pt-3">
-                          <p className="text-gray-500 text-xs uppercase mb-2">{t('orders.items')}</p>
+                          <p className="text-gray-500 text-xs uppercase mb-2">Items</p>
                           {items.map((item: any, idx: number) => (
                             <div key={idx} className="flex justify-between text-sm py-0.5">
                               <span className="text-gray-300">{item.quantity}x {item.name} ({item.size})</span>
@@ -1033,7 +851,7 @@ export default function MyOrders() {
                               className="border-red-600/50 text-red-400 hover:bg-red-600/10 hover:text-red-300 cursor-pointer w-full"
                             >
                               <XCircle className="w-4 h-4 mr-2" />
-                              {t('orders.cancel_order')}
+                              Cancel Order
                             </Button>
                           </div>
                         )}
@@ -1047,7 +865,7 @@ export default function MyOrders() {
             {/* Past Orders */}
             {pastOrders.length > 0 && (
               <div>
-                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">{t('orders.past_orders')}</h2>
+                <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">Past Orders</h2>
                 <div className="space-y-3">
                   {pastOrders.map(order => {
                     let items: any[] = [];
@@ -1061,52 +879,41 @@ export default function MyOrders() {
                             <span className="text-gray-300 font-medium">#{order.id}</span>
                             <Badge className={`${order.status === 'completed' || order.delivery_status === 'delivered' ? 'bg-gray-700' : 'bg-red-600/20 text-red-400 border border-red-600/30'} text-xs`}>
                               {order.status === 'completed' || order.delivery_status === 'delivered' ? (
-                                <><CheckCircle className="w-3 h-3 mr-1" /> {t('orders.status.completed')}</>
+                                <><CheckCircle className="w-3 h-3 mr-1" /> Completed</>
                               ) : (
-                                <><XCircle className="w-3 h-3 mr-1" /> {t('orders.status.cancelled')}</>
+                                <><XCircle className="w-3 h-3 mr-1" /> Cancelled</>
                               )}
                             </Badge>
                           </div>
                           <div className="flex flex-col items-end">
                             {order.delivery_charge > 0 && (
-                              <span className="text-[10px] text-gray-500">{t('orders.delivery_charge')}: {t('common.aed')} {order.delivery_charge?.toFixed(2)}</span>
+                              <span className="text-[10px] text-gray-500">Delivery: AED {order.delivery_charge?.toFixed(2)}</span>
                             )}
                             {order.tip_amount > 0 && (
-                              <span className="text-[10px] text-green-500">{t('orders.tip')}: {t('common.aed')} {order.tip_amount?.toFixed(2)}</span>
+                              <span className="text-[10px] text-green-500">Tip: AED {order.tip_amount?.toFixed(2)}</span>
                             )}
-                            <span className="text-gray-400 font-medium">{t('common.aed')} {order.total_amount?.toFixed(2)}</span>
+                            <span className="text-gray-400 font-medium">AED {order.total_amount?.toFixed(2)}</span>
                           </div>
                         </div>
                         <div className="flex items-center justify-between mt-1">
                           <p className="text-gray-600 text-xs">
-                            {formatDateShort(order.created_at)} • {items.length} {items.length === 1 ? t('orders.item_singular') : t('orders.item_plural')}
+                            {formatDateShort(order.created_at)} • {items.length} item{items.length > 1 ? 's' : ''}
                           </p>
                           {(order.status === 'completed' || order.delivery_status === 'delivered') && (
                             hasReviewed ? (
                               <span className="text-green-500 text-xs flex items-center gap-1">
-                                <CheckCircle className="w-3 h-3" /> {t('orders.reviewed')}
+                                <CheckCircle className="w-3 h-3" /> Reviewed
                               </span>
                             ) : (
                               <button
                                 onClick={() => navigate(`/feedback?order=${order.id}`)}
                                 className="text-yellow-400 text-xs flex items-center gap-1 hover:text-yellow-300 cursor-pointer"
                               >
-                                <MessageSquare className="w-3 h-3" /> {t('orders.give_feedback')}
+                                <MessageSquare className="w-3 h-3" /> Give Feedback
                               </button>
                             )
                           )}
                         </div>
-                        {order.status === 'cancelled' && getCancellationInfo(order) && (
-                          <div className="mt-3 rounded-xl border border-red-600/25 bg-red-600/10 px-3 py-2">
-                            <p className="text-red-300 text-xs font-semibold">
-                              {language === 'ar' ? 'تم الإلغاء بواسطة' : 'Cancelled by'}: {getCancellationInfo(order)!.by}
-                            </p>
-                            <p className="text-gray-300 text-sm mt-1">
-                              {language === 'ar' ? 'السبب' : 'Reason'}: {getCancellationInfo(order)!.reason}
-                            </p>
-                          </div>
-                        )}
-
                         {/* Order Again button for completed orders */}
                         {(order.status === 'completed' || order.delivery_status === 'delivered') && (
                           <div className="mt-3 pt-3 border-t border-gray-800">
@@ -1115,7 +922,7 @@ export default function MyOrders() {
                               size="sm"
                               className="w-full bg-red-600 hover:bg-red-700 text-white cursor-pointer"
                             >
-                              <ShoppingCart className="w-4 h-4 mr-2" /> {t('orders.order_again')}
+                              <ShoppingCart className="w-4 h-4 mr-2" /> Order Again
                             </Button>
                           </div>
                         )}
@@ -1125,89 +932,6 @@ export default function MyOrders() {
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Order Again review: customer chooses which old items/quantities to add. */}
-        {reorderOrder && (
-          <div className="fixed inset-0 z-[100] bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <div className="w-full sm:max-w-lg max-h-[88vh] overflow-y-auto bg-gray-950 border border-gray-800 rounded-t-3xl sm:rounded-3xl p-5">
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-white text-xl font-bold">
-                    {language === 'ar' ? `إعادة الطلب #${reorderOrder.id}` : `Order Again #${reorderOrder.id}`}
-                  </h3>
-                  <p className="text-gray-500 text-sm">
-                    {language === 'ar' ? 'اختر الأصناف والكمية قبل إضافتها إلى السلة' : 'Choose the items and quantity before adding to cart'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setReorderOrder(null); setReorderItems([]); }}
-                  className="w-10 h-10 rounded-full bg-gray-900 text-gray-400 flex items-center justify-center"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {reorderLoading ? (
-                <div className="py-10 text-center text-gray-400">
-                  {language === 'ar' ? 'جارٍ تحميل الأصناف...' : 'Loading current menu items...'}
-                </div>
-              ) : reorderItems.length === 0 ? (
-                <div className="py-10 text-center text-gray-500">
-                  {language === 'ar' ? 'لا توجد أصناف متاحة لإعادة الطلب' : 'No items available to reorder'}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {reorderItems.map((item) => (
-                    <div key={item.key} className={`rounded-2xl border p-4 ${item.menuItem ? 'border-gray-800 bg-gray-900' : 'border-red-900/50 bg-red-950/20'}`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-white font-semibold truncate">{item.sourceName}</p>
-                          {item.size && <p className="text-gray-500 text-xs mt-1">{item.size}</p>}
-                          {item.extras.length > 0 && (
-                            <p className="text-gray-500 text-xs mt-1">
-                              {language === 'ar' ? 'إضافات' : 'Extras'}: {item.extras.map((extra) => extra.name).join(', ')}
-                            </p>
-                          )}
-                          {item.unavailableReason && <p className="text-red-400 text-xs mt-2">{item.unavailableReason}</p>}
-                        </div>
-
-                        {item.menuItem && (
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => updateReorderQuantity(item.key, -1)}
-                              className="w-9 h-9 rounded-full bg-gray-800 text-white flex items-center justify-center"
-                            >
-                              <Minus className="w-4 h-4" />
-                            </button>
-                            <span className="w-7 text-center text-white font-bold">{item.quantity}</span>
-                            <button
-                              type="button"
-                              onClick={() => updateReorderQuantity(item.key, 1)}
-                              className="w-9 h-9 rounded-full bg-green-600 text-white flex items-center justify-center"
-                            >
-                              <Plus className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <Button
-                onClick={confirmOrderAgain}
-                disabled={reorderLoading || !reorderItems.some((item) => item.menuItem && item.quantity > 0)}
-                className="w-full mt-5 h-12 bg-green-600 hover:bg-green-700 text-white disabled:opacity-40"
-              >
-                <ShoppingCart className="w-4 h-4 mr-2" />
-                {language === 'ar' ? 'إضافة المحدد إلى السلة' : 'Add Selected to Cart'}
-              </Button>
-            </div>
           </div>
         )}
 
