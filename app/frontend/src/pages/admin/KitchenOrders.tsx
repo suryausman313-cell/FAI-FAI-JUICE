@@ -344,10 +344,12 @@ function totalItems(order: KitchenOrder): number {
 }
 
 function paymentLabel(order: KitchenOrder): string {
-  const raw = String(order.payment_method || 'Cash').toLowerCase();
+  const rawValue = String(order.payment_method || 'Cash').trim();
+  const raw = rawValue.toLowerCase();
   if (raw.includes('cash')) return isDeliveryOrder(order) ? 'Cash on delivery' : 'Cash on pickup';
-  if (raw.includes('card')) return 'Card';
-  return String(order.payment_method || 'Cash');
+  // Ziina is the online-card gateway. Staff only need to see the actual payment type.
+  if (raw.includes('ziina') || raw.includes('online') || raw.includes('card')) return 'Card';
+  return rawValue || 'Cash';
 }
 
 function TimerCircle({
@@ -965,9 +967,10 @@ export default function KitchenOrders() {
           total_amount: Number(order.total_amount || 0),
           items: parseItems(order.items_json),
           order_type: isDeliveryOrder(order) ? 'delivery' : 'pickup',
+          payment_method: paymentLabel(order),
           customer_notes: customerKitchenNotes(order.order_notes),
         },
-        settings: { ...receiptSettings, paper_width: '58mm' },
+        settings: { ...receiptSettings, paper_width: '58mm', cut_paper: false },
         reprint,
         copy_label: reprint ? 'REPRINT / COPY' : 'KITCHEN COPY',
       });
