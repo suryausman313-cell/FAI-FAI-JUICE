@@ -46,6 +46,7 @@ declare global {
       stopOrderAlarm?: () => void;
       speakText?: (text: string) => void;
       getBatteryInfo?: () => string;
+      handlesLateAlerts?: () => boolean;
     };
     webkitAudioContext?: typeof AudioContext;
   }
@@ -588,6 +589,38 @@ export default function KitchenOrders() {
   const loadInProgressRef = useRef(false);
   const lateVoiceAnnouncedRef = useRef<Set<string>>(new Set());
   const speechUnlockedRef = useRef(false);
+
+  // Android Kitchen hardware Back should behave like the on-screen Back button.
+  // It closes the current detail/drawer/dialog or returns Today/Yesterday/Menu to Live.
+  // At the real Live root it is intentionally consumed so the kiosk app does not exit.
+  useEffect(() => {
+    const handleNativeBack = () => {
+      if (cancelOrderTarget) {
+        setCancelOrderTarget(null);
+        setCancelPreset('');
+        setCancelOtherReason('');
+        return;
+      }
+      if (statusDialogOpen) {
+        setStatusDialogOpen(false);
+        return;
+      }
+      if (drawerOpen) {
+        setDrawerOpen(false);
+        return;
+      }
+      if (selectedOrderId !== null) {
+        setSelectedOrderId(null);
+        return;
+      }
+      if (viewMode !== 'live') {
+        setViewMode('live');
+      }
+    };
+
+    window.addEventListener('fai-fai-kitchen-back', handleNativeBack);
+    return () => window.removeEventListener('fai-fai-kitchen-back', handleNativeBack);
+  }, [cancelOrderTarget, statusDialogOpen, drawerOpen, selectedOrderId, viewMode]);
 
   // Mobile Chrome/PWA may block speech until the page has received a real user
   // interaction. Prime the speech engine on the first tap/key press (PIN login,
@@ -1171,6 +1204,13 @@ export default function KitchenOrders() {
   }, [speakKitchenMessage]);
 
   const announceLateOrder = useCallback((order: KitchenOrder) => {
+    // The Android Kitchen foreground service owns late alerts so they also work
+    // while the WebView is backgrounded / the device is on its tap-to-open screen.
+    // Web/PWA keeps the existing browser fallback.
+    try {
+      if (window.VitaPrinter?.handlesLateAlerts?.()) return;
+    } catch { /* optional Android bridge */ }
+
     const key = `${order.id}_${order.promised_ready_at || 'deadline'}`;
     if (lateVoiceAnnouncedRef.current.has(key)) return;
 
@@ -1179,15 +1219,8 @@ export default function KitchenOrders() {
     // still be able to announce the late order.
     lateVoiceAnnouncedRef.current.add(key);
 
-    // Ring briefly, then say the exact order number and that it is late.
-    try {
-      window.VitaPrinter?.startOrderAlarm?.(1);
-      window.setTimeout(() => window.VitaPrinter?.stopOrderAlarm?.(), 2500);
-    } catch { /* optional Android bridge */ }
-
-    window.setTimeout(() => {
-      speakKitchenMessage(`Order number ${order.id} is late. Time is finished. Please make order number ${order.id} ready.`);
-    }, 500);
+    // Late-order alert is voice only. Do not start any beep / tu-tu alarm.
+    speakKitchenMessage(`Order number ${order.id} is late. Time is finished. Please make order number ${order.id} ready.`);
   }, [speakKitchenMessage]);
 
   function renderOrderDetail(order: KitchenOrder) {
