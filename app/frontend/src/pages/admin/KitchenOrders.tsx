@@ -1258,10 +1258,18 @@ export default function KitchenOrders() {
 
   function renderOrderDetail(order: KitchenOrder) {
     const items = parseItems(order.items_json);
-    const subtotal = Number(order.subtotal_amount || items.reduce((sum, item) => sum + Number(item.totalPrice || item.price || 0) * Math.max(item.quantity, 1), 0));
     const itemDiscounts = items.reduce((sum, item) => sum + Math.max(0, Number(item.itemDiscountAmount || 0)), 0);
-    const shownSubtotal = subtotal > 0 ? subtotal + itemDiscounts : subtotal;
-    const deliveryFee = Number(order.delivery_charge || 0);
+    const derivedGrossSubtotal = items.reduce((sum, item) => {
+      const quantity = Math.max(1, Number(item.quantity || 1));
+      const lineTotal = Number(item.totalPrice || 0);
+      const original = Number(item.originalPrice || 0);
+      const unit = Number(item.price || 0);
+      const grossLine = original > 0 ? original : lineTotal > 0 ? lineTotal + Math.max(0, Number(item.itemDiscountAmount || 0)) : unit * quantity;
+      return sum + Math.max(0, grossLine);
+    }, 0);
+    const storedSubtotal = Number(order.subtotal_amount || 0);
+    const shownSubtotal = storedSubtotal > 0 ? storedSubtotal + itemDiscounts : derivedGrossSubtotal;
+    const deliveryFee = isDeliveryOrder(order) ? Number(order.delivery_charge || 0) : 0;
     const serviceFee = Number(order.service_fee || 0);
     const smallOrderFee = Number(order.small_order_fee || 0);
     const discount = Number(order.discount_amount || 0);
@@ -1269,60 +1277,15 @@ export default function KitchenOrders() {
     const assignment = assignments[order.id];
     const acceptedAssignment = riderAcceptedAssignment(assignment);
     const customerNotes = customerKitchenNotes(order.order_notes);
-    const statusText = order.status.replaceAll('_', ' ');
     const paymentText = paymentLabel(order);
     const isCardPayment = paymentText.toLowerCase().includes('card') || paymentText.toLowerCase().includes('online');
-
-    const statusTitle = order.status === 'completed'
-      ? 'Order completed'
-      : order.status === 'cancelled'
-        ? 'Order cancelled'
-        : order.status === 'ready'
-          ? (isDeliveryOrder(order) ? 'Ready for delivery' : 'Ready for pickup')
-          : order.status === 'preparing'
-            ? 'Preparing order'
-            : order.status === 'accepted'
-              ? 'Order accepted'
-              : 'New order';
-
-    const statusMessage = order.status === 'completed'
-      ? 'This order has been marked as completed.'
-      : order.status === 'cancelled'
-        ? 'This order was cancelled.'
-        : order.status === 'ready'
-          ? (isDeliveryOrder(order) ? 'Waiting for rider pickup.' : 'Waiting for customer pickup.')
-          : order.status === 'preparing'
-            ? 'Kitchen is preparing this order.'
-            : order.status === 'accepted'
-              ? 'Order accepted by the kitchen.'
-              : 'Please accept the order to start preparing.';
 
     return (
       <div className="min-h-screen bg-white">
         <div className="mx-auto max-w-lg pb-7">
-          <section className="border-b border-slate-200 px-3 pb-5 pt-4">
-            <div className="flex items-start gap-3">
-              <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${order.status === 'cancelled' ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-900'}`}>
-                <Check className="h-5 w-5 stroke-[2.4]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h2 className="text-[22px] font-black leading-tight text-slate-950">{statusTitle}</h2>
-                <p className="mt-1 text-[15px] leading-5 text-slate-600">{statusMessage}</p>
-              </div>
-            </div>
-          </section>
-
           <section className="border-b border-slate-200 px-3 py-5">
             <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[14px] text-slate-500">
-                  <Store className="h-4 w-4" />
-                  <span className="truncate">{receiptSettings.restaurant_name || 'Fai Fai Juice'}{order.branch_name ? `, ${order.branch_name}` : ''}</span>
-                </div>
-                <div className="mt-3 flex items-end gap-3">
-                  <span className="text-[42px] font-black leading-none tracking-tight text-slate-950">#{order.id}</span>
-                </div>
-              </div>
+              <span className="text-[42px] font-black leading-none tracking-tight text-slate-950">#{order.id}</span>
               <div className="shrink-0 text-right">
                 <p className="text-[28px] font-medium leading-none tabular-nums text-slate-950">{formatHistoryTime(order.created_at)}</p>
                 <p className="mt-2 text-[13px] font-medium uppercase tracking-wide text-slate-500">{isDeliveryOrder(order) ? 'Delivery' : 'Pickup'}</p>
@@ -1396,10 +1359,11 @@ export default function KitchenOrders() {
               <div className="flex items-center justify-between gap-3"><span className="font-medium text-slate-800">Subtotal</span><span className="font-normal text-slate-800">AED {money(shownSubtotal)}</span></div>
               <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">VAT (Incl.)</span><span className="font-normal text-slate-700">{taxAmount > 0 ? `AED ${money(taxAmount)}` : '--'}</span></div>
               <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Service Fee</span><span className="font-normal text-slate-700">AED {money(serviceFee)}</span></div>
-              <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Delivery Fee</span><span className="font-normal text-slate-700">AED {money(deliveryFee)}</span></div>
+              {isDeliveryOrder(order) && <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Delivery Fee</span><span className="font-normal text-slate-700">AED {money(deliveryFee)}</span></div>}
               {smallOrderFee > 0 && <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Small Order Fee</span><span className="font-normal text-slate-700">AED {money(smallOrderFee)}</span></div>}
               {itemDiscounts > 0 && <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Item Discounts</span><span className="font-normal text-slate-700">-AED {money(itemDiscounts)}</span></div>}
               {discount > 0 && <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Order Discount</span><span className="font-normal text-slate-700">-AED {money(discount)}</span></div>}
+              {Number(order.tip_amount || 0) > 0 && <div className="flex items-center justify-between gap-3"><span className="font-normal text-slate-700">Tip</span><span className="font-normal text-slate-700">AED {money(order.tip_amount)}</span></div>}
             </div>
 
             <div className="mt-5 flex items-end justify-between border-t border-slate-300 pt-4">
