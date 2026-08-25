@@ -4,27 +4,76 @@ const VAPID_KEY_STORAGE = 'fai_fai_customer_vapid_public_key';
 const NOTIFICATION_PREF_STORAGE = 'fai_fai_customer_notifications_enabled';
 const NOTIFICATION_PROMPTED_STORAGE = 'fai_fai_customer_notifications_prompted';
 
+type PushPermission = NotificationPermission | 'unsupported';
+
+interface NativePushBridge {
+  isPushConfigured: () => boolean;
+  getNotificationPermission: () => string;
+  getNotificationsEnabled: () => boolean;
+  requestNotificationPermission: () => void;
+  setNotificationsEnabled: (enabled: boolean, bearerToken: string) => void;
+  syncPushToken: (bearerToken: string) => void;
+}
+
+declare global {
+  interface Window {
+    FaiFaiNative?: NativePushBridge;
+  }
+}
+
 export interface CustomerPushState {
   supported: boolean;
-  permission: NotificationPermission | 'unsupported';
+  permission: PushPermission;
   subscribed: boolean;
 }
 
-function isSupported(): boolean {
+function nativeBridge(): NativePushBridge | null {
+  if (typeof window === 'undefined') return null;
+  const bridge = window.FaiFaiNative;
+  if (!bridge) return null;
+  try {
+    return bridge.isPushConfigured() ? bridge : null;
+  } catch {
+    return null;
+  }
+}
+
+function isWebPushSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
     'serviceWorker' in navigator &&
     'PushManager' in window &&
     'Notification' in window
   );
 }
 
-function apiUrl(path: string): string {
-  return `${getAPIBaseURL()}${path}`;
+function normalizePermission(value: unknown): PushPermission {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'granted' || normalized === 'denied' || normalized === 'default') {
+    return normalized;
+  }
+  return 'unsupported';
+}
+
+function nativePermission(bridge: NativePushBridge): PushPermission {
+  try {
+    return normalizePermission(bridge.getNotificationPermission());
+  } catch {
+    return 'unsupported';
+  }
+}
+
+function customerToken(): string {
+  return localStorage.getItem('vita_customer_token') || '';
 }
 
 function hasCustomerToken(): boolean {
-  return Boolean(localStorage.getItem('vita_customer_token'));
+  return Boolean(customerToken());
+}
+
+function apiUrl(path: string): string {
+  return `${getAPIBaseURL()}${path}`;
 }
 
 export function isCustomerPushPreferenceEnabled(): boolean {
@@ -32,7 +81,7 @@ export function isCustomerPushPreferenceEnabled(): boolean {
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('vita_customer_token') || '';
+  const token = customerToken();
   if (!token) throw new Error('Please login to enable order notifications');
 
   let response: Response | null = null;
@@ -115,8 +164,8 @@ async function publicKey(): Promise<string> {
   return result.public_key;
 }
 
-async function subscribeWithoutPrompt(): Promise<CustomerPushState> {
-  if (!isSupported()) {
+async function subscribeWebWithoutPrompt(): Promise<CustomerPushState> {
+  if (!isWebPushSupported()) {
     return { supported: false, permission: 'unsupported', subscribed: false };
   }
   if (Notification.permission !== 'granted') {
@@ -165,8 +214,75 @@ async function subscribeWithoutPrompt(): Promise<CustomerPushState> {
   return { supported: true, permission: 'granted', subscribed: true };
 }
 
-export async function requestCustomerPushPermissionOnLogin(): Promise<NotificationPermission | 'unsupported'> {
-  if (!isSupported()) return 'unsupported';
+function getNativeState(bridge: NativePushBridge): CustomerPushState {
+  const permission = nativePermission(bridge);
+  let enabled = false;
+  try {
+    enabled = bridge.getNotificationsEnabled();
+  } catch {
+    enabled = false;
+  }
+  return {
+    supported: permission !== 'unsupported',
+    permission,
+    subscribed:
+      permission === 'granted' && enabled && isCustomerPushPreferenceEnabled(),
+  };
+}
+
+function syncNativeToken(bridge: NativePushBridge, enabled: boolean): void {
+  const token = customerToken();
+  try {
+    bridge.setNotificationsEnabled(enabled, token);
+    if (enabled && token) bridge.syncPushToken(token);
+  } catch {
+    // Java bridge registration is best-effort; the next page/resume also syncs it.
+  }
+}
+
+async function requestNativePermission(bridge: NativePushBridge): Promise<PushPermission> {
+  const current = nativePermission(bridge);
+  if (current !== 'default') return current;
+
+  return await new Promise<PushPermission>(resolve => {
+    let settled = false;
+    let timer = 0;
+
+    const finish = (value?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener('fai-fai-native-notification-permission', onPermission);
+      resolve(value ? normalizePermission(value) : nativePermission(bridge));
+    };
+
+    const onPermission = (event: Event) => {
+      const custom = event as CustomEvent<{ permission?: string }>;
+      finish(custom.detail?.permission);
+    };
+
+    window.addEventListener('fai-fai-native-notification-permission', onPermission);
+    timer = window.setTimeout(() => finish(), 30000);
+    try {
+      bridge.requestNotificationPermission();
+    } catch {
+      finish('unsupported');
+    }
+  });
+}
+
+export async function requestCustomerPushPermissionOnLogin(): Promise<PushPermission> {
+  const bridge = nativeBridge();
+  if (bridge) {
+    const permission = nativePermission(bridge);
+    if (permission === 'default') {
+      localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
+      return await requestNativePermission(bridge);
+    }
+    return permission;
+  }
+
+  if (!isWebPushSupported()) return 'unsupported';
   if (Notification.permission === 'default') {
     localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
     return await Notification.requestPermission();
@@ -175,7 +291,10 @@ export async function requestCustomerPushPermissionOnLogin(): Promise<Notificati
 }
 
 export async function getCustomerPushState(): Promise<CustomerPushState> {
-  if (!isSupported()) {
+  const bridge = nativeBridge();
+  if (bridge) return getNativeState(bridge);
+
+  if (!isWebPushSupported()) {
     return { supported: false, permission: 'unsupported', subscribed: false };
   }
   const registration = await getRegistration();
@@ -189,7 +308,25 @@ export async function getCustomerPushState(): Promise<CustomerPushState> {
 }
 
 export async function enableCustomerPush(): Promise<CustomerPushState> {
-  if (!isSupported()) throw new Error('This browser does not support notifications');
+  const bridge = nativeBridge();
+  if (bridge) {
+    localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
+    let permission = nativePermission(bridge);
+    if (permission === 'default') permission = await requestNativePermission(bridge);
+    if (permission !== 'granted') {
+      throw new Error(
+        permission === 'denied'
+          ? 'Please allow notifications in Android app settings'
+          : 'Native notifications are not configured for this app build',
+      );
+    }
+
+    localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
+    syncNativeToken(bridge, true);
+    return { supported: true, permission: 'granted', subscribed: true };
+  }
+
+  if (!isWebPushSupported()) throw new Error('This device does not support notifications');
 
   localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
   const permission = Notification.permission === 'granted'
@@ -201,13 +338,23 @@ export async function enableCustomerPush(): Promise<CustomerPushState> {
   }
 
   localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
-  return await subscribeWithoutPrompt();
+  return await subscribeWebWithoutPrompt();
 }
 
 export async function disableCustomerPush(): Promise<CustomerPushState> {
   localStorage.setItem(NOTIFICATION_PREF_STORAGE, '0');
 
-  if (!isSupported()) {
+  const bridge = nativeBridge();
+  if (bridge) {
+    syncNativeToken(bridge, false);
+    return {
+      supported: true,
+      permission: nativePermission(bridge),
+      subscribed: false,
+    };
+  }
+
+  if (!isWebPushSupported()) {
     return { supported: false, permission: 'unsupported', subscribed: false };
   }
 
@@ -228,16 +375,33 @@ export async function disableCustomerPush(): Promise<CustomerPushState> {
 }
 
 /**
- * Called on customer-app startup. Once browser permission is granted, this
- * silently repairs/recreates the Push subscription on future opens instead of
- * asking the customer to press Enable again.
- *
- * If permission is still "default", the browser permission prompt is attempted
- * only once on this device. Browsers that require a user gesture may suppress
- * that automatic prompt; the Account/My Orders Enable button remains available.
+ * Called on customer-app startup. Native Android FCM is preferred whenever the
+ * installed app exposes FaiFaiNative; ordinary browsers/PWA keep using Web Push.
  */
 export async function ensureCustomerPushOnAppOpen(): Promise<CustomerPushState> {
-  if (!isSupported()) {
+  const bridge = nativeBridge();
+  if (bridge) {
+    if (!hasCustomerToken() || !isCustomerPushPreferenceEnabled()) {
+      return getNativeState(bridge);
+    }
+
+    let permission = nativePermission(bridge);
+    if (
+      permission === 'default' &&
+      localStorage.getItem(NOTIFICATION_PROMPTED_STORAGE) !== '1'
+    ) {
+      localStorage.setItem(NOTIFICATION_PROMPTED_STORAGE, '1');
+      permission = await requestNativePermission(bridge);
+    }
+
+    if (permission === 'granted') {
+      localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
+      syncNativeToken(bridge, true);
+    }
+    return getNativeState(bridge);
+  }
+
+  if (!isWebPushSupported()) {
     return { supported: false, permission: 'unsupported', subscribed: false };
   }
   if (!hasCustomerToken() || !isCustomerPushPreferenceEnabled()) {
@@ -245,7 +409,7 @@ export async function ensureCustomerPushOnAppOpen(): Promise<CustomerPushState> 
   }
 
   if (Notification.permission === 'granted') {
-    return await subscribeWithoutPrompt();
+    return await subscribeWebWithoutPrompt();
   }
 
   if (
@@ -257,7 +421,7 @@ export async function ensureCustomerPushOnAppOpen(): Promise<CustomerPushState> 
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
       localStorage.setItem(NOTIFICATION_PREF_STORAGE, '1');
-      return await subscribeWithoutPrompt();
+      return await subscribeWebWithoutPrompt();
     }
   }
 
@@ -265,6 +429,19 @@ export async function ensureCustomerPushOnAppOpen(): Promise<CustomerPushState> 
 }
 
 export async function syncCustomerPushIfAllowed(): Promise<CustomerPushState> {
+  const bridge = nativeBridge();
+  if (bridge) {
+    const state = getNativeState(bridge);
+    if (!state.supported || !isCustomerPushPreferenceEnabled()) {
+      return { ...state, subscribed: false };
+    }
+    if (state.permission === 'granted' && hasCustomerToken()) {
+      syncNativeToken(bridge, true);
+      return { supported: true, permission: 'granted', subscribed: true };
+    }
+    return state;
+  }
+
   const state = await getCustomerPushState();
   if (!state.supported || !isCustomerPushPreferenceEnabled()) {
     return { ...state, subscribed: false };
@@ -272,7 +449,7 @@ export async function syncCustomerPushIfAllowed(): Promise<CustomerPushState> {
   if (state.permission === 'granted') {
     // Permission already exists: silently recreate a missing subscription rather
     // than showing the customer an Enable button again.
-    return await subscribeWithoutPrompt();
+    return await subscribeWebWithoutPrompt();
   }
   return state;
 }
