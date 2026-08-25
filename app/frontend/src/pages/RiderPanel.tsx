@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { getAPIBaseURL } from '@/lib/config';
 import { formatUaeDateTime, formatUaeTime } from '@/lib/uae-time';
+import { disableRiderPush, enableRiderPush, syncRiderPushIfAllowed } from '@/lib/rider-push';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -103,6 +104,7 @@ interface FinanceTotals {
   shop_tips: number;
   rider_earnings: number;
   cash_collected: number;
+  card_collected?: number;
   cash_payable_to_shop: number;
   cash_orders: number;
   card_orders: number;
@@ -138,6 +140,8 @@ interface RiderFinanceSummary {
     label: string;
     date_from: string | null;
     date_to: string | null;
+    display_date_from?: string | null;
+    display_date_to?: string | null;
   };
   totals: FinanceTotals;
   settlements: FinanceSettlementTotals;
@@ -208,6 +212,7 @@ export default function RiderPanel() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const prevDeliveryIdsRef = useRef<number[]>([]);
+  const prevOrderStatusRef = useRef<Map<number, string>>(new Map());
   const ringTimerRef = useRef<number | null>(null);
   const ringSuppressedRef = useRef<Set<number>>(new Set());
   const [rejectDelivery, setRejectDelivery] = useState<Delivery | null>(null);
@@ -248,7 +253,8 @@ export default function RiderPanel() {
 
   useEffect(() => {
     if (!rider) return;
-    registerServiceWorker();
+    void registerServiceWorker();
+    void syncRiderPushIfAllowed(rider.id);
   }, [rider]);
 
   useEffect(() => {
@@ -399,6 +405,31 @@ export default function RiderPanel() {
     }
   }, [deliveries, rider]);
 
+  // When Kitchen changes an assigned delivery to Ready, alert the Rider in the
+  // foreground immediately. Background/closed alerts are delivered by server
+  // Web Push through rider-sw.js.
+  useEffect(() => {
+    if (!rider) return;
+    const next = new Map<number, string>();
+    for (const delivery of deliveries) {
+      const currentOrderStatus = String(delivery.order_status || '').toLowerCase();
+      next.set(delivery.id, currentOrderStatus);
+      const previous = prevOrderStatusRef.current.get(delivery.id);
+      const assignmentActive = ['assigned', 'accepted'].includes(String(delivery.status || '').toLowerCase());
+      if (
+        previous &&
+        previous !== 'ready' &&
+        currentOrderStatus === 'ready' &&
+        assignmentActive &&
+        document.visibilityState === 'visible'
+      ) {
+        toast.success(`✅ Order #${delivery.order_id} is Ready — pick up from Kitchen`, { duration: 10000 });
+        playNotificationSound();
+      }
+    }
+    prevOrderStatusRef.current = next;
+  }, [deliveries, rider]);
+
   function playNotificationSound() {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -469,77 +500,62 @@ export default function RiderPanel() {
   }
 
   async function requestNotificationPermission() {
-    if (!browserNotificationsSupported) {
+    if (!browserNotificationsSupported || !rider) {
       setNotificationsEnabled(true);
       localStorage.setItem('rider_notifications', 'on');
-      toast.success('🔔 Rider alerts enabled');
+      toast.success('🔔 Rider in-app alerts enabled');
       return;
     }
 
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-
-    if (permission === 'granted') {
-      setNotificationsEnabled(true);
-      localStorage.setItem('rider_notifications', 'on');
-      toast.success('🔔 Notifications enabled!');
-
-      try {
-        if (swRegistrationRef.current) {
-          await swRegistrationRef.current.showNotification('🛵 Rider Notifications Active', {
-            body: 'You will receive alerts for new delivery orders.',
-            icon: '/vite.svg',
-            tag: 'rider-test-notification',
-          });
-        }
-      } catch (error) {
-        console.error('Rider notification test failed:', error);
+    try {
+      const enabled = await enableRiderPush(rider.id);
+      const permission = Notification.permission;
+      setNotificationPermission(permission);
+      setNotificationsEnabled(enabled);
+      if (enabled) {
+        toast.success('🔔 Rider background notifications enabled');
+      } else if (permission === 'denied') {
+        localStorage.setItem('rider_notifications', 'off');
+        toast.error('Notifications are blocked in browser/app settings.');
       }
-    } else if (permission === 'denied') {
-      setNotificationsEnabled(false);
-      localStorage.setItem('rider_notifications', 'off');
-      toast.error('Notifications are blocked in browser settings.');
+    } catch (error) {
+      console.error('Rider push enable failed:', error);
+      toast.error('Could not enable background notifications. Try again.');
     }
   }
 
-  function toggleNotifications() {
+  async function toggleNotifications() {
     if (notificationsEnabled) {
       setNotificationsEnabled(false);
-      localStorage.setItem('rider_notifications', 'off');
+      if (rider) await disableRiderPush(rider.id).catch(() => undefined);
       if (swRegistrationRef.current?.active) {
         swRegistrationRef.current.active.postMessage({ type: 'RIDER_LOGOUT' });
       }
-      toast.info(browserNotificationsSupported ? 'Notifications off' : 'Rider alerts off');
+      toast.info('Notifications off');
       return;
     }
 
     if (!browserNotificationsSupported) {
       setNotificationsEnabled(true);
       localStorage.setItem('rider_notifications', 'on');
-      toast.success('🔔 Rider alerts on');
+      toast.success('🔔 Rider in-app alerts on');
       return;
     }
 
-    if (notificationPermission === 'granted') {
-      setNotificationsEnabled(true);
-      localStorage.setItem('rider_notifications', 'on');
-      if (swRegistrationRef.current?.active && rider) {
-        const activeIds = deliveries
-          .filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase()))
-          .map(d => d.id);
-        swRegistrationRef.current.active.postMessage({
-          type: 'RIDER_LOGIN',
-          data: {
-            riderId: rider.id,
-            currentDeliveryIds: activeIds,
-            apiBaseUrl: getAPIBaseURL(),
-            token: localStorage.getItem('rider_access_token') || '',
-          },
-        });
-      }
-      toast.success('Notifications on');
-    } else {
-      void requestNotificationPermission();
+    await requestNotificationPermission();
+    if (swRegistrationRef.current?.active && rider) {
+      const activeIds = deliveries
+        .filter(d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase()))
+        .map(d => d.id);
+      swRegistrationRef.current.active.postMessage({
+        type: 'RIDER_LOGIN',
+        data: {
+          riderId: rider.id,
+          currentDeliveryIds: activeIds,
+          apiBaseUrl: getAPIBaseURL(),
+          token: localStorage.getItem('rider_access_token') || '',
+        },
+      });
     }
   }
 
@@ -607,7 +623,9 @@ export default function RiderPanel() {
         loadFinance(riderData.id, 'today');
         loadCashSubmissions(riderData.id);
         if (browserNotificationsSupported && Notification.permission === 'default') {
-          setTimeout(() => requestNotificationPermission(), 2000);
+          setTimeout(() => void requestNotificationPermission(), 2000);
+        } else if (browserNotificationsSupported && Notification.permission === 'granted') {
+          setTimeout(() => void syncRiderPushIfAllowed(riderData.id), 500);
         }
       }
     } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Invalid phone or PIN'); }
@@ -628,6 +646,7 @@ export default function RiderPanel() {
     stopRiderRingNow();
     ringSuppressedRef.current.clear();
     prevDeliveryIdsRef.current = [];
+    prevOrderStatusRef.current.clear();
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   }
 
@@ -1052,9 +1071,11 @@ export default function RiderPanel() {
                       RIDER_FINANCE_PERIODS.find(option => option.key === financePeriod)?.label}
                   </span>
                 </div>
-                {financeSummary?.period?.date_from && financeSummary?.period?.date_to && (
+                {financeSummary?.period?.display_date_from && financeSummary?.period?.display_date_to && (
                   <div className="mt-1 text-right text-gray-500 text-xs">
-                    {formatFinanceDate(financeSummary.period.date_from)} — {formatFinanceDate(financeSummary.period.date_to)}
+                    {financeSummary.period.display_date_from === financeSummary.period.display_date_to
+                      ? formatFinanceDate(`${financeSummary.period.display_date_from}T12:00:00Z`)
+                      : `${formatFinanceDate(`${financeSummary.period.display_date_from}T12:00:00Z`)} — ${formatFinanceDate(`${financeSummary.period.display_date_to}T12:00:00Z`)}`}
                   </div>
                 )}
               </div>
@@ -1130,22 +1151,18 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-green-400" /> My Rider Payment
                   </h3>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="bg-purple-600/10 border border-purple-600/30 rounded-xl p-3">
-                      <p className="text-purple-300/70 text-xs">Earned All Time</p>
-                      <p className="text-purple-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_earnings_total || 0).toFixed(2)}</p>
+                      <p className="text-purple-300/70 text-xs">Earned This Period</p>
+                      <p className="text-purple-300 font-bold mt-1">AED {Number(financeSummary.totals.rider_earnings || 0).toFixed(2)}</p>
                     </div>
                     <div className="bg-green-600/10 border border-green-600/30 rounded-xl p-3">
-                      <p className="text-green-300/70 text-xs">Paid by Shop</p>
-                      <p className="text-green-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_paid_total || 0).toFixed(2)}</p>
+                      <p className="text-green-300/70 text-xs">Paid This Period</p>
+                      <p className="text-green-300 font-bold mt-1">AED {Number(financeSummary.payouts?.paid_to_rider || 0).toFixed(2)}</p>
                     </div>
                     <div className="bg-yellow-600/10 border border-yellow-600/30 rounded-xl p-3">
-                      <p className="text-yellow-300/70 text-xs">Still Owed to Me</p>
+                      <p className="text-yellow-300/70 text-xs">Still Owed to Me · Current</p>
                       <p className="text-yellow-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_remaining_to_receive || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="bg-gray-800 rounded-xl p-3">
-                      <p className="text-gray-500 text-xs">Paid This Period</p>
-                      <p className="text-white font-bold mt-1">AED {(financeSummary.payouts?.paid_to_rider || 0).toFixed(2)}</p>
                     </div>
                   </div>
                   <p className="text-gray-500 text-xs mt-3">Delivery charge + Rider tip are my earnings. Customer cash is submitted to the shop separately.</p>
@@ -1175,22 +1192,14 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                     <Wallet className="w-4 h-4 text-yellow-400" /> Current Cash Settlement
                   </h3>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="bg-gray-800 rounded-lg p-3">
-                      <p className="text-gray-500 text-xs">Need to Submit</p>
+                      <p className="text-gray-500 text-xs">Need to Submit · Current</p>
                       <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.remaining_to_submit.toFixed(2)}</p>
                     </div>
-                    <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3">
-                      <p className="text-green-400/70 text-xs">Approved All Time</p>
-                      <p className="text-green-400 font-bold mt-1">AED {financeSummary.current_balance.approved_cash.toFixed(2)}</p>
-                    </div>
                     <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3">
-                      <p className="text-orange-400/70 text-xs">Waiting Admin</p>
+                      <p className="text-orange-400/70 text-xs">Waiting Admin · Current</p>
                       <p className="text-orange-400 font-bold mt-1">AED {financeSummary.current_balance.awaiting_approval.toFixed(2)}</p>
-                    </div>
-                    <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-3">
-                      <p className="text-red-400/70 text-xs">Total Pending</p>
-                      <p className="text-red-400 font-bold mt-1">AED {financeSummary.current_balance.total_pending_cash.toFixed(2)}</p>
                     </div>
                   </div>
 
