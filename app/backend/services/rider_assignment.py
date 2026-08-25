@@ -27,6 +27,7 @@ from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
 from models.riders import Riders
 from services.rider_push_service import notify_rider_assignment_safely
+from services.customer_push_service import notify_customer_order_update_safely
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +357,9 @@ async def auto_assign_order(
         rider_id=int(assignment.rider_id),
         order_id=int(assignment.order_id),
         customer_name=str(assignment.customer_name or ""),
+    )
+    await notify_customer_order_update_safely(
+        db, order, "rider_assigned", rider_name=str(rider.name or "")
     )
 
     logger.info(
