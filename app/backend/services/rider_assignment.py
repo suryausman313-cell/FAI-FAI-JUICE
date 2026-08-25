@@ -26,6 +26,7 @@ from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.restaurant_settings import Restaurant_settings
 from models.riders import Riders
+from services.customer_push_service import notify_customer_order_update_safely
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,12 @@ async def auto_assign_order(
     db.add(assignment)
     await db.commit()
     await db.refresh(assignment)
+    await notify_customer_order_update_safely(
+        db,
+        order,
+        "rider_assigned",
+        rider_name=rider.name or "",
+    )
 
     logger.info(
         "Auto assigned order %s to nearest live rider %s (%s), %.2f km from shop",
