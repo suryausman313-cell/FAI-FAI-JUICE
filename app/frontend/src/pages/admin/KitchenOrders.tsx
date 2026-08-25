@@ -345,7 +345,9 @@ function totalItems(order: KitchenOrder): number {
 function paymentLabel(order: KitchenOrder): string {
   const raw = String(order.payment_method || 'Cash').toLowerCase();
   if (raw.includes('cash')) return isDeliveryOrder(order) ? 'Cash on delivery' : 'Cash on pickup';
-  if (raw.includes('card')) return 'Card';
+  if (raw.includes('card') || raw.includes('credit') || raw.includes('debit') || raw.includes('ziina') || raw.includes('online')) {
+    return 'Online payment';
+  }
   return String(order.payment_method || 'Cash');
 }
 
@@ -590,36 +592,51 @@ export default function KitchenOrders() {
   const lateVoiceAnnouncedRef = useRef<Set<string>>(new Set());
   const speechUnlockedRef = useRef(false);
 
-  // Android Kitchen hardware Back should behave like the on-screen Back button.
-  // It closes the current detail/drawer/dialog or returns Today/Yesterday/Menu to Live.
-  // At the real Live root it is intentionally consumed so the kiosk app does not exit.
+  // Keep Android background polling on the same deployed backend as this Kitchen.
   useEffect(() => {
-    const handleNativeBack = () => {
+    try {
+      localStorage.setItem('fai_fai_api_base_url', String(getAPIBaseURL() || '').replace(/\/$/, ''));
+    } catch {
+      // Browser/PWA mode does not require the native sync.
+    }
+  }, []);
+
+  // Android physical Back follows the same hierarchy as the visible Kitchen UI.
+  // true = the web page consumed Back; false = Android should return to Fai Fai home.
+  useEffect(() => {
+    const handleNativeBack = (): boolean => {
       if (cancelOrderTarget) {
         setCancelOrderTarget(null);
         setCancelPreset('');
         setCancelOtherReason('');
-        return;
+        return true;
       }
       if (statusDialogOpen) {
         setStatusDialogOpen(false);
-        return;
+        return true;
       }
       if (drawerOpen) {
         setDrawerOpen(false);
-        return;
+        return true;
       }
       if (selectedOrderId !== null) {
         setSelectedOrderId(null);
-        return;
+        return true;
       }
       if (viewMode !== 'live') {
         setViewMode('live');
+        return true;
       }
+      return false;
     };
 
-    window.addEventListener('fai-fai-kitchen-back', handleNativeBack);
-    return () => window.removeEventListener('fai-fai-kitchen-back', handleNativeBack);
+    (window as any).faiFaiKitchenBack = handleNativeBack;
+    const eventBack = () => { handleNativeBack(); };
+    window.addEventListener('fai-fai-kitchen-back', eventBack);
+    return () => {
+      window.removeEventListener('fai-fai-kitchen-back', eventBack);
+      try { delete (window as any).faiFaiKitchenBack; } catch { (window as any).faiFaiKitchenBack = undefined; }
+    };
   }, [cancelOrderTarget, statusDialogOpen, drawerOpen, selectedOrderId, viewMode]);
 
   // Mobile Chrome/PWA may block speech until the page has received a real user
@@ -1254,7 +1271,7 @@ export default function KitchenOrders() {
     const customerNotes = customerKitchenNotes(order.order_notes);
     const statusText = order.status.replaceAll('_', ' ');
     const paymentText = paymentLabel(order);
-    const isCardPayment = paymentText.toLowerCase().includes('card');
+    const isCardPayment = paymentText.toLowerCase().includes('card') || paymentText.toLowerCase().includes('online');
 
     const statusTitle = order.status === 'completed'
       ? 'Order completed'
@@ -1394,7 +1411,6 @@ export default function KitchenOrders() {
               <div className="rounded-md bg-slate-100 px-3 py-2 text-center text-[14px] font-bold uppercase tracking-wide text-slate-900">
                 {isCardPayment ? 'ONLINE PAYMENT' : paymentText.toUpperCase()}
               </div>
-              {isCardPayment && <p className="mt-2 text-center text-[15px] text-slate-600">Paid with CREDIT_CARD</p>}
             </div>
           </section>
 
