@@ -1,11 +1,13 @@
-// Fai Fai Rider Service Worker - final combined delivery flow.
-// Background polling is best effort; the open Rider page handles the repeating alarm.
-const CACHE_NAME = 'fai-fai-rider-presence-v2';
+// Fai Fai Rider Service Worker
+// Server Web Push provides reliable background/closed alerts. Polling remains a
+// best-effort fallback while the service worker is awake.
+const CACHE_NAME = 'fai-fai-rider-presence-v3';
 let riderId = null;
 let apiBaseUrl = '';
 let riderToken = '';
 let pollingInterval = null;
 let lastKnownDeliveryIds = [];
+let lastKnownOrderStatus = {};
 
 self.addEventListener('message', (event) => {
   const { type, data = {} } = event.data || {};
@@ -23,6 +25,7 @@ self.addEventListener('message', (event) => {
     apiBaseUrl = '';
     riderToken = '';
     lastKnownDeliveryIds = [];
+    lastKnownOrderStatus = {};
     stopPolling();
   }
 
@@ -34,22 +37,47 @@ self.addEventListener('message', (event) => {
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: 'Fai Fai Rider', body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'Fai Fai Rider';
+  const options = {
+    body: data.body || 'Rider update',
+    icon: '/vite.svg',
+    badge: '/vite.svg',
+    tag: data.tag || 'fai-fai-rider-update',
+    renotify: true,
+    requireInteraction: data.kind === 'assignment' || data.kind === 'ready_for_pickup',
+    vibrate: [250, 120, 250, 120, 250],
+    data: { url: data.url || '/rider', kind: data.kind || 'rider_update' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
 self.addEventListener('notificationclick', (event) => {
+  const target = String(event.notification?.data?.url || '/rider');
   event.notification.close();
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if (client.url.includes('/rider') && 'focus' in client) return client.focus();
+        if (client.url.includes('/rider') && 'focus' in client) {
+          if ('navigate' in client) client.navigate(target).catch(() => undefined);
+          return client.focus();
+        }
       }
-      return self.clients.openWindow ? self.clients.openWindow('/rider') : undefined;
+      return self.clients.openWindow ? self.clients.openWindow(target) : undefined;
     }),
   );
 });
 
 function startPolling() {
   stopPolling();
-  pollingInterval = setInterval(checkForNewDeliveries, 10000);
-  checkForNewDeliveries();
+  pollingInterval = setInterval(checkForUpdates, 10000);
+  checkForUpdates();
 }
 
 function stopPolling() {
@@ -57,13 +85,10 @@ function stopPolling() {
   pollingInterval = null;
 }
 
-async function checkForNewDeliveries() {
+async function checkForUpdates() {
   if (!riderId || !apiBaseUrl || !riderToken) return;
 
   try {
-    // Best-effort background presence. A service worker may be suspended by the
-    // browser/OS, but whenever it is awake we refresh the rider heartbeat so Admin
-    // does not incorrectly show an active signed-in rider as offline.
     try {
       await fetch(`${apiBaseUrl}/api/v1/rider/heartbeat/${riderId}`, {
         method: 'POST',
@@ -71,7 +96,7 @@ async function checkForNewDeliveries() {
         cache: 'no-store',
       });
     } catch {
-      // Presence is best effort and must never block delivery polling.
+      // Presence is best effort and never blocks delivery polling.
     }
 
     const response = await fetch(`${apiBaseUrl}/api/v1/rider/deliveries/${riderId}`, {
@@ -83,12 +108,12 @@ async function checkForNewDeliveries() {
 
     const data = await response.json();
     const items = Array.isArray(data?.items) ? data.items : [];
-    const activeItems = items.filter((item) => !['delivered', 'rejected'].includes(item.status));
+    const activeItems = items.filter((item) => !['delivered', 'rejected', 'cancelled'].includes(String(item.status || '').toLowerCase()));
     const currentIds = activeItems.map((item) => item.id);
-    const newAssignments = activeItems.filter(
-      (item) => item.status === 'assigned' && !lastKnownDeliveryIds.includes(item.id),
-    );
 
+    const newAssignments = activeItems.filter(
+      (item) => String(item.status || '').toLowerCase() === 'assigned' && !lastKnownDeliveryIds.includes(item.id),
+    );
     for (const delivery of newAssignments) {
       await self.registration.showNotification('🛵 New Delivery — Accept or Reject', {
         body: `Order #${delivery.order_id} - ${delivery.customer_name}\n${delivery.customer_address || 'Open Rider App'}`,
@@ -98,8 +123,30 @@ async function checkForNewDeliveries() {
         renotify: true,
         requireInteraction: true,
         vibrate: [250, 120, 250, 120, 250],
-        data: { deliveryId: delivery.id, orderId: delivery.order_id },
+        data: { url: '/rider', deliveryId: delivery.id, orderId: delivery.order_id },
       });
+    }
+
+    // Fallback Ready alert if server Web Push was unavailable. Track the order
+    // status independently of assignment status.
+    for (const delivery of activeItems) {
+      const key = String(delivery.id);
+      const current = String(delivery.order_status || '').toLowerCase();
+      const previous = String(lastKnownOrderStatus[key] || '').toLowerCase();
+      const canPickup = ['assigned', 'accepted'].includes(String(delivery.status || '').toLowerCase());
+      if (previous && previous !== 'ready' && current === 'ready' && canPickup) {
+        await self.registration.showNotification(`✅ Order #${delivery.order_id} is Ready`, {
+          body: 'Kitchen marked this delivery Ready. Please pick it up from the shop.',
+          icon: '/vite.svg',
+          badge: '/vite.svg',
+          tag: `rider-ready-${delivery.order_id}`,
+          renotify: true,
+          requireInteraction: true,
+          vibrate: [250, 120, 250, 120, 250],
+          data: { url: '/rider', deliveryId: delivery.id, orderId: delivery.order_id },
+        });
+      }
+      lastKnownOrderStatus[key] = current;
     }
 
     lastKnownDeliveryIds = currentIds;
