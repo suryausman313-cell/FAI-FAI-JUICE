@@ -14,7 +14,6 @@ from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
 from models.rider_cash_settlements import Rider_cash_settlements
 from services.rider_auth import create_rider_token, require_rider_id
-from services.customer_push_service import notify_customer_order_update_safely
 from routers.customer_auth import decode_customer_token, get_bearer_token as get_customer_bearer_token, normalize_phone
 from services.rider_assignment import (
     auto_assign_order,
@@ -25,6 +24,7 @@ from services.rider_assignment import (
     haversine_km,
     rider_live_status,
 )
+from services.rider_push_service import notify_rider_assignment_safely
 
 router = APIRouter(prefix="/api/v1/rider", tags=["rider"])
 
@@ -366,23 +366,6 @@ async def update_delivery_status(
         await db.refresh(assignment)
         await db.refresh(order)
 
-        if new_status in {"accepted", "picked_up", "on_the_way", "delivered"}:
-            rider_row = (
-                await db.execute(select(Riders).where(Riders.id == logged_rider_id))
-            ).scalar_one_or_none()
-            event_name = {
-                "accepted": "rider_accepted",
-                "picked_up": "picked_up",
-                "on_the_way": "on_the_way",
-                "delivered": "delivered",
-            }[new_status]
-            await notify_customer_order_update_safely(
-                db,
-                order,
-                event_name,
-                rider_name=(rider_row.name if rider_row else ""),
-            )
-
         auto_reassigned = None
         if new_status == "rejected":
             try:
@@ -558,11 +541,11 @@ async def assign_delivery(
         db.add(assignment)
         await db.commit()
         await db.refresh(assignment)
-        await notify_customer_order_update_safely(
+        await notify_rider_assignment_safely(
             db,
-            order,
-            "rider_assigned",
-            rider_name=rider.name or "",
+            rider_id=int(assignment.rider_id),
+            order_id=int(assignment.order_id),
+            customer_name=str(assignment.customer_name or ""),
         )
         return {
             "success": True,
@@ -1207,17 +1190,12 @@ async def reassign_delivery(
         if pickup_distance is not None:
             assignment.distance_km = round(pickup_distance, 2)
         await db.commit()
-
-        order = (
-            await db.execute(select(Orders).where(Orders.id == assignment.order_id))
-        ).scalar_one_or_none()
-        if order is not None:
-            await notify_customer_order_update_safely(
-                db,
-                order,
-                "rider_assigned",
-                rider_name=new_rider.name or "",
-            )
+        await notify_rider_assignment_safely(
+            db,
+            rider_id=int(data.new_rider_id),
+            order_id=int(assignment.order_id),
+            customer_name=str(assignment.customer_name or ""),
+        )
         return {
             "success": True,
             "new_rider_name": new_rider.name,

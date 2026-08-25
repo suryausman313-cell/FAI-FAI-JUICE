@@ -19,6 +19,7 @@ from models.branches import Branches
 from services.branch_kitchen_auth import verify_branch_kitchen_pin
 from models.restaurant_settings import Restaurant_settings
 from services.customer_push_service import notify_customer_order_update_safely
+from services.rider_push_service import notify_assigned_rider_ready_safely
 from services.rider_assignment import cancel_order_assignments
 from services.order_notes import public_order_notes
 
@@ -290,6 +291,8 @@ async def update_kitchen_order_status(
 
     if not is_ready_time_only_update:
         await notify_customer_order_update_safely(db, order, new_status)
+        if new_status == "ready" and is_delivery_order(order):
+            await notify_assigned_rider_ready_safely(db, order_id=order.id)
 
     return {
         "success": True,

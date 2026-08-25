@@ -80,13 +80,13 @@ def _resolve_period(
         label = "Yesterday"
 
     elif period == "week":
-        # Rolling 7-day report, including today.
+        # Rolling 7-day report including today.
         start_day = today - timedelta(days=6)
         end_day = today + timedelta(days=1)
         label = "Last 7 Days"
 
     elif period == "month":
-        # Rolling 30-day report, including today.
+        # Rolling 30-day report including today.
         start_day = today - timedelta(days=29)
         end_day = today + timedelta(days=1)
         label = "Last 30 Days"
@@ -154,18 +154,19 @@ def _in_period(
     start: Optional[datetime],
     end: Optional[datetime],
 ) -> bool:
-    """Check a timestamp against a UTC report window."""
+    """Check one timestamp against a UTC report window."""
     if start is None and end is None:
         return True
     if value is None:
         return False
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+    normalized = value
+    if normalized.tzinfo is None:
+        normalized = normalized.replace(tzinfo=timezone.utc)
     else:
-        value = value.astimezone(timezone.utc)
-    if start is not None and value < start:
+        normalized = normalized.astimezone(timezone.utc)
+    if start is not None and normalized < start:
         return False
-    if end is not None and value >= end:
+    if end is not None and normalized >= end:
         return False
     return True
 
@@ -423,7 +424,6 @@ async def _get_admin_order_totals(
         .in_(["completed", "delivered"])
     )
 
-    # Sales belong to the period in which they were completed, not created.
     completed_at = func.coalesce(
         Orders.delivered_at,
         Orders.updated_at,
@@ -505,20 +505,17 @@ async def _get_settlement_totals(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
 ) -> dict:
-    """Settlement activity for the selected report period.
+    """Settlement activity for the selected period.
 
-    Pending cash belongs to its submission time. Approved/rejected cash belongs
-    to the Admin review time, so old approvals do not leak into Today.
+    Pending cash belongs to submission time. Approved/rejected cash belongs to
+    Admin review time, so an old approval never appears inside Today.
     """
     query = select(Rider_cash_settlements)
 
     if rider_id is not None:
-        query = query.where(
-            Rider_cash_settlements.rider_id == rider_id
-        )
+        query = query.where(Rider_cash_settlements.rider_id == rider_id)
 
     settlements = (await db.execute(query)).scalars().all()
-
     approved = 0.0
     awaiting = 0.0
     rejected = 0.0
@@ -526,15 +523,9 @@ async def _get_settlement_totals(
 
     for item in settlements:
         status = str(item.status or "").strip().lower()
-        event_time = (
-            item.submitted_at
-            if status == "pending"
-            else (item.reviewed_at or item.submitted_at)
-        )
-
+        event_time = item.submitted_at if status == "pending" else (item.reviewed_at or item.submitted_at)
         if not _in_period(event_time, start, end):
             continue
-
         activity_count += 1
         amount = _money(item.amount)
         if status == "approved":
@@ -720,6 +711,8 @@ async def get_rider_finance_summary(
             "label": label,
             "date_from": start.isoformat() if start else None,
             "date_to": end.isoformat() if end else None,
+            "display_date_from": start.astimezone(UAE_TZ).date().isoformat() if start else None,
+            "display_date_to": (end - timedelta(microseconds=1)).astimezone(UAE_TZ).date().isoformat() if end else None,
         },
         "totals": period_totals,
         "settlements": period_settlements,
@@ -947,6 +940,8 @@ async def get_admin_finance_summary(
             "label": label,
             "date_from": start.isoformat() if start else None,
             "date_to": end.isoformat() if end else None,
+            "display_date_from": start.astimezone(UAE_TZ).date().isoformat() if start else None,
+            "display_date_to": (end - timedelta(microseconds=1)).astimezone(UAE_TZ).date().isoformat() if end else None,
         },
         "totals": overall,
         "settlements": all_settlements,

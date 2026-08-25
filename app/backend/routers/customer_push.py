@@ -29,8 +29,8 @@ class UnsubscribeRequest(BaseModel):
 
 
 class NativeTokenRequest(BaseModel):
-    token: str = Field(min_length=20, max_length=5000)
-    platform: str = Field(default="android", min_length=2, max_length=20)
+    token: str = Field(min_length=20, max_length=2048)
+    platform: str = Field(default="android", min_length=2, max_length=32)
 
 
 def customer_identity(authorization: Optional[str]) -> tuple[int, str]:
@@ -39,7 +39,6 @@ def customer_identity(authorization: Optional[str]) -> tuple[int, str]:
         account_id = int(payload.get("sub", ""))
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid customer token")
-
     phone_key = customer_phone_key(str(payload.get("phone", "")))
     if not phone_key:
         raise HTTPException(status_code=401, detail="Customer phone is missing from login")
@@ -53,21 +52,9 @@ async def public_key(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/subscribe")
-async def subscribe(
-    data: SubscribeRequest,
-    request: Request,
-    authorization: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-):
+async def subscribe(data: SubscribeRequest, request: Request, authorization: Optional[str] = Header(default=None), db: AsyncSession = Depends(get_db)):
     account_id, phone_key = customer_identity(authorization)
-    subscription = (
-        await db.execute(
-            select(Customer_push_subscriptions).where(
-                Customer_push_subscriptions.endpoint == data.endpoint
-            )
-        )
-    ).scalar_one_or_none()
-
+    subscription = (await db.execute(select(Customer_push_subscriptions).where(Customer_push_subscriptions.endpoint == data.endpoint))).scalar_one_or_none()
     user_agent = request.headers.get("user-agent", "")[:2000]
     if subscription:
         subscription.customer_account_id = account_id
@@ -77,36 +64,16 @@ async def subscribe(
         subscription.is_active = True
         subscription.user_agent = user_agent
     else:
-        subscription = Customer_push_subscriptions(
-            customer_account_id=account_id,
-            customer_phone_key=phone_key,
-            endpoint=data.endpoint,
-            p256dh=data.keys.p256dh,
-            auth=data.keys.auth,
-            is_active=True,
-            user_agent=user_agent,
-        )
+        subscription = Customer_push_subscriptions(customer_account_id=account_id, customer_phone_key=phone_key, endpoint=data.endpoint, p256dh=data.keys.p256dh, auth=data.keys.auth, is_active=True, user_agent=user_agent)
         db.add(subscription)
-
     await db.commit()
     return {"success": True}
 
 
 @router.post("/unsubscribe")
-async def unsubscribe(
-    data: UnsubscribeRequest,
-    authorization: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-):
+async def unsubscribe(data: UnsubscribeRequest, authorization: Optional[str] = Header(default=None), db: AsyncSession = Depends(get_db)):
     account_id, _phone_key = customer_identity(authorization)
-    subscription = (
-        await db.execute(
-            select(Customer_push_subscriptions).where(
-                Customer_push_subscriptions.endpoint == data.endpoint,
-                Customer_push_subscriptions.customer_account_id == account_id,
-            )
-        )
-    ).scalar_one_or_none()
+    subscription = (await db.execute(select(Customer_push_subscriptions).where(Customer_push_subscriptions.endpoint == data.endpoint, Customer_push_subscriptions.customer_account_id == account_id))).scalar_one_or_none()
     if subscription:
         subscription.is_active = False
         await db.commit()
@@ -114,68 +81,29 @@ async def unsubscribe(
 
 
 @router.post("/native-subscribe")
-async def native_subscribe(
-    data: NativeTokenRequest,
-    request: Request,
-    authorization: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-):
-    """Register/refresh the Android FCM token for the logged-in customer."""
-
+async def native_subscribe(data: NativeTokenRequest, request: Request, authorization: Optional[str] = Header(default=None), db: AsyncSession = Depends(get_db)):
     account_id, phone_key = customer_identity(authorization)
-    token = data.token.strip()
-    platform = data.platform.strip().lower()[:20] or "android"
-
-    item = (
-        await db.execute(
-            select(Customer_native_push_tokens).where(
-                Customer_native_push_tokens.token == token
-            )
-        )
-    ).scalar_one_or_none()
-
+    token_value = data.token.strip()
+    platform = data.platform.strip().lower() or "android"
+    item = (await db.execute(select(Customer_native_push_tokens).where(Customer_native_push_tokens.token == token_value))).scalar_one_or_none()
     user_agent = request.headers.get("user-agent", "")[:2000]
     if item:
-        # A phone may be handed to another customer. The newest authenticated
-        # registration owns this installation token.
         item.customer_account_id = account_id
         item.customer_phone_key = phone_key
         item.platform = platform
         item.is_active = True
         item.user_agent = user_agent
     else:
-        item = Customer_native_push_tokens(
-            customer_account_id=account_id,
-            customer_phone_key=phone_key,
-            token=token,
-            platform=platform,
-            is_active=True,
-            user_agent=user_agent,
-        )
+        item = Customer_native_push_tokens(customer_account_id=account_id, customer_phone_key=phone_key, token=token_value, platform=platform, is_active=True, user_agent=user_agent)
         db.add(item)
-
     await db.commit()
-    return {"success": True, "platform": platform}
+    return {"success": True, "transport": "fcm"}
 
 
 @router.post("/native-unsubscribe")
-async def native_unsubscribe(
-    data: NativeTokenRequest,
-    authorization: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-):
-    """Disable one native token without deleting order/customer history."""
-
+async def native_unsubscribe(data: NativeTokenRequest, authorization: Optional[str] = Header(default=None), db: AsyncSession = Depends(get_db)):
     account_id, _phone_key = customer_identity(authorization)
-    token = data.token.strip()
-    item = (
-        await db.execute(
-            select(Customer_native_push_tokens).where(
-                Customer_native_push_tokens.token == token,
-                Customer_native_push_tokens.customer_account_id == account_id,
-            )
-        )
-    ).scalar_one_or_none()
+    item = (await db.execute(select(Customer_native_push_tokens).where(Customer_native_push_tokens.token == data.token.strip(), Customer_native_push_tokens.customer_account_id == account_id))).scalar_one_or_none()
     if item:
         item.is_active = False
         await db.commit()
