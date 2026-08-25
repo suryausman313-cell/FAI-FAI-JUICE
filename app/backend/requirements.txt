@@ -38,5 +38,4 @@ stripe>=12.0.0
 
 pywebpush==2.3.0
 
-# Native Android customer notifications (FCM)
-firebase-admin>=6.5.0
+firebase-admin>=6.5.0,<8.0.0
