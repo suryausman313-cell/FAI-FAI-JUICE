@@ -276,6 +276,8 @@ async def update_kitchen_order_status(
             data.cancel_reason = reason
 
         order.status = new_status
+        if new_status == "completed" and not is_delivery_order(order):
+            order.delivered_at = datetime.now(timezone.utc)
 
         if data.estimated_minutes is not None:
             safe_minutes = max(1, min(240, int(data.estimated_minutes)))
@@ -393,7 +395,7 @@ async def update_order_status(
             "preparing": ["ready", "cancelled"],
             "ready": ["completed", "cancelled"],
             "out_for_delivery": ["cancelled"],
-            "completed": [],  # Terminal state - no further transitions
+            "completed": ["cancelled"],  # Admin may reverse/refund a completed sale
             "cancelled": [],  # Terminal state - no further transitions
         }
 
@@ -429,10 +431,10 @@ async def update_order_status(
         # Check if transition is allowed
         allowed_next = VALID_TRANSITIONS.get(current_status, [])
         if new_status not in allowed_next:
-            if current_status in ("completed", "cancelled"):
+            if current_status == "cancelled":
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Cannot change status of a {current_status} order."
+                    detail="Cannot change status of a cancelled order."
                 )
             raise HTTPException(
                 status_code=400,
@@ -448,6 +450,8 @@ async def update_order_status(
             data.cancel_reason = reason
 
         order.status = new_status
+        if new_status == "completed" and not is_delivery_order(order):
+            order.delivered_at = datetime.now(timezone.utc)
         if data.estimated_minutes is not None:
             safe_minutes = max(1, min(240, int(data.estimated_minutes)))
             deadline = datetime.now(timezone.utc) + timedelta(minutes=safe_minutes)

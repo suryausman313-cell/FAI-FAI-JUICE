@@ -80,19 +80,16 @@ def _resolve_period(
         label = "Yesterday"
 
     elif period == "week":
-        start_day = today - timedelta(days=today.weekday())
+        # Rolling 7-day report, including today.
+        start_day = today - timedelta(days=6)
         end_day = today + timedelta(days=1)
-        label = "This Week"
+        label = "Last 7 Days"
 
     elif period == "month":
-        start_day = today.replace(day=1)
-
-        if start_day.month == 12:
-            end_day = date(start_day.year + 1, 1, 1)
-        else:
-            end_day = date(start_day.year, start_day.month + 1, 1)
-
-        label = "This Month"
+        # Rolling 30-day report, including today.
+        start_day = today - timedelta(days=29)
+        end_day = today + timedelta(days=1)
+        label = "Last 30 Days"
 
     elif period == "year":
         start_day = date(today.year, 1, 1)
@@ -150,6 +147,27 @@ def _apply_datetime_filter(
         query = query.where(column < end)
 
     return query
+
+
+def _in_period(
+    value: Optional[datetime],
+    start: Optional[datetime],
+    end: Optional[datetime],
+) -> bool:
+    """Check a timestamp against a UTC report window."""
+    if start is None and end is None:
+        return True
+    if value is None:
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    if start is not None and value < start:
+        return False
+    if end is not None and value >= end:
+        return False
+    return True
 
 
 def _money(value: object) -> float:
@@ -272,6 +290,7 @@ def _order_financials(
     payment_method = str(order.payment_method or "").lower()
     is_cash = "cash" in payment_method
     cash_collected = total if is_cash else 0.0
+    card_collected = 0.0 if is_cash else total
 
     # Rider cash and Rider earnings are two separate ledgers. The Rider must
     # submit the full customer cash to the shop; delivery charge + Rider tip
@@ -301,6 +320,7 @@ def _order_financials(
         "shop_tip": shop_tip,
         "rider_earning": rider_earning,
         "cash_collected": cash_collected,
+        "card_collected": card_collected,
         "cash_payable_to_shop": rider_cash_payable,
         "is_cash": is_cash,
         "is_delivered": is_delivered,
@@ -323,6 +343,7 @@ def _empty_totals() -> dict:
         "shop_tips": 0.0,
         "rider_earnings": 0.0,
         "cash_collected": 0.0,
+        "card_collected": 0.0,
         "cash_payable_to_shop": 0.0,
         "cash_orders": 0,
         "card_orders": 0,
@@ -347,6 +368,7 @@ def _add_order_to_totals(totals: dict, values: dict) -> None:
     totals["shop_tips"] += values["shop_tip"]
     totals["rider_earnings"] += values["rider_earning"]
     totals["cash_collected"] += values["cash_collected"]
+    totals["card_collected"] += values["card_collected"]
     totals["cash_payable_to_shop"] += values[
         "cash_payable_to_shop"
     ]
@@ -401,9 +423,15 @@ async def _get_admin_order_totals(
         .in_(["completed", "delivered"])
     )
 
+    # Sales belong to the period in which they were completed, not created.
+    completed_at = func.coalesce(
+        Orders.delivered_at,
+        Orders.updated_at,
+        Orders.created_at,
+    )
     query = _apply_datetime_filter(
         query,
-        Orders.created_at,
+        completed_at,
         start,
         end,
     )
@@ -436,6 +464,7 @@ async def _get_rider_period_totals(
     end: Optional[datetime],
 ) -> dict:
     delivered_at = func.coalesce(
+        Orders.delivered_at,
         Delivery_assignments.updated_at,
         Delivery_assignments.created_at,
     )
@@ -476,6 +505,11 @@ async def _get_settlement_totals(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
 ) -> dict:
+    """Settlement activity for the selected report period.
+
+    Pending cash belongs to its submission time. Approved/rejected cash belongs
+    to the Admin review time, so old approvals do not leak into Today.
+    """
     query = select(Rider_cash_settlements)
 
     if rider_id is not None:
@@ -483,38 +517,38 @@ async def _get_settlement_totals(
             Rider_cash_settlements.rider_id == rider_id
         )
 
-    query = _apply_datetime_filter(
-        query,
-        Rider_cash_settlements.submitted_at,
-        start,
-        end,
-    )
-
     settlements = (await db.execute(query)).scalars().all()
 
-    approved = sum(
-        _money(item.amount)
-        for item in settlements
-        if item.status == "approved"
-    )
+    approved = 0.0
+    awaiting = 0.0
+    rejected = 0.0
+    activity_count = 0
 
-    awaiting = sum(
-        _money(item.amount)
-        for item in settlements
-        if item.status == "pending"
-    )
+    for item in settlements:
+        status = str(item.status or "").strip().lower()
+        event_time = (
+            item.submitted_at
+            if status == "pending"
+            else (item.reviewed_at or item.submitted_at)
+        )
 
-    rejected = sum(
-        _money(item.amount)
-        for item in settlements
-        if item.status == "rejected"
-    )
+        if not _in_period(event_time, start, end):
+            continue
+
+        activity_count += 1
+        amount = _money(item.amount)
+        if status == "approved":
+            approved += amount
+        elif status == "pending":
+            awaiting += amount
+        elif status == "rejected":
+            rejected += amount
 
     return {
         "approved_cash": round(approved, 2),
         "awaiting_approval": round(awaiting, 2),
         "rejected_cash": round(rejected, 2),
-        "submissions": len(settlements),
+        "submissions": activity_count,
     }
 
 

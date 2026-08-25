@@ -267,6 +267,9 @@ async def update_kitchen_order_status(
     elif new_status == "ready" and getattr(order, "ready_at", None) is None:
         order.ready_at = now
 
+    elif new_status == "completed" and not is_delivery_order(order):
+        order.delivered_at = now
+
     if new_status == "cancelled" and data.cancel_reason:
         current_notes = order.order_notes or ""
         separator = " | " if current_notes else ""

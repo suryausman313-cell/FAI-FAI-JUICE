@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -19,12 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from models.orders import Orders
 from routers.customer_auth import decode_customer_token, get_bearer_token
-from services.rider_assignment import auto_assign_order
+from routers.fai_fai_admin_control import AdminIdentity, get_current_admin
+from services.rider_assignment import auto_assign_order, cancel_order_assignments
 
 router = APIRouter(prefix="/api/v1/ziina", tags=["ziina-payments"])
 
 ZIINA_API_BASE = "https://api-v2.ziina.com/api"
 ZIINA_INTENT_MARKER = "Ziina Payment Intent:"
+ZIINA_REFUND_MARKER = "Ziina Refund:"
 ACTIVE_STATUSES = {"requires_payment_instrument", "requires_user_action", "pending"}
 FAILED_STATUSES = {"failed", "canceled", "cancelled"}
 
@@ -63,6 +66,30 @@ def latest_intent_id(order: Orders) -> str:
     notes = str(order.order_notes or "")
     matches = re.findall(r"Ziina Payment Intent:\s*([A-Za-z0-9_-]+)", notes)
     return matches[-1] if matches else ""
+
+
+def latest_refund_record(order: Orders) -> dict[str, Any] | None:
+    notes = str(order.order_notes or "")
+    matches = re.findall(
+        r"Ziina Refund:\s*([0-9A-Fa-f-]{36});status=([a-z_]+);amount=(\d+)",
+        notes,
+        flags=re.IGNORECASE,
+    )
+    if not matches:
+        return None
+    refund_id, status, amount = matches[-1]
+    return {
+        "id": refund_id,
+        "status": status.lower(),
+        "amount": int(amount),
+    }
+
+
+def refund_marker(refund_id: str, status: str, amount: int) -> str:
+    return (
+        f"{ZIINA_REFUND_MARKER} {refund_id};"
+        f"status={status.lower()};amount={int(amount)}"
+    )
 
 
 def append_note(existing: Optional[str], new_note: str) -> str:
@@ -205,6 +232,78 @@ class OrderPaymentRequest(BaseModel):
     order_id: int = Field(ge=1)
 
 
+class AdminRefundRequest(BaseModel):
+    order_id: int = Field(ge=1)
+    reason: str = Field(min_length=2, max_length=300)
+
+
+async def admin_owned_order(
+    db: AsyncSession,
+    order_id: int,
+    identity: AdminIdentity,
+) -> Orders:
+    if identity.role != "super_admin" and not identity.permissions.get("orders"):
+        raise HTTPException(status_code=403, detail="Orders permission required")
+
+    result = await db.execute(select(Orders).where(Orders.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if (
+        identity.role != "super_admin"
+        and identity.branch_id is not None
+        and int(getattr(order, "branch_id", 0) or 0) != int(identity.branch_id)
+    ):
+        raise HTTPException(status_code=403, detail="This order belongs to another branch")
+
+    return order
+
+
+async def apply_refund_state(
+    db: AsyncSession,
+    order: Orders,
+    refund: dict[str, Any],
+) -> dict[str, Any]:
+    refund_id = str(refund.get("id") or "").strip()
+    status = str(refund.get("status") or "pending").strip().lower()
+    amount = int(refund.get("amount") or 0)
+    if not refund_id:
+        raise HTTPException(status_code=502, detail="Ziina refund ID was not returned")
+
+    order.order_notes = append_note(
+        order.order_notes,
+        refund_marker(refund_id, status, amount),
+    )
+
+    # Preserve the original completion timestamp before any refund update can
+    # move updated_at and accidentally shift an old sale into today's report.
+    if getattr(order, "delivered_at", None) is None and str(order.status or "").lower() == "completed":
+        order.delivered_at = order.updated_at or order.created_at
+
+    if status == "completed":
+        order.payment_method = "Ziina Online (Refunded)"
+        order.status = "cancelled"
+        await cancel_order_assignments(db, order.id)
+    elif status == "pending":
+        order.payment_method = "Ziina Online (Refund Pending)"
+    elif status == "failed":
+        order.payment_method = "Ziina Online (Refund Failed)"
+
+    await db.commit()
+    await db.refresh(order)
+
+    return {
+        "success": status != "failed",
+        "order_id": order.id,
+        "refund_id": refund_id,
+        "status": status,
+        "amount": amount,
+        "amount_aed": round(amount / 100, 2),
+        "order_status": order.status,
+    }
+
+
 @router.get("/config")
 async def get_ziina_config():
     # Never expose the API key to browser/mobile clients.
@@ -344,6 +443,89 @@ async def cancel_payment_order(
     order.payment_method = "Ziina Online (Cancelled)"
     await db.commit()
     return {"success": True, "order_id": order.id, "status": order.status}
+
+
+@router.post("/admin/refund")
+async def admin_refund_order(
+    data: AdminRefundRequest,
+    identity: AdminIdentity = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only full refund for a paid Ziina order.
+
+    Active orders must be cancelled first. A completed order may be refunded
+    directly; once Ziina confirms the refund, it is removed from sales by
+    changing its status to cancelled.
+    """
+    if not env_bool("ZIINA_PAYMENT_ENABLED", False):
+        raise HTTPException(status_code=503, detail="Online payment is currently disabled")
+
+    order = await admin_owned_order(db, data.order_id, identity)
+    clean_reason = " ".join(data.reason.split()).strip()
+    order.order_notes = append_note(order.order_notes, f"Refund requested by Admin: {clean_reason}")
+    payment = str(order.payment_method or "").strip().lower()
+    if not payment.startswith("ziina online"):
+        raise HTTPException(status_code=400, detail="This order was not paid through Ziina")
+
+    order_status = str(order.status or "").strip().lower()
+    if order_status not in {"cancelled", "completed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Cancel the active order first, then process the card refund.",
+        )
+
+    intent_id = latest_intent_id(order)
+    if not intent_id:
+        raise HTTPException(status_code=400, detail="Ziina payment reference is missing for this order")
+
+    existing = latest_refund_record(order)
+    if existing and existing["status"] in {"pending", "completed"}:
+        refund = await ziina_request("GET", f"/refund/{existing['id']}")
+        return await apply_refund_state(db, order, refund)
+
+    intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+    if str(intent.get("status") or "").strip().lower() != "completed":
+        raise HTTPException(status_code=400, detail="Ziina payment is not completed, so it cannot be refunded")
+    if int(intent.get("amount") or 0) != order_amount_fils(order):
+        raise HTTPException(status_code=400, detail="Ziina payment amount does not match this order")
+    if str(intent.get("currency_code") or "AED").upper() != "AED":
+        raise HTTPException(status_code=400, detail="Unexpected Ziina payment currency")
+
+    refund_id = str(uuid.uuid4())
+    refund = await ziina_request(
+        "POST",
+        "/refund",
+        payload={
+            "id": refund_id,
+            "payment_intent_id": intent_id,
+            "amount": order_amount_fils(order),
+            "currency_code": "AED",
+            "test": env_bool("ZIINA_TEST_MODE", True),
+        },
+    )
+    result = await apply_refund_state(db, order, refund)
+    result["reason"] = clean_reason
+    return result
+
+
+@router.get("/admin/refund-status/{order_id}")
+async def admin_refund_status(
+    order_id: int,
+    identity: AdminIdentity = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    order = await admin_owned_order(db, order_id, identity)
+    existing = latest_refund_record(order)
+    if not existing:
+        return {
+            "success": True,
+            "order_id": order.id,
+            "status": "not_started",
+            "order_status": order.status,
+        }
+
+    refund = await ziina_request("GET", f"/refund/{existing['id']}")
+    return await apply_refund_state(db, order, refund)
 
 
 @router.post("/webhook")

@@ -614,25 +614,9 @@ async def cancel_order(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        # Determine if cancellation is allowed based on current status
-        # Status flow: new -> accepted -> preparing -> ready -> completed
-        # By default: cancel allowed when status is 'new' (pending)
-        # Admin can configure: allow_cancel_preparing, allow_cancel_ready
-        allowed_statuses = ['new', 'payment_pending']  # Payment-pending Ziina orders can also be cancelled
-
-        # Check admin settings from restaurant_settings
-        from models.restaurant_settings import Restaurant_settings
-        settings_result = await db.execute(select(Restaurant_settings).limit(1))
-        settings = settings_result.scalar_one_or_none()
-
-        if settings:
-            if getattr(settings, 'allow_cancel_preparing', False):
-                allowed_statuses.append('preparing')
-            if getattr(settings, 'allow_cancel_ready', False):
-                allowed_statuses.append('ready')
-            # accepted is between new and preparing - allow if preparing is allowed
-            if 'preparing' in allowed_statuses:
-                allowed_statuses.append('accepted')
+        # Customer cancellation is intentionally hard-locked.
+        # Once the shop accepts the order, only Admin/Kitchen can cancel it.
+        allowed_statuses = ['new', 'payment_pending']
 
         if order.status not in allowed_statuses:
             status_msg = {

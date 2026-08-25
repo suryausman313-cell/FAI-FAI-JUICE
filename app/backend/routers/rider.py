@@ -215,6 +215,8 @@ async def get_rider_deliveries(
                 "zone_name": a.zone_name,
                 "tip_amount": (order.tip_amount or 0) if order and hasattr(order, 'tip_amount') and order.tip_type == 'rider' else 0,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+                "delivered_at": order.delivered_at.isoformat() if order and getattr(order, 'delivered_at', None) else None,
             })
 
         return {"items": items}
@@ -357,6 +359,7 @@ async def update_delivery_status(
         elif new_status == "delivered":
             # Only Rider Delivered finalizes a delivery sale.
             order.status = "completed"
+            order.delivered_at = datetime.now(timezone.utc)
 
         await db.commit()
         await db.refresh(assignment)
