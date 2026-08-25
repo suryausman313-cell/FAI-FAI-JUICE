@@ -36,7 +36,6 @@ import { getAPIBaseURL } from '@/lib/config';
 import type { Order } from '@/lib/api';
 import { formatUaeTime as formatUaeClockTime } from '@/lib/uae-time';
 import { makeLocalReadyTime } from '@/components/ReadyTimeCountdown';
-import { paymentDisplayLabel } from '@/lib/payment-display';
 import KitchenMenuPanel from './KitchenMenuPanel';
 
 declare global {
@@ -343,7 +342,10 @@ function totalItems(order: KitchenOrder): number {
 }
 
 function paymentLabel(order: KitchenOrder): string {
-  return paymentDisplayLabel(order.payment_method);
+  const raw = String(order.payment_method || 'Cash').toLowerCase();
+  if (raw.includes('cash')) return isDeliveryOrder(order) ? 'Cash on delivery' : 'Cash on pickup';
+  if (raw.includes('card')) return 'Card';
+  return String(order.payment_method || 'Cash');
 }
 
 function TimerCircle({
@@ -1080,26 +1082,30 @@ export default function KitchenOrders() {
     return new Date(hasTimezone ? raw : `${raw}Z`);
   }
 
-  function uaeDateKey(value: string | null | undefined): string {
-    if (!value) return '';
-    const date = parseBackendDate(value);
-    if (Number.isNaN(date.getTime())) return '';
+  function uaeDayBounds(dayOffset: number): { start: number; end: number } {
+    // Compute UAE midnight directly in UTC. Do not parse a UAE locale string back
+    // through the device timezone; that was able to move 12:xx-03:xx AM orders
+    // into Yesterday on some Android kitchen devices. UAE is fixed UTC+4.
     const parts = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Dubai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-    }).formatToParts(date);
-    const year = parts.find((part) => part.type === 'year')?.value || '';
-    const month = parts.find((part) => part.type === 'month')?.value || '';
-    const day = parts.find((part) => part.type === 'day')?.value || '';
-    return `${year}-${month}-${day}`;
+    }).formatToParts(new Date());
+    const year = Number(parts.find((part) => part.type === 'year')?.value || 0);
+    const month = Number(parts.find((part) => part.type === 'month')?.value || 1);
+    const day = Number(parts.find((part) => part.type === 'day')?.value || 1);
+    const uaeOffsetMs = 4 * 60 * 60 * 1000;
+    const start = Date.UTC(year, month - 1, day + dayOffset, 0, 0, 0, 0) - uaeOffsetMs;
+    return { start, end: start + 24 * 60 * 60 * 1000 };
   }
 
-  function relativeUaeDateKey(dayOffset: number): string {
-    const uaeNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Dubai' }));
-    uaeNow.setDate(uaeNow.getDate() + dayOffset);
-    return [uaeNow.getFullYear(), String(uaeNow.getMonth() + 1).padStart(2, '0'), String(uaeNow.getDate()).padStart(2, '0')].join('-');
+  function isInUaeDay(value: string | null | undefined, dayOffset: number): boolean {
+    const date = parseBackendDate(value);
+    if (Number.isNaN(date.getTime())) return false;
+    const { start, end } = uaeDayBounds(dayOffset);
+    const time = date.getTime();
+    return time >= start && time < end;
   }
 
   const activeOrders = useMemo(() => orders.filter((order) => ACTIVE_STATUSES.has(order.status)), [orders]);
@@ -1107,14 +1113,14 @@ export default function KitchenOrders() {
     () => orders.filter((order) => ['completed', 'cancelled', 'out_for_delivery', 'picked_up', 'on_the_way'].includes(order.status)),
     [orders],
   );
-  const todayHistory = useMemo(() => {
-    const key = relativeUaeDateKey(0);
-    return historyOrders.filter((order) => uaeDateKey(order.created_at) === key);
-  }, [historyOrders]);
-  const yesterdayHistory = useMemo(() => {
-    const key = relativeUaeDateKey(-1);
-    return historyOrders.filter((order) => uaeDateKey(order.created_at) === key);
-  }, [historyOrders]);
+  const todayHistory = useMemo(
+    () => historyOrders.filter((order) => isInUaeDay(order.created_at, 0)),
+    [historyOrders],
+  );
+  const yesterdayHistory = useMemo(
+    () => historyOrders.filter((order) => isInUaeDay(order.created_at, -1)),
+    [historyOrders],
+  );
 
 
   const newOrders = useMemo(() => activeOrders.filter((order) => order.status === 'new'), [activeOrders]);
