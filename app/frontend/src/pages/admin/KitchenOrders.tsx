@@ -291,14 +291,14 @@ function formatUaeTime(value: string): string {
 function formatHistoryTime(value: string): string {
   try {
     const raw = String(value || '').trim();
-    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+    if (!raw) return '--:--';
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
     const date = new Date(hasTimezone ? raw : `${raw}Z`);
-    return date.toLocaleTimeString('en-GB', {
-      timeZone: 'Asia/Dubai',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
+    if (Number.isNaN(date.getTime())) return '--:--';
+
+    // Device-independent UAE clock (UTC+4, no DST).
+    const uae = new Date(date.getTime() + 4 * 60 * 60 * 1000);
+    return `${String(uae.getUTCHours()).padStart(2, '0')}:${String(uae.getUTCMinutes()).padStart(2, '0')}`;
   } catch {
     return formatUaeTime(value);
   }
@@ -1109,36 +1109,52 @@ export default function KitchenOrders() {
     const raw = String(value || '').trim();
     if (!raw) return new Date(NaN);
 
-    // Match Admin Sales exactly: Python isoformat() timestamps without an
-    // explicit timezone are UTC, then JavaScript converts them to device/UAE time.
-    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+    // Backend Python isoformat() values without Z/+offset are UTC.
+    // Force UTC here so the Android device timezone can never move an order
+    // into the wrong calendar day.
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
     return new Date(hasTimezone ? raw : `${raw}Z`);
   }
 
-  function uaeDayBounds(dayOffset: number): { start: number; end: number } {
-    // Compute UAE midnight directly in UTC. Do not parse a UAE locale string back
-    // through the device timezone; that was able to move 12:xx-03:xx AM orders
-    // into Yesterday on some Android kitchen devices. UAE is fixed UTC+4.
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Dubai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date());
-    const year = Number(parts.find((part) => part.type === 'year')?.value || 0);
-    const month = Number(parts.find((part) => part.type === 'month')?.value || 1);
-    const day = Number(parts.find((part) => part.type === 'day')?.value || 1);
-    const uaeOffsetMs = 4 * 60 * 60 * 1000;
-    const start = Date.UTC(year, month - 1, day + dayOffset, 0, 0, 0, 0) - uaeOffsetMs;
-    return { start, end: start + 24 * 60 * 60 * 1000 };
+  const UAE_OFFSET_MS = 4 * 60 * 60 * 1000;
+
+  function uaeDateKeyFromMillis(utcMillis: number): string {
+    // UAE has a fixed UTC+4 offset and no daylight-saving time.
+    // Add four hours, then read UTC fields. This avoids Intl/timeZone quirks
+    // on older Android System WebView versions.
+    const uae = new Date(utcMillis + UAE_OFFSET_MS);
+    return [
+      uae.getUTCFullYear(),
+      String(uae.getUTCMonth() + 1).padStart(2, '0'),
+      String(uae.getUTCDate()).padStart(2, '0'),
+    ].join('-');
+  }
+
+  function uaeDateKey(value: string | null | undefined): string {
+    const date = parseBackendDate(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return uaeDateKeyFromMillis(date.getTime());
+  }
+
+  function relativeUaeDateKey(dayOffset: number): string {
+    const nowUae = new Date(Date.now() + UAE_OFFSET_MS);
+    const targetUtc = Date.UTC(
+      nowUae.getUTCFullYear(),
+      nowUae.getUTCMonth(),
+      nowUae.getUTCDate() + dayOffset,
+      0, 0, 0, 0,
+    );
+    const target = new Date(targetUtc);
+    return [
+      target.getUTCFullYear(),
+      String(target.getUTCMonth() + 1).padStart(2, '0'),
+      String(target.getUTCDate()).padStart(2, '0'),
+    ].join('-');
   }
 
   function isInUaeDay(value: string | null | undefined, dayOffset: number): boolean {
-    const date = parseBackendDate(value);
-    if (Number.isNaN(date.getTime())) return false;
-    const { start, end } = uaeDayBounds(dayOffset);
-    const time = date.getTime();
-    return time >= start && time < end;
+    const key = uaeDateKey(value);
+    return Boolean(key) && key === relativeUaeDateKey(dayOffset);
   }
 
   const activeOrders = useMemo(() => orders.filter((order) => ACTIVE_STATUSES.has(order.status)), [orders]);
