@@ -522,8 +522,6 @@ export default function MyOrders() {
   // Admin-configured timeouts
   const [acceptTimeout, setAcceptTimeout] = useState(5); // minutes
   const [expireTimeout, setExpireTimeout] = useState(15); // minutes
-  const [allowCancelPreparing, setAllowCancelPreparing] = useState(false);
-  const [allowCancelReady, setAllowCancelReady] = useState(false);
 
   useEffect(() => {
     void loadInitialData();
@@ -590,8 +588,6 @@ export default function MyOrders() {
         const s = items[0] as any;
         if (s.order_accept_timeout_minutes) setAcceptTimeout(Number(s.order_accept_timeout_minutes) || 5);
         if (s.order_expire_timeout_minutes) setExpireTimeout(Number(s.order_expire_timeout_minutes) || 15);
-        setAllowCancelPreparing(s.allow_cancel_preparing === true);
-        setAllowCancelReady(s.allow_cancel_ready === true);
       }
     } catch {
       // Use defaults
@@ -694,13 +690,9 @@ export default function MyOrders() {
     }
   }
 
-  /** Determine if customer can cancel this order */
+  /** Customer can cancel only before the shop accepts the order. */
   function canCancelOrder(order: OrderWithDelivery): boolean {
-    if (order.status === 'new') return true; // Always can cancel pending
-    if (order.status === 'accepted') return true; // Can cancel before preparing starts
-    if (order.status === 'preparing' && allowCancelPreparing) return true;
-    if (order.status === 'ready' && allowCancelReady) return true;
-    return false;
+    return order.status === 'new' || order.status === 'payment_pending';
   }
 
   /** Order Again - review past items first, then choose quantities before adding to cart. */

@@ -56,6 +56,8 @@ interface Delivery {
   zone_name: string | null;
   tip_amount: number;
   created_at: string;
+  updated_at?: string | null;
+  delivered_at?: string | null;
 }
 
 interface Rider {
@@ -883,9 +885,30 @@ export default function RiderPanel() {
   const activeDeliveries = uniqueDeliveries.filter(
     d => !['delivered', 'rejected'].includes(String(d.status || '').toLowerCase())
   );
-  const completedDeliveries = uniqueDeliveries.filter(
-    d => String(d.status || '').toLowerCase() === 'delivered'
-  );
+  const completedDeliveries = uniqueDeliveries.filter(delivery => {
+    if (String(delivery.status || '').toLowerCase() !== 'delivered') return false;
+    const from = financeSummary?.period?.date_from;
+    const to = financeSummary?.period?.date_to;
+    if (!from && !to) return financePeriod === 'all';
+    const raw = delivery.delivered_at || delivery.updated_at || delivery.created_at;
+    const completedAt = raw ? new Date(raw) : null;
+    if (!completedAt || Number.isNaN(completedAt.getTime())) return false;
+    if (from && completedAt < new Date(from)) return false;
+    if (to && completedAt >= new Date(to)) return false;
+    return true;
+  });
+
+  const periodCashSubmissions = cashSubmissions.filter(item => {
+    const from = financeSummary?.period?.date_from;
+    const to = financeSummary?.period?.date_to;
+    if (!from && !to) return financePeriod === 'all';
+    const raw = item.status === 'pending' ? item.submitted_at : (item.reviewed_at || item.submitted_at);
+    const eventAt = raw ? new Date(raw) : null;
+    if (!eventAt || Number.isNaN(eventAt.getTime())) return false;
+    if (from && eventAt < new Date(from)) return false;
+    if (to && eventAt >= new Date(to)) return false;
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-6">
@@ -1154,11 +1177,11 @@ export default function RiderPanel() {
                   </h3>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                     <div className="bg-gray-800 rounded-lg p-3">
-                      <p className="text-gray-500 text-xs">Cash Due</p>
-                      <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.cash_due_to_shop.toFixed(2)}</p>
+                      <p className="text-gray-500 text-xs">Need to Submit</p>
+                      <p className="text-white font-bold mt-1">AED {financeSummary.current_balance.remaining_to_submit.toFixed(2)}</p>
                     </div>
                     <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3">
-                      <p className="text-green-400/70 text-xs">Approved / Given</p>
+                      <p className="text-green-400/70 text-xs">Approved All Time</p>
                       <p className="text-green-400 font-bold mt-1">AED {financeSummary.current_balance.approved_cash.toFixed(2)}</p>
                     </div>
                     <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3">
@@ -1206,12 +1229,12 @@ export default function RiderPanel() {
                 </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
-                  <h3 className="text-white font-semibold mb-3">Cash Submission History</h3>
-                  {cashSubmissions.length === 0 ? (
-                    <p className="text-gray-500 text-sm py-4 text-center">No cash submissions yet</p>
+                  <h3 className="text-white font-semibold mb-3">Cash Submission History — {financeSummary?.period?.label || 'Selected Period'}</h3>
+                  {periodCashSubmissions.length === 0 ? (
+                    <p className="text-gray-500 text-sm py-4 text-center">No cash activity in this period</p>
                   ) : (
                     <div className="space-y-2">
-                      {cashSubmissions.slice(0, 20).map((item) => (
+                      {periodCashSubmissions.slice(0, 20).map((item) => (
                         <div key={item.id} className="bg-gray-800 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                           <div>
                             <div className="flex items-center gap-2">
@@ -1236,7 +1259,7 @@ export default function RiderPanel() {
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Current Order Status</h3>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-orange-600/10 border border-orange-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-orange-400">{stats.pending_orders}</p><p className="text-orange-400/70 text-xs mt-1">Pending</p></div>
-                      <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-green-400">{stats.completed_orders}</p><p className="text-green-400/70 text-xs mt-1">All-Time Completed</p></div>
+                      <div className="bg-green-600/10 border border-green-600/30 rounded-lg p-3 text-center"><p className="text-2xl font-bold text-green-400">{financeSummary?.totals.delivered_orders || 0}</p><p className="text-green-400/70 text-xs mt-1">Selected Period Completed</p></div>
                     </div>
                   </Card>
                 )}
@@ -1367,7 +1390,7 @@ export default function RiderPanel() {
 
                 {completedDeliveries.length > 0 && (
                   <div>
-                    <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">Completed ({completedDeliveries.length})</h2>
+                    <h2 className="text-gray-500 font-semibold text-sm uppercase tracking-wider mb-3">Completed — {financeSummary?.period?.label || 'Selected Period'} ({completedDeliveries.length})</h2>
                     <div className="space-y-2">
                       {completedDeliveries.slice(0, 10).map(delivery => (
                         <Card key={delivery.id} className="bg-gray-900/50 border-gray-800 p-3">
