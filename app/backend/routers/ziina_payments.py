@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/v1/ziina", tags=["ziina-payments"])
 ZIINA_API_BASE = "https://api-v2.ziina.com/api"
 ZIINA_INTENT_MARKER = "Ziina Payment Intent:"
 ZIINA_REFUND_MARKER = "Ziina Refund:"
+ZIINA_ABANDONED_MARKER = "Ziina Payment Abandoned:"
 ACTIVE_STATUSES = {"requires_payment_instrument", "requires_user_action", "pending"}
 FAILED_STATUSES = {"failed", "canceled", "cancelled"}
 
@@ -97,6 +98,16 @@ def append_note(existing: Optional[str], new_note: str) -> str:
     if new_note in current:
         return current
     return f"{current} | {new_note}".strip(" |")
+
+
+def abandoned_marker() -> str:
+    return f"{ZIINA_ABANDONED_MARKER} {datetime.now(timezone.utc).isoformat()}"
+
+
+def is_abandoned_payment(order: Orders) -> bool:
+    payment = str(order.payment_method or "").strip().lower()
+    notes = str(order.order_notes or "").lower()
+    return "abandoned" in payment or ZIINA_ABANDONED_MARKER.lower() in notes
 
 
 def is_delivery_order(order: Orders) -> bool:
@@ -218,6 +229,12 @@ async def release_paid_order(
                 except Exception:
                     logging.exception("Auto rider assignment failed after Ziina payment for order %s", order.id)
                     await db.rollback()
+        elif current_status == "cancelled" and is_abandoned_payment(order):
+            # The customer switched away from this hosted checkout (for example to Cash).
+            # Ziina does not expose a payment-intent cancellation endpoint in its
+            # public API, so if an abandoned payment later completes, refund it
+            # automatically instead of releasing a duplicate order to Kitchen.
+            return await refund_abandoned_payment(db, order, intent)
 
     elif status in FAILED_STATUSES:
         if current_status == "payment_pending":
@@ -304,6 +321,105 @@ async def apply_refund_state(
     }
 
 
+async def refund_abandoned_payment(
+    db: AsyncSession,
+    order: Orders,
+    intent: dict[str, Any],
+) -> str:
+    """Refund a Ziina payment that completed after the customer switched away.
+
+    The order stays cancelled so a late payment can never create a second
+    Kitchen order. If the refund API temporarily fails, keep a clear marker so
+    Admin can use the existing manual refund control.
+    """
+    intent_id = str(intent.get("id") or "").strip()
+    if not intent_id:
+        raise HTTPException(status_code=502, detail="Ziina payment reference is missing")
+
+    existing = latest_refund_record(order)
+    try:
+        if existing and existing["status"] in {"pending", "completed"}:
+            refund = await ziina_request("GET", f"/refund/{existing['id']}")
+        else:
+            refund_id = str(uuid.uuid4())
+            refund = await ziina_request(
+                "POST",
+                "/refund",
+                payload={
+                    "id": refund_id,
+                    "payment_intent_id": intent_id,
+                    "amount": order_amount_fils(order),
+                    "currency_code": "AED",
+                    "test": env_bool("ZIINA_TEST_MODE", True),
+                },
+            )
+        result = await apply_refund_state(db, order, refund)
+        refund_status = str(result.get("status") or "pending").lower()
+        return "refunded" if refund_status == "completed" else f"refund_{refund_status}"
+    except HTTPException:
+        logging.exception("Automatic refund failed for abandoned Ziina order %s", order.id)
+        order.status = "cancelled"
+        order.payment_method = "Ziina Online (Abandoned - Refund Needed)"
+        order.order_notes = append_note(order.order_notes, "Automatic refund needs Admin review")
+        await db.commit()
+        return "refund_needed"
+
+
+async def prepare_pending_order_for_offline_switch(
+    db: AsyncSession,
+    order: Orders,
+) -> dict[str, Any]:
+    """Safely supersede an unpaid Ziina checkout before creating Cash/Card order.
+
+    If Ziina already completed, the paid order wins and no second order should be
+    created. If the payment is failed/cancelled, the pending DB row is closed.
+    If it is still active, mark it abandoned; a later completion is auto-refunded
+    by release_paid_order/webhook and can never be released to Kitchen.
+    """
+    if str(order.status or "").strip().lower() != "payment_pending":
+        return {"safe_to_switch": True, "paid": False, "status": order.status}
+    if not str(order.payment_method or "").strip().lower().startswith("ziina online"):
+        return {"safe_to_switch": True, "paid": False, "status": order.status}
+
+    intent_id = latest_intent_id(order)
+    if not intent_id:
+        order.status = "cancelled"
+        order.payment_method = "Ziina Online (Abandoned)"
+        order.order_notes = append_note(order.order_notes, abandoned_marker())
+        await db.commit()
+        return {"safe_to_switch": True, "paid": False, "status": "cancelled"}
+
+    # Do not create a Cash order until we know the old hosted checkout was not
+    # already paid. This avoids a double order/double payment on slow redirects.
+    intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+    provider_status = str(intent.get("status") or "").strip().lower()
+
+    if provider_status == "completed":
+        status = await release_paid_order(db, order, intent)
+        return {
+            "safe_to_switch": False,
+            "paid": status == "completed",
+            "status": status,
+            "order_id": order.id,
+        }
+
+    if provider_status in FAILED_STATUSES:
+        status = await release_paid_order(db, order, intent)
+        return {"safe_to_switch": True, "paid": False, "status": status}
+
+    if provider_status in ACTIVE_STATUSES:
+        order.status = "cancelled"
+        order.payment_method = "Ziina Online (Abandoned)"
+        order.order_notes = append_note(order.order_notes, abandoned_marker())
+        await db.commit()
+        return {"safe_to_switch": True, "paid": False, "status": "abandoned"}
+
+    raise HTTPException(
+        status_code=409,
+        detail="Could not confirm the previous online payment status. Please try again.",
+    )
+
+
 @router.get("/config")
 async def get_ziina_config():
     # Never expose the API key to browser/mobile clients.
@@ -353,9 +469,15 @@ async def create_payment(
                     "test_mode": env_bool("ZIINA_TEST_MODE", True),
                     "reused": True,
                 }
-        except HTTPException:
-            # If an old intent cannot be fetched, creating a fresh one is safer for the customer.
-            logging.warning("Could not reuse previous Ziina intent for order %s", order.id)
+        except HTTPException as exc:
+            # Do NOT create a second hosted payment when an earlier intent exists
+            # but cannot be verified. Two live payment links for one order could
+            # let the customer pay twice. Retry verification instead.
+            logging.warning("Could not verify previous Ziina intent for order %s", order.id)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not verify your existing online payment. Please try again in a moment.",
+            ) from exc
 
     base = public_frontend_url()
     success_url = f"{base}/checkout?ziina=success&order_id={order.id}"
@@ -431,14 +553,27 @@ async def cancel_payment_order(
 
     intent_id = latest_intent_id(order)
     if intent_id:
-        try:
-            intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
-            status = await release_paid_order(db, order, intent)
-            if status == "completed":
-                return {"success": True, "order_id": order.id, "status": "new", "paid": True}
-        except HTTPException:
-            logging.warning("Ziina cancel check failed for order %s", order.id)
+        intent = await ziina_request("GET", f"/payment_intent/{intent_id}")
+        provider_status = str(intent.get("status") or "").strip().lower()
+        status = await release_paid_order(db, order, intent)
+        if status == "completed":
+            return {"success": True, "order_id": order.id, "status": "new", "paid": True}
+        if provider_status in FAILED_STATUSES:
+            return {"success": True, "order_id": order.id, "status": "cancelled", "paid": False}
+        if provider_status in ACTIVE_STATUSES:
+            # Ziina's public Payment Intent API has no server-side cancel endpoint.
+            # Keep the DB order pending instead of pretending it was cancelled;
+            # this prevents a later successful charge from being silently lost.
+            return {
+                "success": False,
+                "order_id": order.id,
+                "status": "payment_pending",
+                "payment_status": provider_status,
+                "redirect_url": str(intent.get("redirect_url") or ""),
+                "message": "Online payment is still active. You can retry it or switch to Cash from Checkout.",
+            }
 
+    # No payment intent was created, so this pending DB row is safe to cancel.
     order.status = "cancelled"
     order.payment_method = "Ziina Online (Cancelled)"
     await db.commit()

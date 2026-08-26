@@ -70,6 +70,9 @@ class PlaceOrderFullRequest(PlaceOrderRequest):
     customer_address: Optional[str] = Field(default="", max_length=500)
     order_type: Optional[str] = Field(default="pickup", max_length=20)
     branch_id: Optional[int] = Field(default=None, ge=1)
+    # When the customer leaves a Ziina hosted checkout and explicitly chooses
+    # Cash, this identifies the pending online order being replaced.
+    replace_pending_payment_order_id: Optional[int] = Field(default=None, ge=1)
 
 
 @router.post("/place")
@@ -253,6 +256,10 @@ async def place_order(
         # ===== SERVER-SIDE CART VALIDATION / PRICING =====
         subtotal_amount, canonical_items = await validate_and_price_order_items(db, data.items_json)
         canonical_items_json = json.dumps(canonical_items, ensure_ascii=False, separators=(",", ":"))
+        # Internal marker lets duplicate protection distinguish two different
+        # customer devices logged into the same account. It is stripped from
+        # all customer/admin/kitchen-visible notes by public_order_notes().
+        client_session_marker = f"Client Session: {data.session_id.strip()}"
 
         # ===== DELIVERY SERVER SOURCE OF TRUTH =====
         delivery_charge = 0.0
@@ -353,7 +360,7 @@ async def place_order(
                     detail=f"Minimum order for this promo is AED {minimum:.2f}",
                 )
 
-            active_order_filter = Orders.status.notin_(["cancelled", "expired"])
+            active_order_filter = Orders.status.notin_(["cancelled", "expired", "payment_pending"])
             if bool(offer.first_order_only):
                 previous_count = await db.scalar(
                     select(func.count(Orders.id)).where(
@@ -472,12 +479,77 @@ async def place_order(
                 detail=f"Order total changed. Correct total is AED {server_total:.2f}. Please refresh checkout.",
             )
 
+        # ===== ONLINE -> CASH/CARD SWITCH SAFETY =====
+        # A hosted Ziina checkout creates a payment_pending order before redirect.
+        # If the customer uses Android/browser Back and then chooses Cash, the old
+        # heuristic used to return that payment_pending row as a "duplicate".
+        # That made the customer think Cash was placed while Kitchen saw nothing.
+        # Before creating an offline-payment order, safely resolve a matching
+        # pending Ziina attempt from THIS device/session.
+        if payment_kind != "ziina":
+            pending_since = datetime.now(timezone.utc) - timedelta(minutes=35)
+            pending_ziina = None
+
+            # Explicit order ID is strongest and also repairs pending orders
+            # created by older app builds before Client Session markers existed.
+            if data.replace_pending_payment_order_id is not None:
+                explicit_pending = await db.execute(
+                    select(Orders).where(
+                        Orders.id == int(data.replace_pending_payment_order_id),
+                        Orders.user_id == guest_user_id,
+                        Orders.status == "payment_pending",
+                        Orders.payment_method.ilike("Ziina Online%"),
+                    ).limit(1)
+                )
+                pending_ziina = explicit_pending.scalar_one_or_none()
+                if pending_ziina is not None and (
+                    pending_ziina.items_json != canonical_items_json
+                    or abs(float(pending_ziina.total_amount or 0) - server_total) > 0.01
+                    or str(pending_ziina.order_type or "pickup").lower().strip() != normalized_order_type
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Your cart changed after starting online payment. Please finish or retry that payment from My Orders before placing a different order.",
+                    )
+
+            if pending_ziina is None:
+                pending_query = await db.execute(
+                    select(Orders).where(
+                        Orders.user_id == guest_user_id,
+                        Orders.items_json == canonical_items_json,
+                        Orders.total_amount == server_total,
+                        Orders.order_type == normalized_order_type,
+                        Orders.status == "payment_pending",
+                        Orders.payment_method.ilike("Ziina Online%"),
+                        Orders.order_notes.contains(client_session_marker),
+                        Orders.created_at >= pending_since,
+                        *(([Orders.branch_id == branch.id]) if branch is not None else []),
+                    ).order_by(desc(Orders.created_at)).limit(1)
+                )
+                pending_ziina = pending_query.scalar_one_or_none()
+
+            if pending_ziina is not None:
+                from routers.ziina_payments import prepare_pending_order_for_offline_switch
+
+                switch_result = await prepare_pending_order_for_offline_switch(db, pending_ziina)
+                if bool(switch_result.get("paid")):
+                    # Payment already completed while the customer was navigating
+                    # back. Never create a second Cash order.
+                    return {
+                        "success": True,
+                        "order_id": pending_ziina.id,
+                        "status": pending_ziina.status,
+                        "payment_already_completed": True,
+                        "duplicate_prevented": True,
+                    }
+
         # ===== RATE LIMIT + DUPLICATE PREVENTION =====
         five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
         recent_count = await db.scalar(
             select(func.count(Orders.id)).where(
                 Orders.user_id == guest_user_id,
                 Orders.created_at >= five_minutes_ago,
+                Orders.status.notin_(["cancelled", "expired"]),
             )
         )
         if int(recent_count or 0) >= 5:
@@ -492,8 +564,11 @@ async def place_order(
                 Orders.user_id == guest_user_id,
                 Orders.items_json == canonical_items_json,
                 Orders.total_amount == server_total,
+                Orders.order_type == normalized_order_type,
+                Orders.payment_method == data.payment_method,
+                Orders.order_notes.contains(client_session_marker),
                 Orders.created_at >= sixty_seconds_ago,
-                Orders.status != "cancelled",
+                Orders.status.notin_(["cancelled", "expired"]),
                 *(([Orders.branch_id == branch.id]) if branch is not None else []),
             ).order_by(desc(Orders.created_at)).limit(1)
         )
@@ -515,7 +590,9 @@ async def place_order(
             customer_name=data.customer_name.strip(),
             customer_phone=account_phone,
             pickup_time="",
-            order_notes=data.order_notes or "",
+            order_notes=(
+                f"{str(data.order_notes or '').strip()} | {client_session_marker}".strip(" |")
+            ),
             payment_method=data.payment_method,
             order_type=normalized_order_type,
             customer_lat=float(data.customer_lat) if normalized_order_type == "delivery" else None,
@@ -616,10 +693,11 @@ async def cancel_order(
 
         # Customer cancellation is intentionally hard-locked.
         # Once the shop accepts the order, only Admin/Kitchen can cancel it.
-        allowed_statuses = ['new', 'payment_pending']
+        allowed_statuses = ['new']
 
         if order.status not in allowed_statuses:
             status_msg = {
+                'payment_pending': 'Online payment is still pending. Please manage it from the payment controls in My Orders.',
                 'accepted': 'Your order has been accepted and is being processed.',
                 'preparing': 'Your order is being prepared and cannot be cancelled.',
                 'ready': 'Your order is ready for pickup and cannot be cancelled.',
