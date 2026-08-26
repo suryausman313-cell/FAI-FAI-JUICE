@@ -60,6 +60,7 @@ interface Summary {
   current_balance: Record<string, number>;
   settlements?: Record<string, number>;
   payouts?: Record<string, number>;
+  pickup_cash?: Record<string, number>;
   riders?: RiderFinanceItem[];
 }
 
@@ -73,6 +74,17 @@ interface Submission {
   rider_note: string;
   admin_note: string;
   submitted_at: string | null;
+}
+
+interface PickupCashSubmission {
+  id: number;
+  amount: number;
+  orders_count: number;
+  status: 'pending' | 'approved' | 'rejected';
+  kitchen_note: string;
+  admin_note: string;
+  submitted_at: string | null;
+  orders: Array<{ order_id: number; customer_name: string; amount: number }>;
 }
 
 const periods: Array<{ key: Period; label: string }> = [
@@ -143,9 +155,11 @@ export default function AdminFinance() {
   const [dateTo, setDateTo] = useState(today);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [pickupSubmissions, setPickupSubmissions] = useState<PickupCashSubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [reviewingPickupId, setReviewingPickupId] = useState<number | null>(null);
   const [payoutSubmittingId, setPayoutSubmittingId] = useState<number | null>(null);
 
   const [pushState, setPushState] = useState<AdminPushState>({
@@ -161,6 +175,7 @@ export default function AdminFinance() {
     void Promise.all([
       loadSummary('today'),
       loadSubmissions(),
+      loadPickupSubmissions(),
       refreshPushState(),
     ]).finally(() => setLoading(false));
   }, []);
@@ -168,6 +183,7 @@ export default function AdminFinance() {
   useEffect(() => {
     const cashTimer = window.setInterval(() => {
       void loadSubmissions(true);
+      void loadPickupSubmissions(true);
       void scanAdminPushEventsNow().catch(() => undefined);
     }, 8000);
 
@@ -252,6 +268,17 @@ export default function AdminFinance() {
     }
   }
 
+  async function loadPickupSubmissions(silent = false) {
+    try {
+      const data = await apiRequest<{ items: PickupCashSubmission[] }>(
+        '/api/v1/finance/admin/pickup-cash-submissions?status=pending&limit=100',
+      );
+      setPickupSubmissions(data.items || []);
+    } catch (error: any) {
+      if (!silent) toast.error(error?.message || 'Could not load Pickup Cash requests');
+    }
+  }
+
   function adminName(): string {
     try {
       const auth = JSON.parse(localStorage.getItem('admin_auth') || '{}');
@@ -294,11 +321,44 @@ export default function AdminFinance() {
         },
       );
       toast.success(status === 'approved' ? 'Rider cash approved' : 'Rider cash rejected');
-      await Promise.all([loadSummary(period), loadSubmissions()]);
+      await Promise.all([loadSummary(period), loadSubmissions(), loadPickupSubmissions()]);
     } catch (error: any) {
       toast.error(error?.message || 'Could not review rider cash');
     } finally {
       setReviewingId(null);
+    }
+  }
+
+  async function reviewPickupCash(
+    submission: PickupCashSubmission,
+    status: 'approved' | 'rejected',
+  ) {
+    const verb = status === 'approved' ? 'APPROVE' : 'REJECT';
+    if (!window.confirm(`${verb} Pickup Cash AED ${money(submission.amount)} for ${submission.orders_count} order(s)?`)) {
+      return;
+    }
+
+    const note = window.prompt(
+      status === 'approved' ? 'Optional Admin note:' : 'Reason for rejection:',
+      '',
+    ) || '';
+
+    setReviewingPickupId(submission.id);
+    try {
+      await apiRequest(`/api/v1/finance/admin/pickup-cash-submissions/${submission.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          status,
+          admin_note: note,
+          reviewed_by: adminName(),
+        }),
+      });
+      toast.success(status === 'approved' ? 'Pickup Cash approved' : 'Pickup Cash rejected');
+      await Promise.all([loadSummary(period), loadPickupSubmissions()]);
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not review Pickup Cash');
+    } finally {
+      setReviewingPickupId(null);
     }
   }
 
@@ -410,11 +470,15 @@ export default function AdminFinance() {
   const settlements = summary?.settlements || {};
   const payouts = summary?.payouts || {};
   const currentBalance = summary?.current_balance || {};
+  const pickupCash = summary?.pickup_cash || {};
 
   const cards = [
     ['Food Sale (Period)', totals.shop_food_sale, 'text-emerald-300'],
     ['Cash Collected (Period)', totals.cash_collected, 'text-green-300'],
     ['Card Collected (Period)', totals.card_collected, 'text-blue-300'],
+    ['Pickup Cash With Kitchen', pickupCash.remaining_to_submit, 'text-orange-300'],
+    ['Pickup Cash Waiting Admin', pickupCash.awaiting_approval, 'text-yellow-300'],
+    ['Pickup Cash Approved', pickupCash.approved_cash, 'text-green-300'],
     ['Service + Small Fee', totals.developer_fees, 'text-amber-300'],
     ['Delivery Charges', totals.delivery_charges, 'text-purple-300'],
     ['Rider Tips', totals.rider_tips, 'text-pink-300'],
@@ -429,8 +493,8 @@ export default function AdminFinance() {
 
   return (
     <AdminSettingsPageLayout
-      title="Finance & Rider Cash"
-      subtitle="Rider cash approval, settlement and Admin notifications"
+      title="Finance & Cash"
+      subtitle="Pickup cash, Rider cash approval, settlement and Admin notifications"
       backTo="/admin/dashboard"
       maxWidth="max-w-6xl"
     >
@@ -576,7 +640,7 @@ export default function AdminFinance() {
               size="sm"
               variant="ghost"
               disabled={financeLoading}
-              onClick={() => void Promise.all([loadSummary(period), loadSubmissions()])}
+              onClick={() => void Promise.all([loadSummary(period), loadSubmissions(), loadPickupSubmissions()])}
               className="text-gray-400"
             >
               <RefreshCw className={`w-4 h-4 ${financeLoading ? 'animate-spin' : ''}`} />
@@ -701,6 +765,77 @@ export default function AdminFinance() {
             <Card className="bg-gray-900 border-gray-800 p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
+                  <h2 className="text-white font-semibold">Pickup Cash Approval</h2>
+                  <p className="text-gray-500 text-xs mt-1">
+                    Kitchen submits completed Pickup + Cash orders. Admin confirms the physical cash received.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void Promise.all([loadSummary(period), loadPickupSubmissions()])}
+                  className="border-gray-700 text-gray-400"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {pickupSubmissions.length === 0 ? (
+                <div className="text-center py-8">
+                  <CheckCircle2 className="w-9 h-9 text-green-700 mx-auto mb-2" />
+                  <p className="text-gray-400">No Pickup Cash waiting for approval</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {pickupSubmissions.map(submission => (
+                    <Card key={submission.id} className="bg-gray-950 border-gray-800 p-4">
+                      <div className="flex flex-col md:flex-row md:items-center gap-3">
+                        <div className="flex-1">
+                          <p className="text-white font-semibold">Kitchen Pickup Cash</p>
+                          <p className="text-gray-500 text-xs">{submission.orders_count} completed Pickup Cash order(s)</p>
+                          <p className="text-gray-600 text-xs mt-1">Submitted: {formatDate(submission.submitted_at)}</p>
+                          {submission.orders?.length > 0 && (
+                            <p className="text-gray-500 text-xs mt-1">
+                              Orders: {submission.orders.map(order => `#${order.order_id}`).join(', ')}
+                            </p>
+                          )}
+                          {submission.kitchen_note && (
+                            <p className="text-gray-400 text-xs mt-1">Note: {submission.kitchen_note}</p>
+                          )}
+                        </div>
+
+                        <p className="text-orange-300 font-bold text-lg">AED {money(submission.amount)}</p>
+
+                        <Button
+                          size="sm"
+                          disabled={reviewingPickupId === submission.id}
+                          onClick={() => void reviewPickupCash(submission, 'approved')}
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          <CheckCircle2 className="w-4 h-4 mr-1" />
+                          Approve
+                        </Button>
+
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={reviewingPickupId === submission.id}
+                          onClick={() => void reviewPickupCash(submission, 'rejected')}
+                          className="border-red-800 text-red-400"
+                        >
+                          <XCircle className="w-4 h-4 mr-1" />
+                          Reject
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            <Card className="bg-gray-900 border-gray-800 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
                   <h2 className="text-white font-semibold">Rider Cash Approval</h2>
                   <p className="text-gray-500 text-xs mt-1">
                     Rider submission stays pending until Admin approves or rejects it.
@@ -709,7 +844,7 @@ export default function AdminFinance() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => void Promise.all([loadSummary(period), loadSubmissions()])}
+                  onClick={() => void Promise.all([loadSummary(period), loadSubmissions(), loadPickupSubmissions()])}
                   className="border-gray-700 text-gray-400"
                 >
                   <RefreshCw className="w-4 h-4" />

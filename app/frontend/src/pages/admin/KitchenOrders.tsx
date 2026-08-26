@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
 import {
+  Banknote,
   Bike,
   Check,
   ChefHat,
@@ -118,6 +119,24 @@ type ParsedItem = {
   itemDiscountAmount?: number;
   itemDiscountLabel?: string;
   extras: string[];
+};
+
+type PickupCashOverview = {
+  orders_count: number;
+  amount: number;
+  orders: Array<{
+    order_id: number;
+    customer_name: string;
+    amount: number;
+    completed_at: string | null;
+  }>;
+  pending_submissions: Array<{
+    id: number;
+    amount: number;
+    orders_count: number;
+    status: string;
+    submitted_at: string | null;
+  }>;
 };
 
 const ACTIVE_STATUSES = new Set(['new', 'accepted', 'preparing', 'ready']);
@@ -566,6 +585,15 @@ export default function KitchenOrders() {
   const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatus>('open');
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [savingRestaurantStatus, setSavingRestaurantStatus] = useState(false);
+  const [pickupCashOpen, setPickupCashOpen] = useState(false);
+  const [pickupCashLoading, setPickupCashLoading] = useState(false);
+  const [pickupCashSubmitting, setPickupCashSubmitting] = useState(false);
+  const [pickupCash, setPickupCash] = useState<PickupCashOverview>({
+    orders_count: 0,
+    amount: 0,
+    orders: [],
+    pending_submissions: [],
+  });
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>({
     printer_ip: '192.168.70.125',
     printer_port: 9100,
@@ -611,6 +639,10 @@ export default function KitchenOrders() {
         setCancelOtherReason('');
         return true;
       }
+      if (pickupCashOpen) {
+        setPickupCashOpen(false);
+        return true;
+      }
       if (statusDialogOpen) {
         setStatusDialogOpen(false);
         return true;
@@ -637,7 +669,7 @@ export default function KitchenOrders() {
       window.removeEventListener('fai-fai-kitchen-back', eventBack);
       try { delete (window as any).faiFaiKitchenBack; } catch { (window as any).faiFaiKitchenBack = undefined; }
     };
-  }, [cancelOrderTarget, statusDialogOpen, drawerOpen, selectedOrderId, viewMode]);
+  }, [cancelOrderTarget, pickupCashOpen, statusDialogOpen, drawerOpen, selectedOrderId, viewMode]);
 
   // Mobile Chrome/PWA may block speech until the page has received a real user
   // interaction. Prime the speech engine on the first tap/key press (PIN login,
@@ -674,6 +706,58 @@ export default function KitchenOrders() {
     }),
     [kitchenPin],
   );
+
+  const loadPickupCash = useCallback(async (silent = true) => {
+    if (!silent) setPickupCashLoading(true);
+    try {
+      const response = await axios.get(`${getAPIBaseURL()}/api/v1/finance/kitchen/pickup-cash`, {
+        headers: kitchenHeaders(),
+        timeout: 12000,
+      });
+      setPickupCash({
+        orders_count: Number(response.data?.orders_count || 0),
+        amount: Number(response.data?.amount || 0),
+        orders: Array.isArray(response.data?.orders) ? response.data.orders : [],
+        pending_submissions: Array.isArray(response.data?.pending_submissions)
+          ? response.data.pending_submissions
+          : [],
+      });
+    } catch (error: any) {
+      if (!silent) {
+        toast.error(String(error?.response?.data?.detail || 'Pickup Cash could not be loaded'));
+      }
+    } finally {
+      if (!silent) setPickupCashLoading(false);
+    }
+  }, [kitchenHeaders]);
+
+  const submitPickupCash = useCallback(async () => {
+    const amount = Number(pickupCash.amount || 0);
+    const count = Number(pickupCash.orders_count || 0);
+    if (count <= 0 || amount <= 0) {
+      toast.info('No completed Pickup Cash is waiting');
+      return;
+    }
+    if (!window.confirm(`Submit AED ${money(amount)} from ${count} Pickup Cash order(s) to Admin?`)) {
+      return;
+    }
+
+    setPickupCashSubmitting(true);
+    try {
+      await axios.post(
+        `${getAPIBaseURL()}/api/v1/finance/kitchen/pickup-cash-submissions`,
+        { note: '' },
+        { headers: kitchenHeaders(), timeout: 15000 },
+      );
+      toast.success('Pickup Cash sent to Admin for approval');
+      await loadPickupCash(true);
+      setPickupCashOpen(false);
+    } catch (error: any) {
+      toast.error(String(error?.response?.data?.detail || 'Pickup Cash could not be submitted'));
+    } finally {
+      setPickupCashSubmitting(false);
+    }
+  }, [kitchenHeaders, loadPickupCash, pickupCash.amount, pickupCash.orders_count]);
 
   const loadBranches = useCallback(async () => {
     try {
@@ -850,6 +934,7 @@ export default function KitchenOrders() {
     const refreshKitchenData = () => {
       void loadOrders();
       void loadRiderData();
+      void loadPickupCash(true);
     };
 
     // Initial load and continuous native-style background recovery.
@@ -874,7 +959,7 @@ export default function KitchenOrders() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [authenticated, loadOrders, loadRiderData]);
+  }, [authenticated, loadOrders, loadRiderData, loadPickupCash]);
 
   useEffect(() => {
     if (selectedOrderId === null) return;
@@ -1019,10 +1104,20 @@ export default function KitchenOrders() {
     updatingOrderIdsRef.current.add(order.id);
 
     const shouldStopAlarm = status !== 'new';
+    const otherWaitingNewOrders = shouldStopAlarm
+      ? orders.filter((item) => item.id !== order.id && String(item.status || '').toLowerCase() === 'new').length
+      : 0;
 
-    // Stop the native alarm immediately on the tap. Do not wait for Render/API.
+    // Stop this order's alarm immediately on the tap. If another New order is
+    // still waiting, restart the same native loop for the remaining order(s)
+    // instead of silencing the whole Kitchen.
     if (shouldStopAlarm) {
-      try { window.VitaPrinter?.stopOrderAlarm?.(); } catch { /* optional Android bridge */ }
+      try {
+        window.VitaPrinter?.stopOrderAlarm?.();
+        if (otherWaitingNewOrders > 0) {
+          window.VitaPrinter?.startOrderAlarm?.(otherWaitingNewOrders);
+        }
+      } catch { /* optional Android bridge */ }
     }
 
     // Prevent the next foreground refresh from treating this same order as new
@@ -1081,11 +1176,14 @@ export default function KitchenOrders() {
       // matching the top Back arrow instead of pushing staff to another detail state.
       if (selectedOrderId === order.id || status === 'cancelled') setSelectedOrderId(null);
       setTimeout(() => void loadOrders(), 700);
+      if (status === 'completed' && !isDeliveryOrder(order)) {
+        setTimeout(() => void loadPickupCash(true), 800);
+      }
     } catch (error: any) {
       // If accepting/cancelling a still-new order failed, let the alarm resume.
       if (shouldStopAlarm && order.status === 'new') {
         previousNewIdsRef.current.add(order.id);
-        try { window.VitaPrinter?.startOrderAlarm?.(1); } catch { /* optional bridge */ }
+        try { window.VitaPrinter?.startOrderAlarm?.(otherWaitingNewOrders + 1); } catch { /* optional bridge */ }
       }
       console.error('Kitchen status update failed:', error);
       toast.error(String(error?.response?.data?.detail || 'Order update failed'));
@@ -1431,7 +1529,7 @@ export default function KitchenOrders() {
               {order.status === 'new' && (
                 <div className="grid grid-cols-2 gap-2">
                   <Button onClick={() => void updateOrderStatus(order, 'accepted', selectedTime || 10)} className="h-12 rounded-xl bg-emerald-600 text-base font-black hover:bg-emerald-700"><Check className="mr-2 h-4 w-4" />Accept</Button>
-                  <Button variant="outline" onClick={() => { window.VitaPrinter?.stopOrderAlarm?.(); setCancelPreset(''); setCancelOtherReason(''); setCancelOrderTarget(order); }} className="h-12 rounded-xl border-red-200 text-base font-black text-red-600 hover:bg-red-50"><X className="mr-2 h-4 w-4" />Cancel</Button>
+                  <Button variant="outline" onClick={() => { setCancelPreset(''); setCancelOtherReason(''); setCancelOrderTarget(order); }} className="h-12 rounded-xl border-red-200 text-base font-black text-red-600 hover:bg-red-50"><X className="mr-2 h-4 w-4" />Cancel</Button>
                 </div>
               )}
               {order.status === 'accepted' && <Button onClick={() => void updateOrderStatus(order, 'preparing')} className="h-12 w-full rounded-xl bg-orange-500 text-base font-black hover:bg-orange-600">Start preparing</Button>}
@@ -1607,6 +1705,15 @@ export default function KitchenOrders() {
                     <span>{batteryInfo.level}%</span>
                   </div>
                 )}
+                <button
+                  type="button"
+                  onClick={() => { setPickupCashOpen(true); void loadPickupCash(false); }}
+                  className={`flex items-center gap-1 rounded-xl border px-2 py-1.5 text-[11px] font-black ${Number(pickupCash.amount || 0) > 0 ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-700'}`}
+                  title="Pickup Cash"
+                >
+                  <Banknote className="h-4 w-4" />
+                  AED {money(pickupCash.amount)}
+                </button>
                 <button type="button" onClick={() => setStatusDialogOpen(true)}><StatusPill status={restaurantStatus} /></button>
                 <button type="button" onClick={logoutKitchen} className="rounded-xl p-2 text-slate-900 active:bg-slate-100"><LogOut className="h-5 w-5" /></button>
               </div>
@@ -1686,6 +1793,62 @@ export default function KitchenOrders() {
           </aside>
         </div>
       )}
+
+      <Dialog open={pickupCashOpen} onOpenChange={setPickupCashOpen}>
+        <DialogContent className="max-w-sm rounded-3xl border-slate-200 bg-white text-slate-900">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-black">
+              <Banknote className="h-5 w-5 text-amber-700" /> Pickup Cash
+            </DialogTitle>
+            <DialogDescription className="text-slate-700">
+              Only Completed + Pickup + Cash orders are counted. Amount is calculated automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Cash waiting with shop</p>
+            <p className="mt-1 text-3xl font-black text-amber-950">AED {money(pickupCash.amount)}</p>
+            <p className="mt-1 text-sm font-bold text-amber-800">{pickupCash.orders_count} order(s)</p>
+          </div>
+
+          {pickupCashLoading ? (
+            <p className="py-5 text-center text-sm text-slate-600">Loading Pickup Cash...</p>
+          ) : pickupCash.orders.length > 0 ? (
+            <div className="max-h-52 space-y-2 overflow-y-auto">
+              {pickupCash.orders.map((item) => (
+                <div key={item.order_id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="font-black text-slate-950">#{item.order_id}</p>
+                    <p className="truncate text-xs text-slate-600">{item.customer_name}</p>
+                  </div>
+                  <p className="font-black text-slate-950">AED {money(item.amount)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-4 text-center text-sm font-medium text-slate-600">No Pickup Cash waiting to submit.</p>
+          )}
+
+          {pickupCash.pending_submissions.length > 0 && (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
+              <p className="text-xs font-black uppercase tracking-wide text-blue-700">Waiting Admin Approval</p>
+              <p className="mt-1 text-sm font-bold text-blue-950">
+                AED {money(pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.amount || 0), 0))}
+                {' · '}
+                {pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.orders_count || 0), 0)} order(s)
+              </p>
+            </div>
+          )}
+
+          <Button
+            disabled={pickupCashSubmitting || pickupCashLoading || pickupCash.orders_count <= 0 || pickupCash.amount <= 0}
+            onClick={() => void submitPickupCash()}
+            className="h-12 w-full rounded-2xl bg-slate-900 text-base font-black text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {pickupCashSubmitting ? 'Submitting...' : `Submit AED ${money(pickupCash.amount)} to Admin`}
+          </Button>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
         <DialogContent className="max-w-sm rounded-3xl border-slate-200 bg-white text-slate-900">
