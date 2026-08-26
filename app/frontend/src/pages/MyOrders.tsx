@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, CheckCircle, XCircle, ChefHat, Package, RefreshCw, Store, MessageSquare, Bike, Navigation, AlertTriangle, X, ShoppingCart, Bell, BellOff } from 'lucide-react';
@@ -9,6 +10,7 @@ import { client, Order, CartItem } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 import { getCart, saveCart } from '@/lib/cart-store';
 import { getGuestSessionId } from '@/lib/guest-session';
+import { getAPIBaseURL } from '@/lib/config';
 import ReadyTimeCountdown from '@/components/ReadyTimeCountdown';
 import {
   enableCustomerPush,
@@ -433,8 +435,6 @@ export default function MyOrders() {
   // Admin-configured timeouts
   const [acceptTimeout] = useState(2); // fixed: show WhatsApp Restaurant after 2 minutes
   const [expireTimeout, setExpireTimeout] = useState(15); // minutes
-  const [allowCancelPreparing, setAllowCancelPreparing] = useState(false);
-  const [allowCancelReady, setAllowCancelReady] = useState(false);
 
   useEffect(() => {
     void loadInitialData();
@@ -501,8 +501,6 @@ export default function MyOrders() {
         const s = items[0] as any;
         // Customer WhatsApp escalation is fixed at 2 minutes for Fai Fai Juice.
         if (s.order_expire_timeout_minutes) setExpireTimeout(Number(s.order_expire_timeout_minutes) || 15);
-        setAllowCancelPreparing(s.allow_cancel_preparing === true);
-        setAllowCancelReady(s.allow_cancel_ready === true);
       }
     } catch {
       // Use defaults
@@ -601,11 +599,35 @@ export default function MyOrders() {
 
   /** Determine if customer can cancel this order */
   function canCancelOrder(order: OrderWithDelivery): boolean {
-    if (order.status === 'new') return true; // Always can cancel pending
-    if (order.status === 'accepted') return true; // Can cancel before preparing starts
-    if (order.status === 'preparing' && allowCancelPreparing) return true;
-    if (order.status === 'ready' && allowCancelReady) return true;
-    return false;
+    // Backend hard-locks customer cancellation once Kitchen accepts. Keep UI
+    // aligned so it never shows a button that the API will reject.
+    return order.status === 'new';
+  }
+
+  async function retryOnlinePayment(orderId: number) {
+    try {
+      const res = await axios.post(
+        `${getAPIBaseURL().replace(/\/$/, '')}/api/v1/ziina/create-payment`,
+        { order_id: orderId },
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('vita_customer_token') || ''}`,
+          },
+          timeout: 20000,
+        },
+      );
+      if (res?.data?.already_paid === true) {
+        localStorage.removeItem('vita_pending_ziina_order_id');
+        await loadOrders();
+        return;
+      }
+      const redirectUrl = String(res?.data?.redirect_url || '').trim();
+      if (!redirectUrl) throw new Error('Online payment link was not returned');
+      localStorage.setItem('vita_pending_ziina_order_id', String(orderId));
+      window.location.assign(redirectUrl);
+    } catch (e: any) {
+      alert(e?.data?.detail || e?.response?.data?.detail || e?.message || 'Could not open online payment');
+    }
   }
 
   /** Order Again - adds items from a past order back to cart */
@@ -761,6 +783,7 @@ export default function MyOrders() {
                     let items: any[] = [];
                     try { items = JSON.parse(order.items_json); } catch { /* */ }
                     const isDelivery = isDeliveryOrder(order);
+                    const isPaymentPending = order.status === 'payment_pending';
                     const showRiderContact = isDelivery && order.rider_name && order.rider_phone &&
                       !['rejected', 'delivered'].includes(String(order.delivery_status || ''));
 
@@ -772,6 +795,11 @@ export default function MyOrders() {
                             {isDelivery && (
                               <Badge className="bg-blue-600/20 text-blue-400 border border-blue-600/30 text-xs">
                                 <Bike className="w-3 h-3 mr-1" /> Delivery
+                              </Badge>
+                            )}
+                            {isPaymentPending && (
+                              <Badge className="bg-yellow-600/20 text-yellow-300 border border-yellow-600/30 text-xs">
+                                Payment Pending
                               </Badge>
                             )}
                           </div>
@@ -789,13 +817,42 @@ export default function MyOrders() {
                           {formatDate(order.created_at)}
                         </p>
 
-                        {/* Order Timer + WhatsApp Notification */}
-                        <OrderTimerNotification
-                          order={order}
-                          acceptTimeout={acceptTimeout}
-                          expireTimeout={expireTimeout}
-                          onExpired={handleOrderExpired}
-                        />
+                        {/* Unpaid Ziina orders are not sent to Kitchen. */}
+                        {isPaymentPending ? (
+                          <div className="mb-4 rounded-xl border border-yellow-600/30 bg-yellow-600/10 p-4">
+                            <p className="text-yellow-300 font-bold text-sm">Online payment not completed</p>
+                            <p className="text-yellow-200/70 text-xs mt-1">
+                              This order has not been sent to Kitchen yet. Retry payment, or go back to Checkout and choose Cash.
+                            </p>
+                            <div className="grid grid-cols-2 gap-2 mt-3">
+                              <Button
+                                onClick={() => void retryOnlinePayment(order.id)}
+                                size="sm"
+                                className="bg-yellow-600 hover:bg-yellow-700 text-black cursor-pointer"
+                              >
+                                Retry Payment
+                              </Button>
+                              <Button
+                                onClick={() => {
+                                  localStorage.setItem('vita_pending_ziina_order_id', String(order.id));
+                                  navigate('/checkout');
+                                }}
+                                size="sm"
+                                variant="outline"
+                                className="border-green-600/50 text-green-400 hover:bg-green-600/10 cursor-pointer"
+                              >
+                                Choose Cash
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <OrderTimerNotification
+                            order={order}
+                            acceptTimeout={acceptTimeout}
+                            expireTimeout={expireTimeout}
+                            onExpired={handleOrderExpired}
+                          />
+                        )}
 
                         {/* Rider Contact Card - shown after pickup */}
                         {showRiderContact && (
@@ -819,16 +876,18 @@ export default function MyOrders() {
                           </Button>
                         )}
 
-                        {/* Progress tracker */}
-                        <OrderProgressTracker
-                          status={order.status}
-                          estimatedTime={order.estimated_time}
-                          referenceTime={order.updated_at || order.created_at}
-                          isDelivery={isDelivery}
-                          deliveryStatus={order.delivery_status || null}
-                          deliveryEtaSeconds={order.delivery_eta_seconds}
-                          deliveryEtaCalculatedAt={order.delivery_eta_calculated_at}
-                        />
+                        {/* Progress starts only after payment is complete. */}
+                        {!isPaymentPending && (
+                          <OrderProgressTracker
+                            status={order.status}
+                            estimatedTime={order.estimated_time}
+                            referenceTime={order.updated_at || order.created_at}
+                            isDelivery={isDelivery}
+                            deliveryStatus={order.delivery_status || null}
+                            deliveryEtaSeconds={order.delivery_eta_seconds}
+                            deliveryEtaCalculatedAt={order.delivery_eta_calculated_at}
+                          />
+                        )}
 
                         {/* Items */}
                         <div className="border-t border-gray-800 pt-3">
