@@ -9,12 +9,16 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.rider_auth import require_rider_id
+from services.branch_kitchen_auth import verify_branch_kitchen_pin
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
+from models.pickup_cash_settlement_orders import Pickup_cash_settlement_orders
+from models.pickup_cash_settlements import Pickup_cash_control, Pickup_cash_settlements
 from models.rider_cash_settlements import Rider_cash_settlements
 from models.rider_payouts import Rider_payouts
 from models.riders import Riders
@@ -40,6 +44,16 @@ class CashSubmissionCreate(BaseModel):
 
 
 class CashSubmissionReview(BaseModel):
+    status: Literal["approved", "rejected"]
+    admin_note: Optional[str] = Field(default="", max_length=500)
+    reviewed_by: Optional[str] = Field(default="Admin", max_length=200)
+
+
+class PickupCashSubmissionCreate(BaseModel):
+    note: Optional[str] = Field(default="", max_length=500)
+
+
+class PickupCashSubmissionReview(BaseModel):
     status: Literal["approved", "rejected"]
     admin_note: Optional[str] = Field(default="", max_length=500)
     reviewed_by: Optional[str] = Field(default="Admin", max_length=200)
@@ -180,6 +194,163 @@ def _money(value: object) -> float:
 
 def _model_money(model: object, field_name: str) -> float:
     return _money(getattr(model, field_name, 0))
+
+
+async def verify_finance_kitchen_pin(
+    x_kitchen_pin: str = Header(default="", alias="X-Kitchen-Pin"),
+    x_branch_id: Optional[int] = Header(default=None, alias="X-Branch-Id"),
+    branch_id: Optional[int] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[int]:
+    return await verify_branch_kitchen_pin(
+        db,
+        x_kitchen_pin,
+        x_branch_id or branch_id,
+    )
+
+
+def _pickup_cash_is_delivery(order: Orders) -> bool:
+    explicit = str(getattr(order, "order_type", "") or "").lower().strip()
+    notes = str(getattr(order, "order_notes", "") or "").lower()
+    payment = str(getattr(order, "payment_method", "") or "").lower()
+    return (
+        explicit == "delivery"
+        or "order type: delivery" in notes
+        or "delivery address:" in notes
+        or "cash on delivery" in payment
+        or "card on delivery" in payment
+    )
+
+
+def _pickup_cash_is_cash(order: Orders) -> bool:
+    return "cash" in str(getattr(order, "payment_method", "") or "").lower()
+
+
+async def _pickup_cash_tracking_start(db: AsyncSession) -> datetime:
+    control = (
+        await db.execute(
+            select(Pickup_cash_control).where(Pickup_cash_control.id == 1)
+        )
+    ).scalar_one_or_none()
+    if control is not None:
+        value = control.tracking_started_at
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    # First activation deliberately starts at the beginning of the current UAE
+    # day so old test/history orders do not suddenly become cash due.
+    start = _uae_day_start(datetime.now(UAE_TZ).date())
+    control = Pickup_cash_control(id=1, tracking_started_at=start)
+    db.add(control)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Another request may have created the one-row control at the same time.
+        await db.rollback()
+        control = (
+            await db.execute(
+                select(Pickup_cash_control).where(Pickup_cash_control.id == 1)
+            )
+        ).scalar_one()
+        value = control.tracking_started_at
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return start
+
+
+async def _pickup_cash_base_orders(
+    db: AsyncSession,
+    branch_id: Optional[int] = None,
+) -> list[Orders]:
+    tracking_start = await _pickup_cash_tracking_start(db)
+    completed_at = func.coalesce(
+        Orders.delivered_at,
+        Orders.updated_at,
+        Orders.created_at,
+    )
+    query = (
+        select(Orders)
+        .where(
+            func.lower(func.coalesce(Orders.status, "")).in_(["completed", "delivered"]),
+            completed_at >= tracking_start,
+        )
+        .order_by(Orders.id)
+    )
+    if branch_id is not None:
+        query = query.where(Orders.branch_id == int(branch_id))
+
+    orders = (await db.execute(query)).scalars().all()
+    return [
+        order
+        for order in orders
+        if _pickup_cash_is_cash(order) and not _pickup_cash_is_delivery(order)
+    ]
+
+
+async def _pickup_cash_blocked_order_ids(
+    db: AsyncSession,
+    order_ids: list[int],
+) -> set[int]:
+    if not order_ids:
+        return set()
+    rows = await db.execute(
+        select(Pickup_cash_settlement_orders.order_id)
+        .join(
+            Pickup_cash_settlements,
+            Pickup_cash_settlements.id == Pickup_cash_settlement_orders.settlement_id,
+        )
+        .where(
+            Pickup_cash_settlement_orders.order_id.in_(order_ids),
+            Pickup_cash_settlements.status.in_(["pending", "approved"]),
+        )
+    )
+    return {int(value) for value in rows.scalars().all()}
+
+
+async def _pickup_cash_eligible_orders(
+    db: AsyncSession,
+    branch_id: Optional[int] = None,
+) -> list[Orders]:
+    orders = await _pickup_cash_base_orders(db, branch_id)
+    blocked = await _pickup_cash_blocked_order_ids(db, [order.id for order in orders])
+    return [order for order in orders if int(order.id) not in blocked]
+
+
+async def _pickup_cash_current_balance(db: AsyncSession) -> dict:
+    orders = await _pickup_cash_base_orders(db)
+    completed_total = round(sum(_money(order.total_amount) for order in orders), 2)
+
+    rows = (await db.execute(select(Pickup_cash_settlements))).scalars().all()
+    approved = round(
+        sum(_money(item.amount) for item in rows if str(item.status or "").lower() == "approved"),
+        2,
+    )
+    awaiting = round(
+        sum(_money(item.amount) for item in rows if str(item.status or "").lower() == "pending"),
+        2,
+    )
+    return {
+        "completed_pickup_cash": completed_total,
+        "approved_cash": approved,
+        "awaiting_approval": awaiting,
+        "remaining_to_submit": max(round(completed_total - approved - awaiting, 2), 0.0),
+    }
+
+
+def _serialize_pickup_cash_order(order: Orders) -> dict:
+    completed_at = (
+        getattr(order, "delivered_at", None)
+        or getattr(order, "updated_at", None)
+        or getattr(order, "created_at", None)
+    )
+    return {
+        "order_id": int(order.id),
+        "customer_name": str(order.customer_name or "Customer"),
+        "amount": _money(order.total_amount),
+        "completed_at": completed_at.isoformat() if completed_at else None,
+    }
 
 
 def _items_subtotal(items_json: str) -> float:
@@ -647,6 +818,187 @@ async def _get_admin_current_balance(
     }
 
 
+@router.get("/kitchen/pickup-cash")
+async def get_kitchen_pickup_cash(
+    kitchen_branch_id: Optional[int] = Depends(verify_finance_kitchen_pin),
+    db: AsyncSession = Depends(get_db),
+):
+    eligible = await _pickup_cash_eligible_orders(db, kitchen_branch_id)
+    pending_query = (
+        select(Pickup_cash_settlements)
+        .where(Pickup_cash_settlements.status == "pending")
+        .order_by(desc(Pickup_cash_settlements.submitted_at))
+        .limit(20)
+    )
+    if kitchen_branch_id is not None:
+        pending_query = pending_query.where(
+            Pickup_cash_settlements.branch_id == int(kitchen_branch_id)
+        )
+    pending = (await db.execute(pending_query)).scalars().all()
+
+    return {
+        "orders_count": len(eligible),
+        "amount": round(sum(_money(order.total_amount) for order in eligible), 2),
+        "orders": [_serialize_pickup_cash_order(order) for order in eligible],
+        "pending_submissions": [
+            {
+                "id": item.id,
+                "amount": _money(item.amount),
+                "orders_count": int(item.orders_count or 0),
+                "status": item.status,
+                "submitted_at": item.submitted_at.isoformat() if item.submitted_at else None,
+            }
+            for item in pending
+        ],
+    }
+
+
+@router.post("/kitchen/pickup-cash-submissions", status_code=201)
+async def submit_kitchen_pickup_cash(
+    data: PickupCashSubmissionCreate,
+    kitchen_branch_id: Optional[int] = Depends(verify_finance_kitchen_pin),
+    db: AsyncSession = Depends(get_db),
+):
+    eligible = await _pickup_cash_eligible_orders(db, kitchen_branch_id)
+    if not eligible:
+        raise HTTPException(status_code=400, detail="No completed Pickup Cash is waiting to be submitted.")
+
+    amount = round(sum(_money(order.total_amount) for order in eligible), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Pickup Cash total is zero.")
+
+    settlement = Pickup_cash_settlements(
+        amount=amount,
+        orders_count=len(eligible),
+        branch_id=kitchen_branch_id,
+        status="pending",
+        kitchen_note=(data.note or "").strip(),
+    )
+    db.add(settlement)
+    await db.flush()
+
+    for order in eligible:
+        db.add(
+            Pickup_cash_settlement_orders(
+                settlement_id=settlement.id,
+                order_id=order.id,
+                order_amount=_money(order.total_amount),
+            )
+        )
+
+    try:
+        await db.commit()
+        await db.refresh(settlement)
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("Kitchen Pickup Cash submission failed")
+        raise HTTPException(status_code=500, detail="Pickup Cash could not be submitted.") from exc
+
+    return {
+        "success": True,
+        "message": "Pickup Cash sent to Admin for approval.",
+        "submission": {
+            "id": settlement.id,
+            "amount": _money(settlement.amount),
+            "orders_count": int(settlement.orders_count or 0),
+            "status": settlement.status,
+            "submitted_at": settlement.submitted_at.isoformat() if settlement.submitted_at else None,
+        },
+    }
+
+
+@router.get("/admin/pickup-cash-submissions")
+async def get_admin_pickup_cash_submissions(
+    status: Literal["all", "pending", "approved", "rejected"] = Query(default="pending"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Pickup_cash_settlements).order_by(desc(Pickup_cash_settlements.submitted_at))
+    if status != "all":
+        query = query.where(Pickup_cash_settlements.status == status)
+    settlements = (await db.execute(query.limit(limit))).scalars().all()
+
+    settlement_ids = [int(item.id) for item in settlements]
+    order_map: dict[int, list[dict]] = {item_id: [] for item_id in settlement_ids}
+    if settlement_ids:
+        rows = (
+            await db.execute(
+                select(Pickup_cash_settlement_orders, Orders)
+                .join(Orders, Orders.id == Pickup_cash_settlement_orders.order_id)
+                .where(Pickup_cash_settlement_orders.settlement_id.in_(settlement_ids))
+                .order_by(Pickup_cash_settlement_orders.order_id)
+            )
+        ).all()
+        for link, order in rows:
+            order_map.setdefault(int(link.settlement_id), []).append(
+                {
+                    "order_id": int(order.id),
+                    "customer_name": str(order.customer_name or "Customer"),
+                    "amount": _money(link.order_amount),
+                }
+            )
+
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "amount": _money(item.amount),
+                "orders_count": int(item.orders_count or 0),
+                "status": item.status,
+                "kitchen_note": item.kitchen_note or "",
+                "admin_note": item.admin_note or "",
+                "reviewed_by": item.reviewed_by or "",
+                "submitted_at": item.submitted_at.isoformat() if item.submitted_at else None,
+                "reviewed_at": item.reviewed_at.isoformat() if item.reviewed_at else None,
+                "orders": order_map.get(int(item.id), []),
+            }
+            for item in settlements
+        ]
+    }
+
+
+@router.put("/admin/pickup-cash-submissions/{settlement_id}")
+async def review_admin_pickup_cash_submission(
+    settlement_id: int,
+    data: PickupCashSubmissionReview,
+    db: AsyncSession = Depends(get_db),
+):
+    settlement = (
+        await db.execute(
+            select(Pickup_cash_settlements).where(Pickup_cash_settlements.id == settlement_id)
+        )
+    ).scalar_one_or_none()
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Pickup Cash submission not found.")
+    if str(settlement.status or "").lower() != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This Pickup Cash submission is already {settlement.status}.",
+        )
+
+    settlement.status = data.status
+    settlement.admin_note = (data.admin_note or "").strip()
+    settlement.reviewed_by = str(data.reviewed_by or "Admin").strip()
+    settlement.reviewed_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(settlement)
+
+    return {
+        "success": True,
+        "message": f"Pickup Cash submission {data.status}.",
+        "submission": {
+            "id": settlement.id,
+            "amount": _money(settlement.amount),
+            "orders_count": int(settlement.orders_count or 0),
+            "status": settlement.status,
+            "admin_note": settlement.admin_note or "",
+            "reviewed_by": settlement.reviewed_by or "",
+            "reviewed_at": settlement.reviewed_at.isoformat() if settlement.reviewed_at else None,
+        },
+    }
+
+
 @router.get("/rider/{rider_id}/summary")
 async def get_rider_finance_summary(
     rider_id: int,
@@ -933,6 +1285,7 @@ async def get_admin_finance_summary(
         db,
         list(riders),
     )
+    pickup_cash = await _pickup_cash_current_balance(db)
 
     return {
         "period": {
@@ -947,6 +1300,7 @@ async def get_admin_finance_summary(
         "settlements": all_settlements,
         "payouts": all_payouts,
         "current_balance": current_balance,
+        "pickup_cash": pickup_cash,
         "riders": rider_items,
         "rules": {
             "discount_applies_to": "menu_items_only",
