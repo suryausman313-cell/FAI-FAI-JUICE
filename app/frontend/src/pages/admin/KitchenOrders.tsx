@@ -1800,53 +1800,59 @@ export default function KitchenOrders() {
             <DialogTitle className="flex items-center gap-2 text-xl font-black">
               <Banknote className="h-5 w-5 text-amber-700" /> Pickup Cash
             </DialogTitle>
-            <DialogDescription className="text-slate-700">
-              Only Completed + Pickup + Cash orders are counted. Amount is calculated automatically.
-            </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Cash waiting with shop</p>
-            <p className="mt-1 text-3xl font-black text-amber-950">AED {money(pickupCash.amount)}</p>
-            <p className="mt-1 text-sm font-bold text-amber-800">{pickupCash.orders_count} order(s)</p>
-          </div>
-
           {pickupCashLoading ? (
-            <p className="py-5 text-center text-sm text-slate-600">Loading Pickup Cash...</p>
-          ) : pickupCash.orders.length > 0 ? (
-            <div className="max-h-52 space-y-2 overflow-y-auto">
-              {pickupCash.orders.map((item) => (
-                <div key={item.order_id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="font-black text-slate-950">#{item.order_id}</p>
-                    <p className="truncate text-xs text-slate-600">{item.customer_name}</p>
-                  </div>
-                  <p className="font-black text-slate-950">AED {money(item.amount)}</p>
-                </div>
-              ))}
-            </div>
+            <p className="py-5 text-center text-sm font-medium text-slate-600">Loading...</p>
           ) : (
-            <p className="py-4 text-center text-sm font-medium text-slate-600">No Pickup Cash waiting to submit.</p>
-          )}
+            <>
+              {pickupCash.pending_submissions.length > 0 && (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-blue-700">Waiting Admin Approval</p>
+                  <p className="mt-1 text-3xl font-black text-blue-950">
+                    AED {money(pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.amount || 0), 0))}
+                  </p>
+                  <p className="mt-1 text-sm font-bold text-blue-800">
+                    {pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.orders_count || 0), 0)} order(s)
+                  </p>
+                </div>
+              )}
 
-          {pickupCash.pending_submissions.length > 0 && (
-            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
-              <p className="text-xs font-black uppercase tracking-wide text-blue-700">Waiting Admin Approval</p>
-              <p className="mt-1 text-sm font-bold text-blue-950">
-                AED {money(pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.amount || 0), 0))}
-                {' · '}
-                {pickupCash.pending_submissions.reduce((sum, item) => sum + Number(item.orders_count || 0), 0)} order(s)
-              </p>
-            </div>
-          )}
+              {pickupCash.orders_count > 0 && pickupCash.amount > 0 && (
+                <>
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-amber-700">Ready to Submit</p>
+                    <p className="mt-1 text-3xl font-black text-amber-950">AED {money(pickupCash.amount)}</p>
+                    <p className="mt-1 text-sm font-bold text-amber-800">{pickupCash.orders_count} order(s)</p>
+                  </div>
 
-          <Button
-            disabled={pickupCashSubmitting || pickupCashLoading || pickupCash.orders_count <= 0 || pickupCash.amount <= 0}
-            onClick={() => void submitPickupCash()}
-            className="h-12 w-full rounded-2xl bg-slate-900 text-base font-black text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {pickupCashSubmitting ? 'Submitting...' : `Submit AED ${money(pickupCash.amount)} to Admin`}
-          </Button>
+                  <div className="max-h-52 space-y-2 overflow-y-auto">
+                    {pickupCash.orders.map((item) => (
+                      <div key={item.order_id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="font-black text-slate-950">#{item.order_id}</p>
+                          <p className="truncate text-xs text-slate-600">{item.customer_name}</p>
+                        </div>
+                        <p className="font-black text-slate-950">AED {money(item.amount)}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Button
+                    disabled={pickupCashSubmitting}
+                    onClick={() => void submitPickupCash()}
+                    className="h-12 w-full rounded-2xl bg-slate-900 text-base font-black text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {pickupCashSubmitting ? 'Submitting...' : 'Submit to Admin'}
+                  </Button>
+                </>
+              )}
+
+              {pickupCash.pending_submissions.length === 0 && pickupCash.orders_count <= 0 && (
+                <p className="py-5 text-center text-sm font-semibold text-slate-500">No Pickup Cash</p>
+              )}
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
