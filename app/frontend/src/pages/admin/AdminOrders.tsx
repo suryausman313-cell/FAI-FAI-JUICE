@@ -519,10 +519,10 @@ export default function AdminOrders() {
           : o))
       );
       toast.success(`Order #${orderId} cancelled — ${reason}`);
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to cancel order:', e);
       recentlyUpdatedRef.current.delete(orderId);
-      toast.error('Failed to cancel order');
+      toast.error(e?.response?.data?.detail || e?.message || 'Failed to cancel order');
     }
   }
 
@@ -1222,7 +1222,7 @@ export default function AdminOrders() {
                 {/* Cancel with Reason */}
                 {cancellingOrder === order.id && (
                   <div className="bg-orange-600/10 border border-orange-600/30 rounded-xl p-3 mb-3">
-                    <p className="text-orange-400 text-sm font-medium mb-2">Cancel Order #{order.id} — Why?</p>
+                    <p className="text-orange-400 text-sm font-medium mb-2">{order.status === 'completed' && !isZiinaOrder(order) ? 'Cash Refund / Cancel' : 'Cancel Order'} #{order.id} — Why?</p>
                     <div className="grid grid-cols-2 gap-2 mb-2">
                       {['Customer requested', 'Out of stock', 'Kitchen too busy', 'Wrong order', 'Duplicate order', 'Other'].map(reason => (
                         <button
@@ -1250,6 +1250,10 @@ export default function AdminOrders() {
                         onClick={() => {
                           const reason = cancelPreset === 'Other' ? cancelOtherReason.trim() : cancelPreset.trim();
                           if (!reason) { toast.error('Cancellation reason is required'); return; }
+                          if (order.status === 'completed' && !isZiinaOrder(order)) {
+                            const confirmed = window.confirm(`Confirm AED ${Number(order.total_amount || 0).toFixed(2)} cash was returned to the customer? This order will be removed from Sales.`);
+                            if (!confirmed) return;
+                          }
                           void cancelOrder(order.id, reason);
                           setCancellingOrder(null);
                           setCancelPreset('');
@@ -1258,7 +1262,7 @@ export default function AdminOrders() {
                         disabled={!cancelPreset || (cancelPreset === 'Other' && !cancelOtherReason.trim())}
                         className="bg-red-600 hover:bg-red-700 text-white"
                       >
-                        Confirm Cancel
+                        {order.status === 'completed' && !isZiinaOrder(order) ? 'Confirm Cash Refund' : 'Confirm Cancel'}
                       </Button>
                       <Button
                         size="sm"
@@ -1385,7 +1389,7 @@ export default function AdminOrders() {
                     )}
 
                     {/* Cancel button for active orders (not new, not completed/cancelled) */}
-                    {order.status !== 'new' && order.status !== 'cancelled' && cancellingOrder !== order.id && (
+                    {order.status !== 'new' && order.status !== 'cancelled' && !(order.status === 'completed' && isZiinaOrder(order)) && cancellingOrder !== order.id && (
                       <Button
                         size="sm"
                         variant="ghost"

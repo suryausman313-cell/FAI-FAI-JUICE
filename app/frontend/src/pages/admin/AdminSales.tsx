@@ -80,6 +80,15 @@ interface FinanceSummary {
     remaining_to_submit: number;
     total_pending_cash: number;
   };
+  cash_control?: {
+    rider_approved_cash: number;
+    pickup_approved_cash: number;
+    gross_approved_cash: number;
+    cash_refunds: number;
+    cash_refund_orders: number;
+    net_received: number;
+    awaiting_approval: number;
+  };
 }
 
 interface ReportOrder {
@@ -247,7 +256,7 @@ function isCashPayment(method: string | undefined): boolean {
 }
 
 function paymentLabel(method: string | undefined): string {
-  return isCashPayment(method) ? 'Cash' : 'Card Payment';
+  return isCashPayment(method) ? 'Cash' : 'Online Payment';
 }
 
 function isDeliveryReportOrder(order: ReportOrder): boolean {
@@ -582,6 +591,10 @@ export default function AdminSales() {
   );
   const averageOrder =
     totals.orders > 0 ? totals.customer_total / totals.orders : 0;
+  const cashControl = summary?.cash_control;
+  const adminCashReceived = cashControl ? numeric(cashControl.net_received) : 0;
+  const adminCashWaiting = cashControl ? numeric(cashControl.awaiting_approval) : 0;
+  const cashRefunds = cashControl ? numeric(cashControl.cash_refunds) : 0;
 
   const appCommission = Number(totals.developer_fees || 0);
 
@@ -745,20 +758,20 @@ export default function AdminSales() {
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Cash Collected</p>
+              <p className="text-gray-400 text-[11px] uppercase">Admin Cash Received</p>
               <Banknote className="w-4 h-4 text-green-400" />
             </div>
-            <p className="text-green-400 text-xl font-black mt-2">AED {money(totals.cash_collected)}</p>
-            <p className="text-gray-500 text-[11px] mt-1">Pickup + Delivery cash · {totals.cash_orders} orders</p>
+            <p className="text-green-400 text-xl font-black mt-2">AED {money(adminCashReceived)}</p>
+            <p className="text-gray-500 text-[11px] mt-1">Approved Kitchen + Rider cash − refunds{cashRefunds > 0 ? ` AED ${money(cashRefunds)}` : ''}{adminCashWaiting > 0 ? ` · Waiting AED ${money(adminCashWaiting)}` : ''}</p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
-              <p className="text-gray-400 text-[11px] uppercase">Card Collected</p>
+              <p className="text-gray-400 text-[11px] uppercase">Online Payment</p>
               <CreditCard className="w-4 h-4 text-blue-400" />
             </div>
             <p className="text-blue-400 text-xl font-black mt-2">AED {money(totals.card_collected)}</p>
-            <p className="text-gray-500 text-[11px] mt-1">Pickup + Delivery card · {totals.card_orders} orders</p>
+            <p className="text-gray-500 text-[11px] mt-1">Completed online orders · {totals.card_orders} orders</p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">

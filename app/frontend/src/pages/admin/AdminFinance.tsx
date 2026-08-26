@@ -61,6 +61,7 @@ interface Summary {
   settlements?: Record<string, number>;
   payouts?: Record<string, number>;
   pickup_cash?: Record<string, number>;
+  cash_control?: Record<string, number>;
   riders?: RiderFinanceItem[];
 }
 
@@ -471,11 +472,14 @@ export default function AdminFinance() {
   const payouts = summary?.payouts || {};
   const currentBalance = summary?.current_balance || {};
   const pickupCash = summary?.pickup_cash || {};
+  const cashControl = summary?.cash_control || {};
 
   const cards = [
     ['Food Sale (Period)', totals.shop_food_sale, 'text-emerald-300'],
-    ['Cash Collected (Period)', totals.cash_collected, 'text-green-300'],
-    ['Card Collected (Period)', totals.card_collected, 'text-blue-300'],
+    ['Cash Sales Completed', totals.cash_collected, 'text-green-300'],
+    ['Admin Cash Received', cashControl.net_received, 'text-emerald-300'],
+    ['Cash Refunds', cashControl.cash_refunds, 'text-red-300'],
+    ['Online Payment (Period)', totals.card_collected, 'text-blue-300'],
     ['Pickup Cash With Kitchen', pickupCash.remaining_to_submit, 'text-orange-300'],
     ['Pickup Cash Waiting Admin', pickupCash.awaiting_approval, 'text-yellow-300'],
     ['Pickup Cash Approved', pickupCash.approved_cash, 'text-green-300'],
