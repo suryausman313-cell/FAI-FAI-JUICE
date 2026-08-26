@@ -216,8 +216,9 @@ async def list_registered_customers(
             },
         )
 
-        if status not in {"cancelled", "canceled", "deleted", "refunded"}:
+        if status not in {"cancelled", "canceled", "deleted", "refunded", "expired", "payment_pending"}:
             row["total_orders"] += 1
+        if status in {"completed", "delivered"}:
             row["total_spent"] += total_amount
 
         if created_at and (

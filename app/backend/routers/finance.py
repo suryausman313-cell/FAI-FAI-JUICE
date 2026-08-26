@@ -714,6 +714,61 @@ async def _get_settlement_totals(
     }
 
 
+async def _get_pickup_settlement_totals(
+    db: AsyncSession,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> dict:
+    """Pickup-cash settlement activity for the selected approval period."""
+    rows = (await db.execute(select(Pickup_cash_settlements))).scalars().all()
+    approved = 0.0
+    awaiting = 0.0
+    rejected = 0.0
+    submissions = 0
+    for item in rows:
+        status = str(item.status or "").strip().lower()
+        event_time = item.submitted_at if status == "pending" else (item.reviewed_at or item.submitted_at)
+        if not _in_period(event_time, start, end):
+            continue
+        submissions += 1
+        amount = _money(item.amount)
+        if status == "approved":
+            approved += amount
+        elif status == "pending":
+            awaiting += amount
+        elif status == "rejected":
+            rejected += amount
+    return {
+        "approved_cash": round(approved, 2),
+        "awaiting_approval": round(awaiting, 2),
+        "rejected_cash": round(rejected, 2),
+        "submissions": submissions,
+    }
+
+
+async def _get_cash_refund_totals(
+    db: AsyncSession,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> dict:
+    """Cash orders completed first and later cancelled are treated as cash refunds.
+
+    delivered_at is preserved when Admin reverses a completed Pickup/Delivery sale,
+    while pre-completion cancellations have no delivered_at and are never counted.
+    """
+    query = select(Orders).where(
+        func.lower(func.coalesce(Orders.status, "")) == "cancelled",
+        Orders.delivered_at.is_not(None),
+        func.lower(func.coalesce(Orders.payment_method, "")).contains("cash"),
+    )
+    query = _apply_datetime_filter(query, Orders.updated_at, start, end)
+    orders = (await db.execute(query)).scalars().all()
+    return {
+        "amount": round(sum(_money(order.total_amount) for order in orders), 2),
+        "orders": len(orders),
+    }
+
+
 async def _get_payout_totals(
     db: AsyncSession,
     rider_id: Optional[int] = None,
@@ -975,6 +1030,38 @@ async def review_admin_pickup_cash_submission(
             status_code=400,
             detail=f"This Pickup Cash submission is already {settlement.status}.",
         )
+
+    if data.status == "approved":
+        linked_rows = (
+            await db.execute(
+                select(Pickup_cash_settlement_orders, Orders)
+                .join(Orders, Orders.id == Pickup_cash_settlement_orders.order_id)
+                .where(Pickup_cash_settlement_orders.settlement_id == settlement.id)
+            )
+        ).all()
+        if not linked_rows:
+            raise HTTPException(status_code=409, detail="Pickup Cash submission has no linked orders. Reject it and submit again.")
+
+        invalid_order_ids: list[int] = []
+        live_total = 0.0
+        for link, order in linked_rows:
+            status = str(order.status or "").lower().strip()
+            valid = (
+                status in {"completed", "delivered"}
+                and _pickup_cash_is_cash(order)
+                and not _pickup_cash_is_delivery(order)
+                and abs(_money(link.order_amount) - _money(order.total_amount)) <= 0.01
+            )
+            if not valid:
+                invalid_order_ids.append(int(order.id))
+            live_total += _money(link.order_amount)
+
+        if invalid_order_ids or abs(live_total - _money(settlement.amount)) > 0.01:
+            bad = ", ".join(f"#{value}" for value in invalid_order_ids[:8])
+            detail = "Pickup Cash changed after submission. Reject it and let Kitchen submit again."
+            if bad:
+                detail += f" Changed/cancelled order(s): {bad}."
+            raise HTTPException(status_code=409, detail=detail)
 
     settlement.status = data.status
     settlement.admin_note = (data.admin_note or "").strip()
@@ -1274,6 +1361,22 @@ async def get_admin_finance_summary(
         start,
         end,
     )
+    pickup_period_settlements = await _get_pickup_settlement_totals(db, start, end)
+    cash_refunds = await _get_cash_refund_totals(db, start, end)
+    gross_approved_cash = round(
+        _money(all_settlements.get("approved_cash"))
+        + _money(pickup_period_settlements.get("approved_cash")),
+        2,
+    )
+    net_admin_cash_received = max(
+        round(gross_approved_cash - _money(cash_refunds.get("amount")), 2),
+        0.0,
+    )
+    cash_waiting_admin = round(
+        _money(all_settlements.get("awaiting_approval"))
+        + _money(pickup_period_settlements.get("awaiting_approval")),
+        2,
+    )
     all_payouts = await _get_payout_totals(
         db,
         None,
@@ -1298,6 +1401,16 @@ async def get_admin_finance_summary(
         },
         "totals": overall,
         "settlements": all_settlements,
+        "pickup_settlements": pickup_period_settlements,
+        "cash_control": {
+            "rider_approved_cash": _money(all_settlements.get("approved_cash")),
+            "pickup_approved_cash": _money(pickup_period_settlements.get("approved_cash")),
+            "gross_approved_cash": gross_approved_cash,
+            "cash_refunds": _money(cash_refunds.get("amount")),
+            "cash_refund_orders": int(cash_refunds.get("orders") or 0),
+            "net_received": net_admin_cash_received,
+            "awaiting_approval": cash_waiting_admin,
+        },
         "payouts": all_payouts,
         "current_balance": current_balance,
         "pickup_cash": pickup_cash,
@@ -1412,6 +1525,24 @@ async def review_cash_submission(
                 f"{settlement.status}."
             ),
         )
+
+    if data.status == "approved":
+        all_time = await _get_rider_period_totals(db, int(settlement.rider_id), None, None)
+        approved_query = select(Rider_cash_settlements).where(
+            Rider_cash_settlements.rider_id == int(settlement.rider_id),
+            Rider_cash_settlements.status == "approved",
+        )
+        approved_rows = (await db.execute(approved_query)).scalars().all()
+        already_approved = round(sum(_money(item.amount) for item in approved_rows), 2)
+        still_due = max(round(_money(all_time.get("cash_payable_to_shop")) - already_approved, 2), 0.0)
+        if _money(settlement.amount) > still_due + 0.01:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Rider cash due changed after submission (an order may have been cancelled/refunded). "
+                    "Reject this submission and ask the Rider to submit the current amount again."
+                ),
+            )
 
     reviewed_by = data.reviewed_by or "Admin"
 

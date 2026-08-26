@@ -95,6 +95,11 @@ def is_delivery_order(order: Orders) -> bool:
     )
 
 
+def is_ziina_online_order(order: Orders) -> bool:
+    payment = str(getattr(order, "payment_method", "") or "").lower().strip()
+    return payment.startswith("ziina online") or payment.startswith("online payment")
+
+
 def serialize_order(order: Orders) -> dict:
     """Return the order shape expected by the Admin and Kitchen frontends."""
     status = (order.status or "new").lower().strip()
@@ -439,6 +444,12 @@ async def update_order_status(
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot transition from '{current_status}' to '{new_status}'. Allowed: {', '.join(allowed_next) if allowed_next else 'none'}"
+            )
+
+        if current_status == "completed" and new_status == "cancelled" and is_ziina_online_order(order):
+            raise HTTPException(
+                status_code=400,
+                detail="Completed Online Payment must use Refund Card. It will leave Sales only after Ziina confirms the refund.",
             )
 
         if new_status == "cancelled":
