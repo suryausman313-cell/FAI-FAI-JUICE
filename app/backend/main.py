@@ -104,7 +104,7 @@ app.middleware("http")(admin_security_middleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=configured_origins or default_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
