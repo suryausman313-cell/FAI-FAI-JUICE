@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 TOKEN_TTL_SECONDS = 12 * 60 * 60
 PBKDF2_ITERATIONS = 240_000
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCK_SECONDS = 5 * 60
 
 ALL_PERMISSIONS = {
     "orders": True,
@@ -282,6 +284,154 @@ def _parse_permissions(raw: Any) -> dict[str, bool]:
         return dict(DEFAULT_STAFF_PERMISSIONS)
 
 
+async def _add_column_if_missing(
+    db: AsyncSession,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    """Add a migration column safely on both Render/Postgres and local SQLite."""
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        result = await db.execute(text(f"PRAGMA table_info({table_name})"))
+        existing_columns = {str(row[1]) for row in result.fetchall()}
+        if column_name not in existing_columns:
+            await db.execute(
+                text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+            )
+        return
+
+    await db.execute(
+        text(
+            f"ALTER TABLE {table_name} "
+            f"ADD COLUMN IF NOT EXISTS {column_name} {column_sql}"
+        )
+    )
+
+
+def _login_lock_remaining_seconds(locked_until_epoch: Any) -> int:
+    try:
+        locked_until = int(locked_until_epoch or 0)
+    except (TypeError, ValueError):
+        locked_until = 0
+    return max(0, locked_until - int(time.time()))
+
+
+def _login_lock_error(remaining_seconds: int) -> HTTPException:
+    remaining_minutes = max(1, (remaining_seconds + 59) // 60)
+    return HTTPException(
+        status_code=429,
+        detail=f"Too many wrong login attempts. Try again in {remaining_minutes} minute(s).",
+    )
+
+
+async def _reset_super_login_failures(db: AsyncSession) -> None:
+    await db.execute(
+        text(
+            """
+            UPDATE admin_security
+            SET failed_login_attempts = 0, locked_until_epoch = 0
+            WHERE id = 1
+            """
+        )
+    )
+    await db.commit()
+
+
+async def _record_super_login_failure(
+    db: AsyncSession,
+    current_attempts: Any,
+) -> bool:
+    try:
+        attempts = int(current_attempts or 0) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+
+    if attempts >= MAX_LOGIN_ATTEMPTS:
+        await db.execute(
+            text(
+                """
+                UPDATE admin_security
+                SET failed_login_attempts = 0,
+                    locked_until_epoch = :locked_until
+                WHERE id = 1
+                """
+            ),
+            {"locked_until": int(time.time()) + LOGIN_LOCK_SECONDS},
+        )
+        await db.commit()
+        return True
+
+    await db.execute(
+        text(
+            """
+            UPDATE admin_security
+            SET failed_login_attempts = :attempts
+            WHERE id = 1
+            """
+        ),
+        {"attempts": attempts},
+    )
+    await db.commit()
+    return False
+
+
+async def _reset_staff_login_failures(db: AsyncSession, account_id: str) -> None:
+    await db.execute(
+        text(
+            """
+            UPDATE admin_accounts_secure
+            SET failed_login_attempts = 0, locked_until_epoch = 0
+            WHERE id = :id
+            """
+        ),
+        {"id": account_id},
+    )
+    await db.commit()
+
+
+async def _record_staff_login_failure(
+    db: AsyncSession,
+    account_id: str,
+    current_attempts: Any,
+) -> bool:
+    try:
+        attempts = int(current_attempts or 0) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+
+    if attempts >= MAX_LOGIN_ATTEMPTS:
+        await db.execute(
+            text(
+                """
+                UPDATE admin_accounts_secure
+                SET failed_login_attempts = 0,
+                    locked_until_epoch = :locked_until
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": account_id,
+                "locked_until": int(time.time()) + LOGIN_LOCK_SECONDS,
+            },
+        )
+        await db.commit()
+        return True
+
+    await db.execute(
+        text(
+            """
+            UPDATE admin_accounts_secure
+            SET failed_login_attempts = :attempts
+            WHERE id = :id
+            """
+        ),
+        {"id": account_id, "attempts": attempts},
+    )
+    await db.commit()
+    return False
+
+
 async def ensure_admin_tables(db: AsyncSession) -> None:
     await db.execute(
         text(
@@ -292,6 +442,8 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
                 password_hash TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 token_version INTEGER NOT NULL DEFAULT 1,
+                failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until_epoch BIGINT NOT NULL DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -310,6 +462,8 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
                 permissions_json TEXT NOT NULL DEFAULT '{}',
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 token_version INTEGER NOT NULL DEFAULT 1,
+                failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until_epoch BIGINT NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -317,14 +471,22 @@ async def ensure_admin_tables(db: AsyncSession) -> None:
         )
     )
 
-    # Backward-compatible migration: old databases keep their existing Super Admin
-    # and staff accounts. Existing staff are attached to the current default branch.
-    try:
-        await db.execute(text("ALTER TABLE admin_accounts_secure ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL"))
-    except Exception:
-        # Some local SQLite builds do not support IF NOT EXISTS for ADD COLUMN.
-        # Production Render/Postgres does; ignore only for already-existing local schemas.
-        pass
+    # Backward-compatible migration for existing production/local databases.
+    await _add_column_if_missing(
+        db, "admin_accounts_secure", "branch_id", "INTEGER NULL"
+    )
+    await _add_column_if_missing(
+        db, "admin_security", "failed_login_attempts", "INTEGER NOT NULL DEFAULT 0"
+    )
+    await _add_column_if_missing(
+        db, "admin_security", "locked_until_epoch", "BIGINT NOT NULL DEFAULT 0"
+    )
+    await _add_column_if_missing(
+        db, "admin_accounts_secure", "failed_login_attempts", "INTEGER NOT NULL DEFAULT 0"
+    )
+    await _add_column_if_missing(
+        db, "admin_accounts_secure", "locked_until_epoch", "BIGINT NOT NULL DEFAULT 0"
+    )
 
     existing = await db.execute(text("SELECT id FROM admin_security WHERE id = 1"))
     if existing.first() is None:
@@ -509,7 +671,8 @@ async def login_admin(
     super_result = await db.execute(
         text(
             """
-            SELECT username, password_hash, salt, token_version
+            SELECT username, password_hash, salt, token_version,
+                   failed_login_attempts, locked_until_epoch
             FROM admin_security
             WHERE LOWER(username) = :username
             """
@@ -517,33 +680,46 @@ async def login_admin(
         {"username": username},
     )
     super_row = super_result.mappings().first()
-    if super_row and _verify_password(
-        data.password,
-        str(super_row["salt"]),
-        str(super_row["password_hash"]),
-    ):
-        identity = AdminIdentity(
-            subject="super",
-            username=str(super_row["username"]),
-            role="super_admin",
-            permissions=dict(ALL_PERMISSIONS),
-            token_version=int(super_row["token_version"]),
+    if super_row:
+        remaining = _login_lock_remaining_seconds(super_row["locked_until_epoch"])
+        if remaining > 0:
+            raise _login_lock_error(remaining)
+
+        if _verify_password(
+            data.password,
+            str(super_row["salt"]),
+            str(super_row["password_hash"]),
+        ):
+            await _reset_super_login_failures(db)
+            identity = AdminIdentity(
+                subject="super",
+                username=str(super_row["username"]),
+                role="super_admin",
+                permissions=dict(ALL_PERMISSIONS),
+                token_version=int(super_row["token_version"]),
+            )
+            return {
+                "success": True,
+                "token": _create_token(identity),
+                "expires_in": TOKEN_TTL_SECONDS,
+                "username": identity.username,
+                "role": identity.role,
+                "permissions": identity.permissions,
+                "branch_id": None,
+            }
+
+        locked = await _record_super_login_failure(
+            db, super_row["failed_login_attempts"]
         )
-        return {
-            "success": True,
-            "token": _create_token(identity),
-            "expires_in": TOKEN_TTL_SECONDS,
-            "username": identity.username,
-            "role": identity.role,
-            "permissions": identity.permissions,
-            "branch_id": None,
-        }
+        if locked:
+            raise _login_lock_error(LOGIN_LOCK_SECONDS)
 
     account_result = await db.execute(
         text(
             """
             SELECT id, username, password_hash, salt, role, branch_id,
-                   permissions_json, is_active, token_version
+                   permissions_json, is_active, token_version,
+                   failed_login_attempts, locked_until_epoch
             FROM admin_accounts_secure
             WHERE LOWER(username) = :username
             """
@@ -551,32 +727,44 @@ async def login_admin(
         {"username": username},
     )
     account = account_result.mappings().first()
-    if (
-        account
-        and bool(account["is_active"])
-        and _verify_password(
+    if account and bool(account["is_active"]):
+        remaining = _login_lock_remaining_seconds(account["locked_until_epoch"])
+        if remaining > 0:
+            raise _login_lock_error(remaining)
+
+        if _verify_password(
             data.password,
             str(account["salt"]),
             str(account["password_hash"]),
+        ):
+            await _reset_staff_login_failures(db, str(account["id"]))
+            identity = AdminIdentity(
+                subject=str(account["id"]),
+                username=str(account["username"]),
+                role=str(account["role"]),
+                permissions=_parse_permissions(account["permissions_json"]),
+                token_version=int(account["token_version"]),
+                branch_id=(
+                    int(account["branch_id"])
+                    if account.get("branch_id") is not None
+                    else await _default_branch_id(db)
+                ),
+            )
+            return {
+                "success": True,
+                "token": _create_token(identity),
+                "expires_in": TOKEN_TTL_SECONDS,
+                "username": identity.username,
+                "role": identity.role,
+                "permissions": identity.permissions,
+                "branch_id": identity.branch_id,
+            }
+
+        locked = await _record_staff_login_failure(
+            db, str(account["id"]), account["failed_login_attempts"]
         )
-    ):
-        identity = AdminIdentity(
-            subject=str(account["id"]),
-            username=str(account["username"]),
-            role=str(account["role"]),
-            permissions=_parse_permissions(account["permissions_json"]),
-            token_version=int(account["token_version"]),
-            branch_id=(int(account["branch_id"]) if account.get("branch_id") is not None else await _default_branch_id(db)),
-        )
-        return {
-            "success": True,
-            "token": _create_token(identity),
-            "expires_in": TOKEN_TTL_SECONDS,
-            "username": identity.username,
-            "role": identity.role,
-            "permissions": identity.permissions,
-            "branch_id": identity.branch_id,
-        }
+        if locked:
+            raise _login_lock_error(LOGIN_LOCK_SECONDS)
 
     raise HTTPException(status_code=401, detail="Invalid username or password.")
 
@@ -630,6 +818,8 @@ async def update_super_admin(
                 password_hash = :password_hash,
                 salt = :salt,
                 token_version = token_version + 1,
+                failed_login_attempts = 0,
+                locked_until_epoch = 0,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = 1
             """
@@ -791,7 +981,14 @@ async def update_admin_account(
 
     if data.password is not None:
         salt, password_hash = _new_password_record(data.password)
-        updates.extend(["password_hash = :password_hash", "salt = :salt"])
+        updates.extend(
+            [
+                "password_hash = :password_hash",
+                "salt = :salt",
+                "failed_login_attempts = 0",
+                "locked_until_epoch = 0",
+            ]
+        )
         params["password_hash"] = password_hash
         params["salt"] = salt
 
