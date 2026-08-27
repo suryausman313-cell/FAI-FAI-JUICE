@@ -19,7 +19,7 @@ from services.order_notes import public_order_notes
 
 router = APIRouter(prefix="/api/v1/admin-order-control", tags=["admin-order-control"])
 
-ADMIN_ORDER_PIN = os.getenv("KITCHEN_PIN", "1122").strip()
+ADMIN_ORDER_PIN = os.getenv("KITCHEN_PIN", "").strip()
 
 
 def check_pin(pin: str) -> None:
