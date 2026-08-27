@@ -25,6 +25,6 @@ services:
       - key: ALLOWED_ORIGINS
         value: https://fai-fai-juice.pages.dev
       - key: PYTHON_BACKEND_URL
-        value: https://vita-napoli-backend.onrender.com
+        value: https://vita-napoli-backend-usman.onrender.com
       - key: MGX_IGNORE_INIT_DATA
         value: "1"
