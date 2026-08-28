@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fai Fai Juice</title>
+</head>
+
+<body>
+<script>
+  const WEBSITE =
+    "https://fai-fai-juice.pages.dev/";
+
+  const PLAY_STORE =
+    "https://play.google.com/store/apps/details?id=com.faifaijuice.app";
+
+  // Abhi Play Store public live nahi hai.
+  // Public live hone ke baad false ko true kar dena.
+  const PLAY_STORE_LIVE = false;
+
+  const ua = navigator.userAgent || "";
+
+  const isAndroid = /Android/i.test(ua);
+
+  const isIOS =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  if (isAndroid && PLAY_STORE_LIVE) {
+    window.location.replace(PLAY_STORE);
+  } else {
+    window.location.replace(WEBSITE);
+  }
+</script>
+</body>
+</html>
