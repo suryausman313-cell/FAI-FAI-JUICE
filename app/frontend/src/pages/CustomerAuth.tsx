@@ -1,16 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { FormEvent, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import {
-  ArrowLeft,
-  Home,
-  KeyRound,
-  LogOut,
-  MessageCircle,
-  Phone,
-  ShieldCheck,
-  ShoppingBag,
-} from 'lucide-react';
+import { ArrowLeft, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -18,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
 
-type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
+type ScreenMode = 'login' | 'signup' | 'reset';
 
 interface CustomerData {
   id?: number | string;
@@ -35,9 +26,6 @@ interface AuthResponse {
   customer?: CustomerData;
   user?: CustomerData;
   message?: string;
-  exists?: boolean;
-  secure_pin_active?: boolean;
-  can_signup?: boolean;
   [key: string]: unknown;
 }
 
@@ -46,24 +34,13 @@ const DEVICE_PHONE_KEY = 'vita_customer_registered_phone';
 const TOKEN_KEY = 'vita_customer_token';
 const CUSTOMER_KEY = 'vita_customer';
 
-const RESTAURANT_PHONE_DISPLAY = '+971 52 109 1092';
-const RESTAURANT_PHONE_TEL = '+971521091092';
-const RESTAURANT_WHATSAPP = '971521091092';
-
 function normalizePhone(value: string): string {
-  const raw = value.trim();
-  const digits = raw.replace(/\D/g, '');
-
-  if (raw.startsWith('+')) return `+${digits}`;
-  if (digits.startsWith('00')) return `+${digits.slice(2)}`;
-  if (digits.startsWith('971')) return `+${digits}`;
-  if (digits.startsWith('0') && digits.length >= 9) return `+971${digits.slice(1)}`;
-
-  return raw;
+  return value.trim().replace(/[\s()-]/g, '');
 }
 
 function isValidPhone(value: string): boolean {
-  return /^\+[1-9]\d{7,14}$/.test(normalizePhone(value));
+  const normalized = normalizePhone(value);
+  return /^\+?[0-9]{9,15}$/.test(normalized);
 }
 
 function isValidPin(value: string): boolean {
@@ -81,281 +58,90 @@ function getErrorMessage(error: unknown, fallback: string): string {
   );
 }
 
-function getRememberedPhone(): string {
-  const direct =
-    localStorage.getItem(DEVICE_PHONE_KEY) ||
-    localStorage.getItem('vita_customer_phone');
-
-  if (direct) return direct;
-
-  try {
-    const storedCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || '{}');
-    return storedCustomer.phone || storedCustomer.customer_phone || '+971';
-  } catch {
-    return '+971';
-  }
-}
-
-function hasKnownAccountOnDevice(): boolean {
-  return Boolean(
-    localStorage.getItem(DEVICE_ACCOUNT_KEY) === '1' ||
-      localStorage.getItem(TOKEN_KEY) ||
-      localStorage.getItem(CUSTOMER_KEY),
-  );
-}
-
-function getStoredCustomer(): CustomerData | null {
-  const raw = localStorage.getItem(CUSTOMER_KEY) || sessionStorage.getItem(CUSTOMER_KEY);
-  if (!raw) return null;
-
-  try {
-    const value = JSON.parse(raw) as CustomerData;
-    return value && typeof value === 'object' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearCustomerSession(): void {
-  const keys = [TOKEN_KEY, CUSTOMER_KEY, 'customer_token', 'customer_auth_token'];
-  keys.forEach((key) => {
-    localStorage.removeItem(key);
-    sessionStorage.removeItem(key);
-  });
-  window.dispatchEvent(new Event('customer-auth-changed'));
-}
-
-function rememberAccount(phone: string): void {
-  localStorage.setItem(DEVICE_ACCOUNT_KEY, '1');
-  localStorage.setItem(DEVICE_PHONE_KEY, phone);
-  localStorage.setItem('vita_customer_phone', phone);
-}
-
-function saveCustomerSession(
-  data: AuthResponse,
-  fallbackPhone: string,
-  fallbackName = '',
-): CustomerData {
+function saveCustomerSession(data: AuthResponse, fallbackPhone: string, fallbackName = ''): void {
   const token = String(data.access_token || data.token || '').trim();
   const customer = data.customer || data.user || {
     name: fallbackName,
     phone: fallbackPhone,
-    customer_phone: fallbackPhone,
   };
 
   if (token) {
-    [TOKEN_KEY, 'customer_token', 'customer_auth_token'].forEach((key) => {
-      localStorage.setItem(key, token);
-      sessionStorage.setItem(key, token);
-    });
+    localStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.setItem(TOKEN_KEY, token);
   }
 
   const customerJson = JSON.stringify(customer);
   localStorage.setItem(CUSTOMER_KEY, customerJson);
   sessionStorage.setItem(CUSTOMER_KEY, customerJson);
 
-  rememberAccount(fallbackPhone);
+  localStorage.setItem(DEVICE_ACCOUNT_KEY, '1');
+  localStorage.setItem(DEVICE_PHONE_KEY, fallbackPhone);
+  localStorage.setItem('vita_customer_phone', fallbackPhone);
 
-  const customerName = String(
-    customer.name || customer.customer_name || fallbackName || '',
-  ).trim();
+  const customerName = String(customer.name || customer.customer_name || fallbackName || '').trim();
   if (customerName) {
     localStorage.setItem('vita_customer_name', customerName);
   }
 
   window.dispatchEvent(new Event('customer-auth-changed'));
-  return customer;
 }
 
 async function postCustomerAuth<T>(
   path: string,
   data: Record<string, unknown>,
+  token?: string,
 ): Promise<T> {
   const response = await axios.post<T>(`${getAPIBaseURL()}${path}`, data, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     timeout: 30000,
   });
-  return response.data;
-}
 
-function PinInput({
-  id,
-  value,
-  onChange,
-  autoComplete,
-}: {
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-  autoComplete?: string;
-}) {
-  return (
-    <Input
-      id={id}
-      type="password"
-      inputMode="numeric"
-      maxLength={4}
-      value={value}
-      onChange={(event) =>
-        onChange(event.target.value.replace(/\D/g, '').slice(0, 4))
-      }
-      placeholder="••••"
-      className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
-      autoComplete={autoComplete}
-    />
-  );
+  return response.data;
 }
 
 export default function CustomerAuth() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const manageMode = searchParams.get('manage') === '1';
-  const rememberedPhone = useMemo(getRememberedPhone, []);
 
-  const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(
-    hasKnownAccountOnDevice,
+  const registeredOnThisDevice = useMemo(
+    () => localStorage.getItem(DEVICE_ACCOUNT_KEY) === '1',
+    [],
   );
-  // Always start with Login on every device.
-  // New customers can switch to Sign Up manually.
+
+  const rememberedPhone = useMemo(
+    () =>
+      localStorage.getItem(DEVICE_PHONE_KEY) ||
+      localStorage.getItem('vita_customer_phone') ||
+      '+971',
+    [],
+  );
+
   const [mode, setMode] = useState<ScreenMode>('login');
   const [loading, setLoading] = useState(false);
-  const [sessionChecking, setSessionChecking] = useState(
-    Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
-  );
-  const [activeCustomer, setActiveCustomer] = useState<CustomerData | null>(null);
 
   const [loginPhone, setLoginPhone] = useState(rememberedPhone);
   const [loginPin, setLoginPin] = useState('');
 
   const [signupName, setSignupName] = useState('');
-  const [signupPhone, setSignupPhone] = useState(
-    rememberedPhone === '+971' ? '+971' : rememberedPhone,
-  );
+  const [signupPhone, setSignupPhone] = useState(rememberedPhone === '+971' ? '+971' : rememberedPhone);
   const [signupPin, setSignupPin] = useState('');
   const [signupConfirmPin, setSignupConfirmPin] = useState('');
 
-  const [changePhone, setChangePhone] = useState(rememberedPhone);
+  const [resetPhone, setResetPhone] = useState(rememberedPhone);
   const [currentPin, setCurrentPin] = useState('');
-  const [changeNewPin, setChangeNewPin] = useState('');
-  const [changeConfirmPin, setChangeConfirmPin] = useState('');
-
-  useEffect(() => {
-    const token =
-      localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
-
-    if (!token) {
-      setActiveCustomer(null);
-      setSessionChecking(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    axios
-      .get<AuthResponse>(`${getAPIBaseURL()}/api/v1/customer-auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 30000,
-      })
-      .then((response) => {
-        if (cancelled) return;
-        const result = response.data;
-        const customer = saveCustomerSession(result, rememberedPhone);
-        setActiveCustomer(customer || getStoredCustomer());
-        setRegisteredOnThisDevice(true);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-
-        const status = Number((error as any)?.response?.status || 0);
-
-        // Only remove the saved login when the backend clearly says
-        // the token is invalid/expired. A temporary network, Safari/PWA,
-        // Render wake-up, timeout, or offline error must NOT log the
-        // customer out and ask for the PIN again.
-        if (status === 401 || status === 403) {
-          clearCustomerSession();
-          setActiveCustomer(null);
-          return;
-        }
-
-        const storedCustomer = getStoredCustomer();
-        if (storedCustomer) {
-          setActiveCustomer(storedCustomer);
-          setRegisteredOnThisDevice(true);
-        } else {
-          setActiveCustomer(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setSessionChecking(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [rememberedPhone]);
-
-  useEffect(() => {
-    if (isValidPhone(rememberedPhone)) {
-      void checkAccountStatus(rememberedPhone);
-    }
-    // Run only once for the remembered number.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Customer already logged in ho to /account screen par na roko.
-  // Installed app agar purane /account start URL se khule tab bhi seedha Home khulega.
-  useEffect(() => {
-    if (
-      !manageMode &&
-      !sessionChecking &&
-      activeCustomer &&
-      mode !== 'changePin'
-    ) {
-      const timer = window.setTimeout(() => {
-        navigate('/', { replace: true });
-      }, 50);
-
-      return () => window.clearTimeout(timer);
-    }
-  }, [manageMode, sessionChecking, activeCustomer, mode, navigate]);
-
-  async function checkAccountStatus(phoneValue: string): Promise<void> {
-    if (!isValidPhone(phoneValue)) return;
-
-    try {
-      const phone = normalizePhone(phoneValue);
-      const result = await postCustomerAuth<AuthResponse>(
-        '/api/v1/customer-auth/account-status',
-        { phone },
-      );
-
-      if (result.secure_pin_active || result.exists) {
-        rememberAccount(phone);
-        setRegisteredOnThisDevice(true);
-        setLoginPhone(phone);
-        setChangePhone(phone);
-        if (mode === 'signup') setMode('login');
-      }
-    } catch {
-      // This check only controls the Login/Sign Up tabs.
-    }
-  }
-
-  function validatePhoneOrShow(value: string): string | null {
-    const phone = normalizePhone(value);
-    if (!isValidPhone(phone)) {
-      toast.error('Enter mobile number with country code, for example +971501234567.');
-      return null;
-    }
-    return phone;
-  }
+  const [newPin, setNewPin] = useState('');
+  const [confirmNewPin, setConfirmNewPin] = useState('');
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
-    const phone = validatePhoneOrShow(loginPhone);
-    if (!phone) return;
 
+    const phone = normalizePhone(loginPhone);
+    if (!isValidPhone(phone)) {
+      toast.error('Please enter a valid mobile number with country code.');
+      return;
+    }
     if (!isValidPin(loginPin)) {
       toast.error('PIN must be exactly 4 digits.');
       return;
@@ -363,25 +149,17 @@ export default function CustomerAuth() {
 
     setLoading(true);
     try {
-      const result = await postCustomerAuth<AuthResponse>(
-        '/api/v1/customer-auth/login',
-        { phone, customer_phone: phone, pin: loginPin },
-      );
-      const customer = saveCustomerSession(result, phone);
-      setRegisteredOnThisDevice(true);
-      setActiveCustomer(customer);
-      setLoginPin('');
-      toast.success('Login successful');
-      navigate('/', { replace: true });
-    } catch (error) {
-      const message = getErrorMessage(error, 'Login failed');
-      toast.error(message);
+      const result = await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/login', {
+        phone,
+        customer_phone: phone,
+        pin: loginPin,
+      });
 
-      if (message.toLowerCase().includes('sign up once')) {
-        setRegisteredOnThisDevice(false);
-        setSignupPhone(phone);
-        setMode('signup');
-      }
+      saveCustomerSession(result, phone);
+      toast.success('Login successful');
+      navigate('/');
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Invalid mobile number or PIN.'));
     } finally {
       setLoading(false);
     }
@@ -389,12 +167,16 @@ export default function CustomerAuth() {
 
   async function handleSignup(event: FormEvent) {
     event.preventDefault();
+
     const name = signupName.trim();
-    const phone = validatePhoneOrShow(signupPhone);
-    if (!phone) return;
+    const phone = normalizePhone(signupPhone);
 
     if (name.length < 2) {
       toast.error('Please enter your full name.');
+      return;
+    }
+    if (!isValidPhone(phone)) {
+      toast.error('Please enter a valid mobile number with country code.');
       return;
     }
     if (!isValidPin(signupPin)) {
@@ -402,224 +184,126 @@ export default function CustomerAuth() {
       return;
     }
     if (signupPin !== signupConfirmPin) {
-      toast.error('PIN and Confirm PIN do not match.');
+      toast.error('PIN confirmation does not match.');
       return;
     }
 
     setLoading(true);
     try {
-      const result = await postCustomerAuth<AuthResponse>(
-        '/api/v1/customer-auth/signup',
-        {
-          name,
-          customer_name: name,
-          phone,
-          customer_phone: phone,
-          pin: signupPin,
-        },
-      );
-      const customer = saveCustomerSession(result, phone, name);
-      setRegisteredOnThisDevice(true);
-      setActiveCustomer(customer);
-      setSignupPin('');
-      setSignupConfirmPin('');
+      const result = await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/signup', {
+        name,
+        customer_name: name,
+        phone,
+        customer_phone: phone,
+        pin: signupPin,
+      });
+
+      saveCustomerSession(result, phone, name);
       toast.success('Account created successfully');
-      navigate('/', { replace: true });
+      navigate('/');
     } catch (error) {
-      const message = getErrorMessage(error, 'Could not create account');
-      toast.error(message);
-      if (message.toLowerCase().includes('already exists')) {
-        rememberAccount(phone);
-        setRegisteredOnThisDevice(true);
-        setLoginPhone(phone);
-        setMode('login');
-      }
+      toast.error(getErrorMessage(error, 'Could not create account.'));
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleChangePin(event: FormEvent) {
+  async function handleResetPin(event: FormEvent) {
     event.preventDefault();
-    const phone = validatePhoneOrShow(changePhone);
-    if (!phone) return;
 
+    const phone = normalizePhone(resetPhone);
+    if (!isValidPhone(phone)) {
+      toast.error('Please enter a valid mobile number with country code.');
+      return;
+    }
     if (!isValidPin(currentPin)) {
       toast.error('Current PIN must be exactly 4 digits.');
       return;
     }
-    if (!isValidPin(changeNewPin)) {
+    if (!isValidPin(newPin)) {
       toast.error('New PIN must be exactly 4 digits.');
       return;
     }
-    if (currentPin === changeNewPin) {
-      toast.error('New PIN must be different from current PIN.');
+    if (newPin === currentPin) {
+      toast.error('New PIN must be different from the current PIN.');
       return;
     }
-    if (changeNewPin !== changeConfirmPin) {
-      toast.error('New PIN and Confirm PIN do not match.');
+    if (newPin !== confirmNewPin) {
+      toast.error('New PIN confirmation does not match.');
       return;
     }
 
     setLoading(true);
     try {
-      await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/change-pin', {
+      // Login first so the old PIN is verified and a valid customer token is obtained.
+      const loginResult = await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/login', {
         phone,
         customer_phone: phone,
-        current_pin: currentPin,
-        old_pin: currentPin,
-        new_pin: changeNewPin,
+        pin: currentPin,
       });
+
+      const token = String(loginResult.access_token || loginResult.token || '').trim();
+      if (!token) {
+        throw new Error('Login token was not returned by the server.');
+      }
+
+      await postCustomerAuth<AuthResponse>(
+        '/api/v1/customer-auth/change-pin',
+        {
+          current_pin: currentPin,
+          old_pin: currentPin,
+          new_pin: newPin,
+          phone,
+          customer_phone: phone,
+        },
+        token,
+      );
+
+      saveCustomerSession(loginResult, phone);
+      localStorage.setItem(DEVICE_ACCOUNT_KEY, '1');
+      localStorage.setItem(DEVICE_PHONE_KEY, phone);
+
+      setLoginPhone(phone);
+      setLoginPin('');
       setCurrentPin('');
-      setChangeNewPin('');
-      setChangeConfirmPin('');
+      setNewPin('');
+      setConfirmNewPin('');
       setMode('login');
-      toast.success('PIN changed successfully');
+      toast.success('PIN changed successfully. Please login with your new PIN.');
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Could not change PIN'));
+      toast.error(getErrorMessage(error, 'Could not change PIN. Check your current PIN.'));
     } finally {
       setLoading(false);
     }
   }
 
-  function handleLogout() {
-    clearCustomerSession();
-    setActiveCustomer(null);
-    setMode('login');
-    setLoginPin('');
-    toast.success('Logged out');
-  }
-
-  function openWhatsApp() {
-    const phone = normalizePhone(loginPhone);
-    const message = encodeURIComponent(
-      `Hello Fai Fai Juice, I forgot my customer PIN. My registered mobile number is ${
-        isValidPhone(phone) ? phone : '________'
-      }. Please help me reset it.`,
-    );
-    window.open(`https://wa.me/${RESTAURANT_WHATSAPP}?text=${message}`, '_blank', 'noopener,noreferrer');
-  }
-
-  const cardClass =
-    'space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6 shadow-2xl';
-  const normalInputClass =
-    'mt-2 h-14 border-slate-700 bg-slate-900 text-white placeholder:text-slate-500';
-
-  // A valid saved session must go straight to the Customer Home.
-  // Show only a tiny redirect loader so the old "Account logged in" card never flashes.
-  if (
-    !manageMode &&
-    !sessionChecking &&
-    activeCustomer &&
-    mode !== 'changePin'
-  ) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center text-white">
-        <div className="text-center">
-          <div className="text-3xl font-black">
-            <span className="text-white">Fai Fai</span>{' '}
-            <span className="text-red-600">Juice</span>
-          </div>
-          <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mt-4" />
-        </div>
-      </div>
-    );
-  }
-
-  const activeName = String(
-    activeCustomer?.name || activeCustomer?.customer_name || 'Customer',
-  );
-  const activePhone = String(
-    activeCustomer?.phone || activeCustomer?.customer_phone || rememberedPhone,
-  );
-
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="mx-auto w-full max-w-md px-4 pb-16 pt-8">
+    <div className="min-h-screen bg-black px-4 py-8 text-white">
+      <div className="mx-auto w-full max-w-md">
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="mb-8 flex items-center gap-2 text-sm text-gray-400 hover:text-white"
+          className="mb-8 flex items-center gap-2 text-sm text-gray-400 transition hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
-        <div className="mb-8 text-center">
-          <h1 className="text-4xl font-extrabold">
-            Fai Fai <span className="text-red-600">Juice</span>
+        <div className="mb-9 text-center">
+          <h1 className="text-4xl font-black tracking-tight">
+            <span className="text-white">Vita</span>{' '}
+            <span className="text-red-600">Napoli</span>
           </h1>
           <p className="mt-2 text-gray-500">Customer Account</p>
         </div>
 
-        {sessionChecking && (
-          <div className={cardClass}>
-            <p className="text-center text-gray-400">Checking customer session…</p>
-          </div>
-        )}
-
-        {!sessionChecking && activeCustomer && mode !== 'changePin' && (
-          <div className={cardClass}>
-            <div className="flex flex-col items-center text-center">
-              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-600/15">
-                <ShieldCheck className="h-9 w-9 text-green-500" />
-              </div>
-              <h2 className="text-2xl font-bold">Account logged in</h2>
-              <p className="mt-2 text-lg text-white">{activeName}</p>
-              <p className="text-sm text-gray-400">{activePhone}</p>
-            </div>
-
-            <Button
-              type="button"
-              onClick={() => navigate('/')}
-              className="h-12 w-full bg-red-600 hover:bg-red-700"
-            >
-              <Home className="mr-2 h-4 w-4" />
-              Open Customer App
-            </Button>
-
-            <Button
-              type="button"
-              onClick={() => navigate('/my-orders')}
-              variant="outline"
-              className="h-12 w-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800"
-            >
-              <ShoppingBag className="mr-2 h-4 w-4" />
-              My Orders
-            </Button>
-
-            <Button
-              type="button"
-              onClick={() => {
-                setChangePhone(activePhone);
-                setMode('changePin');
-              }}
-              variant="outline"
-              className="h-12 w-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800"
-            >
-              <KeyRound className="mr-2 h-4 w-4" />
-              Change PIN
-            </Button>
-
-            <Button
-              type="button"
-              onClick={handleLogout}
-              variant="ghost"
-              className="h-12 w-full text-red-400 hover:bg-red-600/10 hover:text-red-300"
-            >
-              <LogOut className="mr-2 h-4 w-4" />
-              Logout
-            </Button>
-          </div>
-        )}
-
-        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && (
-          <div className="mb-7 grid grid-cols-2 rounded-xl border border-slate-800 bg-slate-950 p-1">
+        {mode !== 'reset' && !registeredOnThisDevice && (
+          <div className="mb-7 grid grid-cols-2 rounded-xl bg-slate-900 p-1">
             <button
               type="button"
               onClick={() => setMode('login')}
-              className={`rounded-lg px-4 py-4 font-semibold ${
-                mode === 'login' ? 'bg-red-600 text-white' : 'text-gray-400'
+              className={`rounded-lg px-4 py-3 font-semibold transition ${
+                mode === 'login' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
               Login
@@ -627,8 +311,8 @@ export default function CustomerAuth() {
             <button
               type="button"
               onClick={() => setMode('signup')}
-              className={`rounded-lg px-4 py-4 font-semibold ${
-                mode === 'signup' ? 'bg-red-600 text-white' : 'text-gray-400'
+              className={`rounded-lg px-4 py-3 font-semibold transition ${
+                mode === 'signup' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
               Sign Up
@@ -636,260 +320,212 @@ export default function CustomerAuth() {
           </div>
         )}
 
-        {!sessionChecking && !activeCustomer && mode === 'login' && (
-          <form onSubmit={handleLogin} className={cardClass}>
+        {mode === 'login' && (
+          <form onSubmit={handleLogin} className="space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6">
             <div>
-              <Label htmlFor="login-phone">Mobile Number</Label>
+              <Label htmlFor="login-phone" className="text-gray-200">
+                Mobile Number
+              </Label>
               <Input
                 id="login-phone"
                 inputMode="tel"
                 value={loginPhone}
                 onChange={(event) => setLoginPhone(event.target.value)}
-                onBlur={() => void checkAccountStatus(loginPhone)}
                 placeholder="+971501234567"
-                className={normalInputClass}
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-white"
                 autoComplete="tel"
               />
-              <p className="mt-2 text-xs text-gray-600">
-                Include country code, for example +971501234567
-              </p>
+              <p className="mt-2 text-xs text-gray-600">Include country code, for example +971501234567</p>
             </div>
 
             <div>
-              <Label htmlFor="login-pin">4-Digit PIN</Label>
-              <PinInput
+              <Label htmlFor="login-pin" className="text-gray-200">
+                4-Digit PIN
+              </Label>
+              <Input
                 id="login-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
                 value={loginPin}
-                onChange={setLoginPin}
+                onChange={(event) => setLoginPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
                 autoComplete="current-password"
               />
             </div>
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
-            >
-              {loading ? 'Logging in…' : 'Login'}
+            <Button type="submit" disabled={loading} className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700">
+              {loading ? 'Please wait…' : 'Login'}
             </Button>
 
             <button
               type="button"
-              onClick={() => setMode('forgotPin')}
-              className="w-full text-sm text-red-400 hover:text-red-300"
+              onClick={() => setMode('reset')}
+              className="flex w-full items-center justify-center gap-2 text-sm font-medium text-red-400 hover:text-red-300"
             >
-              Forgot PIN?
+              <KeyRound className="h-4 w-4" />
+              Reset / Change PIN
             </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setChangePhone(loginPhone);
-                setMode('changePin');
-              }}
-              className="w-full text-sm text-gray-400 hover:text-white"
-            >
-              Change PIN
-            </button>
-
-            {registeredOnThisDevice && (
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.removeItem(DEVICE_ACCOUNT_KEY);
-                  localStorage.removeItem(DEVICE_PHONE_KEY);
-                  localStorage.removeItem('vita_customer_phone');
-                  setRegisteredOnThisDevice(false);
-                  setSignupPhone('+971');
-                  setMode('signup');
-                }}
-                className="w-full text-xs text-gray-600 hover:text-gray-400"
-              >
-                This is a different/new mobile number
-              </button>
-            )}
           </form>
         )}
 
-        {!sessionChecking && !activeCustomer && mode === 'signup' && (
-          <form onSubmit={handleSignup} className={cardClass}>
+        {mode === 'signup' && !registeredOnThisDevice && (
+          <form onSubmit={handleSignup} className="space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6">
             <div>
-              <h2 className="text-xl font-bold">Create Customer Account</h2>
-              <p className="mt-2 text-sm text-gray-400">
-                Enter your mobile number and create a private 4-digit PIN.
-              </p>
-            </div>
-
-            <div>
-              <Label htmlFor="signup-name">Full Name</Label>
+              <Label htmlFor="signup-name" className="text-gray-200">
+                Full Name
+              </Label>
               <Input
                 id="signup-name"
                 value={signupName}
                 onChange={(event) => setSignupName(event.target.value)}
                 placeholder="Your full name"
-                className={normalInputClass}
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-white"
                 autoComplete="name"
               />
             </div>
 
             <div>
-              <Label htmlFor="signup-phone">Mobile Number</Label>
+              <Label htmlFor="signup-phone" className="text-gray-200">
+                Mobile Number
+              </Label>
               <Input
                 id="signup-phone"
                 inputMode="tel"
                 value={signupPhone}
                 onChange={(event) => setSignupPhone(event.target.value)}
-                onBlur={() => void checkAccountStatus(signupPhone)}
                 placeholder="+971501234567"
-                className={normalInputClass}
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-white"
                 autoComplete="tel"
               />
             </div>
 
             <div>
-              <Label htmlFor="signup-pin">Create 4-Digit PIN</Label>
-              <PinInput
-                id="signup-pin"
-                value={signupPin}
-                onChange={setSignupPin}
-                autoComplete="new-password"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="signup-confirm-pin">Confirm PIN</Label>
-              <PinInput
-                id="signup-confirm-pin"
-                value={signupConfirmPin}
-                onChange={setSignupConfirmPin}
-                autoComplete="new-password"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
-            >
-              {loading ? 'Creating account…' : 'Create Account'}
-            </Button>
-          </form>
-        )}
-
-        {!sessionChecking && !activeCustomer && mode === 'forgotPin' && (
-          <div className={cardClass}>
-            <div>
-              <h2 className="text-xl font-bold">Forgot PIN</h2>
-              <p className="mt-2 text-sm leading-6 text-gray-400">
-                OTP has been removed. For security, contact Fai Fai Juice and ask the shop to reset your PIN.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
-              Tell the restaurant your registered mobile number. Do not share any old PIN.
-            </div>
-
-            <Button
-              type="button"
-              onClick={openWhatsApp}
-              className="h-13 w-full bg-green-600 hover:bg-green-700"
-            >
-              <MessageCircle className="mr-2 h-5 w-5" />
-              WhatsApp Restaurant
-            </Button>
-
-            <a
-              href={`tel:${RESTAURANT_PHONE_TEL}`}
-              className="flex h-13 w-full items-center justify-center rounded-md border border-slate-700 bg-slate-900 font-medium text-white hover:bg-slate-800"
-            >
-              <Phone className="mr-2 h-5 w-5" />
-              Call {RESTAURANT_PHONE_DISPLAY}
-            </a>
-
-            <button
-              type="button"
-              onClick={() => setMode('login')}
-              className="w-full text-sm text-gray-400 hover:text-white"
-            >
-              Back to Login
-            </button>
-          </div>
-        )}
-
-        {!sessionChecking && mode === 'changePin' && (
-          <form onSubmit={handleChangePin} className={cardClass}>
-            <div>
-              <h2 className="text-xl font-bold">Change PIN</h2>
-              <p className="mt-2 text-sm text-gray-400">
-                Use this option when you remember your current PIN.
-              </p>
-            </div>
-
-            <div>
-              <Label htmlFor="change-phone">Mobile Number</Label>
+              <Label htmlFor="signup-pin" className="text-gray-200">
+                Create 4-Digit PIN
+              </Label>
               <Input
-                id="change-phone"
+                id="signup-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={signupPin}
+                onChange={(event) => setSignupPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="signup-confirm-pin" className="text-gray-200">
+                Confirm PIN
+              </Label>
+              <Input
+                id="signup-confirm-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={signupConfirmPin}
+                onChange={(event) => setSignupConfirmPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
+                autoComplete="new-password"
+              />
+            </div>
+
+            <Button type="submit" disabled={loading} className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700">
+              {loading ? 'Please wait…' : 'Create Account'}
+            </Button>
+          </form>
+        )}
+
+        {mode === 'reset' && (
+          <form onSubmit={handleResetPin} className="space-y-5 rounded-2xl border border-slate-800 bg-slate-950 p-6">
+            <div className="mb-1">
+              <h2 className="text-xl font-bold">Reset / Change PIN</h2>
+              <p className="mt-1 text-sm text-gray-500">Your current PIN is required for security.</p>
+            </div>
+
+            <div>
+              <Label htmlFor="reset-phone" className="text-gray-200">
+                Mobile Number
+              </Label>
+              <Input
+                id="reset-phone"
                 inputMode="tel"
-                value={changePhone}
-                onChange={(event) => setChangePhone(event.target.value)}
+                value={resetPhone}
+                onChange={(event) => setResetPhone(event.target.value)}
                 placeholder="+971501234567"
-                className={normalInputClass}
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-white"
                 autoComplete="tel"
               />
             </div>
 
             <div>
-              <Label htmlFor="current-pin">Current PIN</Label>
-              <PinInput
+              <Label htmlFor="current-pin" className="text-gray-200">
+                Current PIN
+              </Label>
+              <Input
                 id="current-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
                 value={currentPin}
-                onChange={setCurrentPin}
-                autoComplete="current-password"
+                onChange={(event) => setCurrentPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
               />
             </div>
 
             <div>
-              <Label htmlFor="change-new-pin">New 4-Digit PIN</Label>
-              <PinInput
-                id="change-new-pin"
-                value={changeNewPin}
-                onChange={setChangeNewPin}
-                autoComplete="new-password"
+              <Label htmlFor="new-pin" className="text-gray-200">
+                New 4-Digit PIN
+              </Label>
+              <Input
+                id="new-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={newPin}
+                onChange={(event) => setNewPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
               />
             </div>
 
             <div>
-              <Label htmlFor="change-confirm-pin">Confirm New PIN</Label>
-              <PinInput
-                id="change-confirm-pin"
-                value={changeConfirmPin}
-                onChange={setChangeConfirmPin}
-                autoComplete="new-password"
+              <Label htmlFor="confirm-new-pin" className="text-gray-200">
+                Confirm New PIN
+              </Label>
+              <Input
+                id="confirm-new-pin"
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={confirmNewPin}
+                onChange={(event) => setConfirmNewPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="••••"
+                className="mt-2 h-14 border-slate-700 bg-slate-900 text-center text-xl tracking-[0.7em] text-white"
               />
             </div>
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
-            >
-              {loading ? 'Saving…' : 'Change PIN'}
+            <Button type="submit" disabled={loading} className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700">
+              {loading ? 'Please wait…' : 'Save New PIN'}
             </Button>
 
             <button
               type="button"
               onClick={() => setMode('login')}
-              className="w-full text-sm text-gray-400 hover:text-white"
+              className="w-full text-sm font-medium text-gray-400 hover:text-white"
             >
               Back to Login
             </button>
           </form>
         )}
 
-        <div className="mt-8 flex items-center justify-center gap-2 text-xs text-gray-700">
-          <KeyRound className="h-3.5 w-3.5" />
-          Never share your PIN with anyone.
-        </div>
+        <p className="mt-8 text-center text-xs text-gray-700">Never share your PIN with anyone.</p>
       </div>
     </div>
   );
