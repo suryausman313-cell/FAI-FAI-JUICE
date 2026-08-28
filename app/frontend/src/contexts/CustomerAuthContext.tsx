@@ -80,7 +80,16 @@ export function CustomerAuthProvider({
 
       setCustomer(currentCustomer);
     } catch (err) {
-      setCustomer(null);
+      // Safari/iPhone can briefly fail the session refresh after login or reload.
+      // Keep a valid locally saved customer/token for temporary browser/network errors.
+      const savedCustomer = customerAuthApi.getSavedCustomer();
+      const savedToken = customerAuthApi.getToken();
+
+      if (savedCustomer && savedToken) {
+        setCustomer(savedCustomer);
+      } else {
+        setCustomer(null);
+      }
 
       setError(
         err instanceof Error
