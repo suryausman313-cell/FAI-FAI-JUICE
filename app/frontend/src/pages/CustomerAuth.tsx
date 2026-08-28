@@ -3,11 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   ArrowLeft,
-  Bell,
-  BellOff,
   Home,
   KeyRound,
-  Loader2,
   LogOut,
   MessageCircle,
   Phone,
@@ -20,14 +17,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
-import { useTranslation } from '@/lib/i18n';
-import { LanguageSwitcher } from '@/components/LanguagePicker';
-import {
-  disableCustomerPush,
-  enableCustomerPush,
-  getCustomerPushState,
-  isCustomerPushPreferenceEnabled,
-} from '@/lib/customer-push';
 
 type ScreenMode = 'login' | 'signup' | 'forgotPin' | 'changePin';
 
@@ -57,9 +46,9 @@ const DEVICE_PHONE_KEY = 'vita_customer_registered_phone';
 const TOKEN_KEY = 'vita_customer_token';
 const CUSTOMER_KEY = 'vita_customer';
 
-const RESTAURANT_PHONE_DISPLAY = '+971 56 969 7233';
-const RESTAURANT_PHONE_TEL = '+971569697233';
-const RESTAURANT_WHATSAPP = '971569697233';
+const RESTAURANT_PHONE_DISPLAY = '+971 52 109 1092';
+const RESTAURANT_PHONE_TEL = '+971521091092';
+const RESTAURANT_WHATSAPP = '971521091092';
 
 function normalizePhone(value: string): string {
   const raw = value.trim();
@@ -218,7 +207,6 @@ function PinInput({
 }
 
 export default function CustomerAuth() {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const manageMode = searchParams.get('manage') === '1';
@@ -227,18 +215,14 @@ export default function CustomerAuth() {
   const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(
     hasKnownAccountOnDevice,
   );
-  const [mode, setMode] = useState<ScreenMode>(() =>
-    hasKnownAccountOnDevice() ? 'login' : 'signup',
-  );
+  // Always start with Login on every device.
+  // New customers can switch to Sign Up manually.
+  const [mode, setMode] = useState<ScreenMode>('login');
   const [loading, setLoading] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(
     Boolean(localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)),
   );
   const [activeCustomer, setActiveCustomer] = useState<CustomerData | null>(null);
-  const [pushStatus, setPushStatus] = useState<
-    'checking' | 'on' | 'off' | 'blocked' | 'unsupported' | 'error'
-  >('checking');
-  const [pushBusy, setPushBusy] = useState(false);
 
   const [loginPhone, setLoginPhone] = useState(rememberedPhone);
   const [loginPin, setLoginPin] = useState('');
@@ -279,10 +263,28 @@ export default function CustomerAuth() {
         setActiveCustomer(customer || getStoredCustomer());
         setRegisteredOnThisDevice(true);
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
-        clearCustomerSession();
-        setActiveCustomer(null);
+
+        const status = Number((error as any)?.response?.status || 0);
+
+        // Only remove the saved login when the backend clearly says
+        // the token is invalid/expired. A temporary network, Safari/PWA,
+        // Render wake-up, timeout, or offline error must NOT log the
+        // customer out and ask for the PIN again.
+        if (status === 401 || status === 403) {
+          clearCustomerSession();
+          setActiveCustomer(null);
+          return;
+        }
+
+        const storedCustomer = getStoredCustomer();
+        if (storedCustomer) {
+          setActiveCustomer(storedCustomer);
+          setRegisteredOnThisDevice(true);
+        } else {
+          setActiveCustomer(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setSessionChecking(false);
@@ -311,60 +313,12 @@ export default function CustomerAuth() {
       mode !== 'changePin'
     ) {
       const timer = window.setTimeout(() => {
-        window.location.replace('/');
+        navigate('/', { replace: true });
       }, 50);
 
       return () => window.clearTimeout(timer);
     }
-  }, [manageMode, sessionChecking, activeCustomer, mode]);
-
-  async function refreshPushStatus(): Promise<void> {
-    if (!activeCustomer) return;
-    try {
-      const state = await getCustomerPushState();
-      if (!state.supported) {
-        setPushStatus('unsupported');
-      } else if (state.permission === 'denied') {
-        setPushStatus('blocked');
-      } else if (state.subscribed && isCustomerPushPreferenceEnabled()) {
-        setPushStatus('on');
-      } else {
-        setPushStatus('off');
-      }
-    } catch {
-      setPushStatus('error');
-    }
-  }
-
-  useEffect(() => {
-    if (activeCustomer) {
-      void refreshPushStatus();
-    }
-    // refreshPushStatus intentionally depends on current customer session only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCustomer]);
-
-  async function toggleCustomerNotifications(): Promise<void> {
-    if (pushBusy || pushStatus === 'unsupported' || pushStatus === 'blocked') return;
-    setPushBusy(true);
-    try {
-      if (pushStatus === 'on') {
-        await disableCustomerPush();
-        setPushStatus('off');
-        toast.success('Order notifications turned off');
-      } else {
-        await enableCustomerPush();
-        setPushStatus('on');
-        toast.success('Order notifications enabled');
-      }
-    } catch (error) {
-      const message = getErrorMessage(error, 'Could not change notification setting');
-      toast.error(message);
-      await refreshPushStatus();
-    } finally {
-      setPushBusy(false);
-    }
-  }
+  }, [manageMode, sessionChecking, activeCustomer, mode, navigate]);
 
   async function checkAccountStatus(phoneValue: string): Promise<void> {
     if (!isValidPhone(phoneValue)) return;
@@ -418,7 +372,7 @@ export default function CustomerAuth() {
       setActiveCustomer(customer);
       setLoginPin('');
       toast.success('Login successful');
-      window.location.replace('/');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Login failed');
       toast.error(message);
@@ -470,7 +424,7 @@ export default function CustomerAuth() {
       setSignupPin('');
       setSignupConfirmPin('');
       toast.success('Account created successfully');
-      window.location.replace('/');
+      navigate('/', { replace: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Could not create account');
       toast.error(message);
@@ -595,7 +549,7 @@ export default function CustomerAuth() {
           <h1 className="text-4xl font-extrabold">
             Fai Fai <span className="text-red-600">Juice</span>
           </h1>
-          <p className="mt-2 text-gray-500">{t('account.customer_account')}</p>
+          <p className="mt-2 text-gray-500">Customer Account</p>
         </div>
 
         {sessionChecking && (
@@ -610,7 +564,7 @@ export default function CustomerAuth() {
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-600/15">
                 <ShieldCheck className="h-9 w-9 text-green-500" />
               </div>
-              <h2 className="text-2xl font-bold">{t('account.logged_in')}</h2>
+              <h2 className="text-2xl font-bold">Account logged in</h2>
               <p className="mt-2 text-lg text-white">{activeName}</p>
               <p className="text-sm text-gray-400">{activePhone}</p>
             </div>
@@ -633,49 +587,6 @@ export default function CustomerAuth() {
               <ShoppingBag className="mr-2 h-4 w-4" />
               My Orders
             </Button>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                    pushStatus === 'on' ? 'bg-green-600/15 text-green-400' : 'bg-slate-800 text-gray-400'
-                  }`}>
-                    {pushStatus === 'on' ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-white">Order Notifications</p>
-                    <p className="mt-1 text-xs text-gray-400">
-                      {pushStatus === 'on'
-                        ? 'ON — you will keep receiving order updates on this device.'
-                        : pushStatus === 'blocked'
-                          ? 'Blocked by browser/device settings.'
-                          : pushStatus === 'unsupported'
-                            ? 'Notifications are not supported on this browser.'
-                            : 'OFF — tap Enable to receive order updates.'}
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => void toggleCustomerNotifications()}
-                  disabled={pushBusy || pushStatus === 'checking' || pushStatus === 'blocked' || pushStatus === 'unsupported'}
-                  className={pushStatus === 'on'
-                    ? 'shrink-0 bg-slate-700 text-white hover:bg-slate-600'
-                    : 'shrink-0 bg-green-600 text-white hover:bg-green-700'}
-                >
-                  {pushBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : pushStatus === 'on' ? (
-                    'Turn Off'
-                  ) : pushStatus === 'blocked' ? (
-                    'Blocked'
-                  ) : (
-                    'Enable'
-                  )}
-                </Button>
-              </div>
-            </div>
 
             <Button
               type="button"
@@ -702,7 +613,7 @@ export default function CustomerAuth() {
           </div>
         )}
 
-        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && !registeredOnThisDevice && (
+        {!sessionChecking && !activeCustomer && (mode === 'login' || mode === 'signup') && (
           <div className="mb-7 grid grid-cols-2 rounded-xl border border-slate-800 bg-slate-950 p-1">
             <button
               type="button"
@@ -759,7 +670,7 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? t('account.logging_in') : t('account.login')}
+              {loading ? 'Logging in…' : 'Login'}
             </Button>
 
             <button
@@ -800,10 +711,10 @@ export default function CustomerAuth() {
           </form>
         )}
 
-        {!sessionChecking && !activeCustomer && mode === 'signup' && !registeredOnThisDevice && (
+        {!sessionChecking && !activeCustomer && mode === 'signup' && (
           <form onSubmit={handleSignup} className={cardClass}>
             <div>
-              <h2 className="text-xl font-bold">{t('account.create')}</h2>
+              <h2 className="text-xl font-bold">Create Customer Account</h2>
               <p className="mt-2 text-sm text-gray-400">
                 Enter your mobile number and create a private 4-digit PIN.
               </p>
@@ -860,7 +771,7 @@ export default function CustomerAuth() {
               disabled={loading}
               className="h-14 w-full bg-red-600 text-lg font-bold hover:bg-red-700"
             >
-              {loading ? t('account.creating') : t('account.create_button')}
+              {loading ? 'Creating account…' : 'Create Account'}
             </Button>
           </form>
         )}
