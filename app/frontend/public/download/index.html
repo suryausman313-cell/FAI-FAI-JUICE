@@ -11,12 +11,12 @@
   const WEBSITE =
     "https://fai-fai-juice.pages.dev/";
 
+  // Abhi Closed Testing ke liye
   const PLAY_STORE =
-    "https://play.google.com/store/apps/details?id=com.faifaijuice.app";
+    "https://play.google.com/apps/testing/com.faifaijuice.app";
 
-  // Abhi Play Store public live nahi hai.
-  // Public live hone ke baad false ko true kar dena.
-  const PLAY_STORE_LIVE = false;
+  // Abhi test ke liye true
+  const PLAY_STORE_LIVE = true;
 
   const ua = navigator.userAgent || "";
 
@@ -28,6 +28,8 @@
 
   if (isAndroid && PLAY_STORE_LIVE) {
     window.location.replace(PLAY_STORE);
+  } else if (isIOS) {
+    window.location.replace(WEBSITE);
   } else {
     window.location.replace(WEBSITE);
   }
