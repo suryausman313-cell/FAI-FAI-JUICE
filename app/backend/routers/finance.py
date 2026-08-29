@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.rider_auth import require_rider_id
+from services.rider_push_service import send_rider_push
 from services.branch_kitchen_auth import verify_branch_kitchen_pin
 from models.delivery_assignments import Delivery_assignments
 from models.orders import Orders
@@ -1070,6 +1071,32 @@ async def review_admin_pickup_cash_submission(
 
     await db.commit()
     await db.refresh(settlement)
+
+    # Notify the Rider after Admin has successfully reviewed the cash.
+    # Push failure must never undo a successful approval/rejection.
+    try:
+        status_label = "approved" if data.status == "approved" else "rejected"
+        title = "Cash Approved" if data.status == "approved" else "Cash Rejected"
+        body = (
+            f"Your cash submission of AED {_money(settlement.amount):.2f} was {status_label}."
+        )
+        if settlement.admin_note:
+            body += f" Note: {settlement.admin_note}"
+        await send_rider_push(
+            db,
+            rider_id=int(settlement.rider_id),
+            title=title,
+            body=body,
+            url="/rider",
+            tag=f"rider-cash-review:{settlement.id}:{data.status}",
+            kind="cash_approved" if data.status == "approved" else "cash_rejected",
+        )
+    except Exception:
+        logger.exception(
+            "Could not notify rider %s about cash submission %s review",
+            settlement.rider_id,
+            settlement.id,
+        )
 
     return {
         "success": True,
