@@ -217,13 +217,7 @@ export default function Index() {
           height: 'min(177.68vw, 100vh)',
         }}
       >
-        <img
-          src="/fai-fai-welcome-v9.png"
-          alt="Welcome to Fai Fai Juice"
-          className="ff-welcome-art absolute inset-0 h-full w-full object-contain select-none"
-          draggable={false}
-          onError={dismissWelcome}
-        />
+        <video src="/fai-fai-welcome-video.mp4" className="ff-welcome-art absolute inset-0 h-full w-full object-contain select-none" autoPlay muted playsInline />
 
         {/* Soft moving light makes the still artwork feel cinematic/video-like. */}
         <div
