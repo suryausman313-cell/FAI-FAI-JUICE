@@ -118,35 +118,11 @@ export default function Index() {
     try { sessionStorage.setItem('fai_fai_welcome_seen', '1'); } catch { /* optional storage */ }
   }, []);
 
-  const welcomeVideoRef = useRef<HTMLVideoElement | null>(null);
-
   useEffect(() => {
     if (!showWelcome) return;
-    const video = welcomeVideoRef.current;
-    if (!video) return;
-
-    // Try to start immediately. Mobile browsers may block autoplay with sound;
-    // in that case the first tap anywhere on the welcome screen starts sound.
-    video.muted = false;
-    video.volume = 1;
-    const playPromise = video.play();
-    if (playPromise) playPromise.catch(() => { /* browser autoplay policy */ });
-
-    const startWithSound = () => {
-      video.muted = false;
-      video.volume = 1;
-      video.play().catch(() => { /* browser policy */ });
-      window.removeEventListener('pointerdown', startWithSound);
-      window.removeEventListener('touchstart', startWithSound);
-    };
-    window.addEventListener('pointerdown', startWithSound, { once: true });
-    window.addEventListener('touchstart', startWithSound, { once: true, passive: true });
-
-    return () => {
-      window.removeEventListener('pointerdown', startWithSound);
-      window.removeEventListener('touchstart', startWithSound);
-    };
-  }, [showWelcome]);
+    // The welcome closes only when the video finishes or the user taps Skip.
+    return undefined;
+  }, [showWelcome, dismissWelcome]);
 
   function getStatusColor(status: string) {
     switch (status) {
@@ -176,26 +152,29 @@ export default function Index() {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   }
 
+  const welcomeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [welcomeNeedsTap, setWelcomeNeedsTap] = useState(false);
+
+  const startWelcomeVideo = useCallback(() => {
+    const video = welcomeVideoRef.current;
+    if (!video) return;
+    video.muted = false;
+    void video.play().then(() => setWelcomeNeedsTap(false)).catch(() => setWelcomeNeedsTap(true));
+  }, []);
+
   const welcomeOverlay = (
     <div
       className="fixed inset-0 z-[9999] bg-black flex items-center justify-center overflow-hidden"
       aria-label="Welcome to Fai Fai Juice"
       role="dialog"
       aria-modal="true"
-      onClick={() => {
-        const video = welcomeVideoRef.current;
-        if (video) {
-          video.muted = false;
-          video.volume = 1;
-          video.play().catch(() => { /* browser policy */ });
-        }
-      }}
+      onPointerDownCapture={startWelcomeVideo}
     >
       <div
         className="relative shrink-0 overflow-hidden bg-black"
         style={{
-          width: 'min(100vw, 56.25vh)',
-          height: 'min(177.78vw, 100vh)',
+          width: 'min(100vw, 56.28vh)',
+          height: 'min(177.68vw, 100vh)',
         }}
       >
         <video
@@ -206,27 +185,46 @@ export default function Index() {
           playsInline
           preload="auto"
           controls={false}
-          muted={false}
-          volume={1}
+          disablePictureInPicture
+          onCanPlay={startWelcomeVideo}
           onEnded={dismissWelcome}
           onError={dismissWelcome}
           aria-label="Fai Fai Juice welcome video"
         />
 
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-24"
+          style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,.42), transparent)' }}
+        />
+
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
+          onClick={(event) => {
+            event.stopPropagation();
             dismissWelcome();
           }}
           aria-label={language === 'ar' ? 'تخطي' : 'Skip'}
-          className="absolute right-3 top-3 z-30 rounded-full border border-white/35 bg-black/45 px-4 py-2 text-sm font-semibold text-white shadow-lg backdrop-blur-md active:scale-95 transition"
+          className="absolute right-3 top-3 z-30 rounded-full border border-white/40 bg-black/45 px-4 py-2 text-sm font-semibold text-white backdrop-blur-md shadow-lg transition hover:bg-black/65 active:scale-95"
         >
           {language === 'ar' ? 'تخطي' : 'Skip'}
         </button>
+
+        {welcomeNeedsTap && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              startWelcomeVideo();
+            }}
+            className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-5 py-3 text-sm font-semibold text-white backdrop-blur-md border border-white/25"
+          >
+            Tap to play with sound
+          </button>
+        )}
       </div>
     </div>
   );
+
 
   if (loading) {
     if (showWelcome) return welcomeOverlay;
