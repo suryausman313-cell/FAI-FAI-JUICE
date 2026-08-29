@@ -37,7 +37,16 @@ type Period =
   | 'all'
   | 'custom';
 
-
+interface RiderFinanceItem {
+  rider_id: number;
+  rider_name: string;
+  rider_phone: string;
+  is_active: boolean;
+  totals: Record<string, number>;
+  settlements: Record<string, number>;
+  payouts?: Record<string, number>;
+  current_balance: Record<string, number>;
+}
 
 interface Summary {
   period: {
@@ -52,6 +61,7 @@ interface Summary {
   payouts?: Record<string, number>;
   pickup_cash?: Record<string, number>;
   cash_control?: Record<string, number>;
+  riders?: RiderFinanceItem[];
 }
 
 interface Submission {
@@ -351,21 +361,88 @@ export default function AdminFinance() {
     }
   }
 
+  async function handleEnablePush() {
+    setPushWorking(true);
+    try {
+      const state = await enableAdminPush({
+        cashEnabled: pushState.cashEnabled,
+        readyEnabled: pushState.readyEnabled,
+      });
+      setPushState(state);
+      localStorage.setItem('admin_push_ever_enabled', '1');
+      setPushEverEnabled(true);
+      toast.success('Admin background notifications enabled');
+      await scanAdminPushEventsNow();
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not enable notifications');
+    } finally {
+      setPushWorking(false);
+    }
+  }
+
+  async function handleDisablePush() {
+    setPushWorking(true);
+    try {
+      setPushState(await disableAdminPush());
+      toast.success('Admin background notifications disabled');
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not disable notifications');
+    } finally {
+      setPushWorking(false);
+    }
+  }
+
+  async function changePreference(
+    key: 'cashEnabled' | 'readyEnabled',
+    enabled: boolean,
+  ) {
+    const preferences = {
+      cashEnabled: key === 'cashEnabled' ? enabled : pushState.cashEnabled,
+      readyEnabled: key === 'readyEnabled' ? enabled : pushState.readyEnabled,
+    };
+
+    setPushState(current => ({ ...current, ...preferences }));
+    try {
+      const state = await updateAdminPushPreferences(preferences);
+      setPushState(state);
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not save notification setting');
+      await refreshPushState();
+    }
+  }
+
+  async function handlePushTest() {
+    setPushWorking(true);
+    try {
+      const sent = await sendAdminPushTest();
+      toast.success(`Test notification sent to ${sent} Admin device(s)`);
+    } catch (error: any) {
+      toast.error(error?.message || 'Test notification failed');
+    } finally {
+      setPushWorking(false);
+    }
+  }
 
   const totals = summary?.totals || {};
-  const cashControl = summary?.cash_control || {};
+  const settlements = summary?.settlements || {};
+  const payouts = summary?.payouts || {};
+  const currentBalance = summary?.current_balance || {};
   const pickupCash = summary?.pickup_cash || {};
+  const cashControl = summary?.cash_control || {};
 
-  // Finance & Cash is intentionally limited to cash control and approvals.
-  // Sales breakdown and Rider earnings are shown on their dedicated pages.
+  // Overall Admin finance/cash only. Detailed Rider finance is in AdminRiders.
   const cards = [
+    ['Food Sale (Period)', totals.shop_food_sale, 'text-emerald-300'],
     ['Cash Sales Completed', totals.cash_collected, 'text-green-300'],
     ['Admin Cash Received', cashControl.net_received, 'text-emerald-300'],
     ['Cash Refunds', cashControl.cash_refunds, 'text-red-300'],
-    ['Online Payment', totals.card_collected, 'text-blue-300'],
+    ['Online Payment (Period)', totals.card_collected, 'text-blue-300'],
     ['Pickup Cash With Kitchen', pickupCash.remaining_to_submit, 'text-orange-300'],
     ['Pickup Cash Waiting Admin', pickupCash.awaiting_approval, 'text-yellow-300'],
     ['Pickup Cash Approved', pickupCash.approved_cash, 'text-green-300'],
+    ['Service + Small Fee', totals.developer_fees, 'text-amber-300'],
+    ['Delivery Charges', totals.delivery_charges, 'text-purple-300'],
+    ['Shop Cash Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],
   ] as const;
 
   return (
@@ -537,15 +614,6 @@ export default function AdminFinance() {
                 </Card>
               ))}
             </div>
-
-            <Card className="bg-gray-900 border-gray-800 p-4">
-              <div>
-                <h2 className="text-white font-semibold">Cash Control</h2>
-                <p className="text-gray-500 text-xs mt-1">
-                  Detailed Rider cash and Rider earnings stay on the Rider page. This page handles only Admin cash control and approvals.
-                </p>
-              </div>
-            </Card>
 
             <Card className="bg-gray-900 border-gray-800 p-5">
               <div className="flex items-center justify-between mb-4">
