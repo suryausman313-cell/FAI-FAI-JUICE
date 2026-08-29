@@ -119,40 +119,27 @@ export default function Index() {
   }, []);
 
   const welcomeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const [welcomeNeedsStart, setWelcomeNeedsStart] = useState(false);
+  const [needsVideoTap, setNeedsVideoTap] = useState(false);
 
-  const tryStartWelcomeVideo = useCallback(async () => {
+  useEffect(() => {
+    if (!showWelcome) return;
+    setNeedsVideoTap(false);
     const video = welcomeVideoRef.current;
     if (!video) return;
-    try {
-      video.muted = false;
-      video.volume = 1;
-      await video.play();
-      setWelcomeNeedsStart(false);
-    } catch {
-      // Mobile browsers may block autoplay with sound. In that case the
-      // user can tap once; the same video then starts with its original horn.
-      setWelcomeNeedsStart(true);
-    }
-  }, []);
 
-  useEffect(() => {
-    if (!showWelcome) return;
-    setWelcomeNeedsStart(false);
-    const timer = window.setTimeout(() => {
-      tryStartWelcomeVideo();
-    }, 80);
-    return () => window.clearTimeout(timer);
-  }, [showWelcome, tryStartWelcomeVideo]);
-
-  useEffect(() => {
-    if (!showWelcome) return;
-    const onFirstInteraction = () => {
-      tryStartWelcomeVideo();
+    const tryPlay = async () => {
+      try {
+        video.muted = false;
+        await video.play();
+        setNeedsVideoTap(false);
+      } catch {
+        // Mobile browsers may block autoplay with sound until the first user gesture.
+        setNeedsVideoTap(true);
+      }
     };
-    window.addEventListener('pointerdown', onFirstInteraction, { once: true, passive: true });
-    return () => window.removeEventListener('pointerdown', onFirstInteraction);
-  }, [showWelcome, tryStartWelcomeVideo]);
+
+    tryPlay();
+  }, [showWelcome]);
 
   function getStatusColor(status: string) {
     switch (status) {
@@ -191,8 +178,12 @@ export default function Index() {
     >
       <div
         className="relative h-full w-full overflow-hidden bg-black"
-        onClick={() => {
-          if (welcomeNeedsStart) tryStartWelcomeVideo();
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest('button')) return;
+          const video = welcomeVideoRef.current;
+          if (!video) return;
+          video.muted = false;
+          video.play().then(() => setNeedsVideoTap(false)).catch(() => setNeedsVideoTap(true));
         }}
       >
         <video
@@ -203,36 +194,32 @@ export default function Index() {
           playsInline
           preload="auto"
           controls={false}
-          disablePictureInPicture
-          onCanPlay={tryStartWelcomeVideo}
           onEnded={dismissWelcome}
           onError={dismissWelcome}
+          aria-label="Fai Fai Juice welcome video"
         />
-
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-black/10" />
 
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            dismissWelcome();
-          }}
+          onClick={dismissWelcome}
           aria-label={language === 'ar' ? 'تخطي' : 'Skip'}
-          className="absolute right-4 top-4 z-30 rounded-full border border-white/40 bg-black/45 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-md shadow-lg active:scale-95"
+          className="absolute right-4 top-4 z-30 rounded-full border border-white/40 bg-black/45 px-5 py-2 text-sm font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-black/65 active:scale-95"
         >
           {language === 'ar' ? 'تخطي' : 'Skip'}
         </button>
 
-        {welcomeNeedsStart && (
+        {needsVideoTap && (
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              tryStartWelcomeVideo();
+            onClick={() => {
+              const video = welcomeVideoRef.current;
+              if (!video) return;
+              video.muted = false;
+              video.play().then(() => setNeedsVideoTap(false)).catch(() => setNeedsVideoTap(true));
             }}
-            className="absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 px-6 py-3 text-sm font-semibold text-white backdrop-blur-md shadow-xl"
+            className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/55 px-6 py-3 text-sm font-semibold text-white backdrop-blur-md"
           >
-            {language === 'ar' ? 'اضغط للتشغيل' : 'Tap to start'}
+            Tap to play with sound
           </button>
         )}
       </div>
