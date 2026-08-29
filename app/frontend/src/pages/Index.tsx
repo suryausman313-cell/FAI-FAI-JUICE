@@ -120,7 +120,9 @@ export default function Index() {
 
   useEffect(() => {
     if (!showWelcome) return;
-    const timer = window.setTimeout(dismissWelcome, 4000);
+    // Safety fallback: the welcome video is about 18 seconds long.
+    // If autoplay/video playback is blocked, still leave the splash after a short buffer.
+    const timer = window.setTimeout(dismissWelcome, 19500);
     return () => window.clearTimeout(timer);
   }, [showWelcome, dismissWelcome]);
 
@@ -159,57 +161,6 @@ export default function Index() {
       role="dialog"
       aria-modal="true"
     >
-      <style>{`
-        @keyframes ffWelcomeCinematic {
-          0%   { transform: scale(1.015) translate3d(0, 0, 0); filter: brightness(.88) saturate(.96); }
-          45%  { transform: scale(1.035) translate3d(-0.25%, -0.20%, 0); filter: brightness(1.03) saturate(1.06); }
-          100% { transform: scale(1.055) translate3d(0.18%, -0.35%, 0); filter: brightness(1.00) saturate(1.03); }
-        }
-        @keyframes ffWelcomeShine {
-          0%   { transform: translateX(-145%) rotate(10deg); opacity: 0; }
-          18%  { opacity: .10; }
-          58%  { opacity: .22; }
-          100% { transform: translateX(165%) rotate(10deg); opacity: 0; }
-        }
-        @keyframes ffWelcomeGlowA {
-          0%,100% { transform: translate3d(-5%, 4%, 0) scale(.92); opacity: .18; }
-          50%     { transform: translate3d(7%, -5%, 0) scale(1.12); opacity: .34; }
-        }
-        @keyframes ffWelcomeGlowB {
-          0%,100% { transform: translate3d(6%, -4%, 0) scale(1.08); opacity: .14; }
-          50%     { transform: translate3d(-7%, 6%, 0) scale(.94); opacity: .30; }
-        }
-        @keyframes ffWelcomePulse {
-          0%,100% { opacity: .18; transform: scale(.96); }
-          50%     { opacity: .46; transform: scale(1.07); }
-        }
-        @keyframes ffFloatSpeck {
-          0%   { transform: translate3d(0, 12px, 0) scale(.7); opacity: 0; }
-          18%  { opacity: .65; }
-          80%  { opacity: .42; }
-          100% { transform: translate3d(10px, -34px, 0) scale(1.12); opacity: 0; }
-        }
-        .ff-welcome-art {
-          animation: ffWelcomeCinematic 4s cubic-bezier(.18,.72,.24,1) both;
-          will-change: transform, filter;
-        }
-        .ff-welcome-shine {
-          animation: ffWelcomeShine 3.2s ease-in-out .25s both;
-          will-change: transform, opacity;
-        }
-        .ff-welcome-glow-a { animation: ffWelcomeGlowA 3.4s ease-in-out infinite; }
-        .ff-welcome-glow-b { animation: ffWelcomeGlowB 3.8s ease-in-out .35s infinite; }
-        .ff-welcome-pulse  { animation: ffWelcomePulse 1.65s ease-in-out infinite; }
-        .ff-speck-1 { animation: ffFloatSpeck 2.4s ease-out .15s infinite; }
-        .ff-speck-2 { animation: ffFloatSpeck 2.8s ease-out .65s infinite; }
-        .ff-speck-3 { animation: ffFloatSpeck 2.6s ease-out 1.1s infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .ff-welcome-art, .ff-welcome-shine, .ff-welcome-glow-a, .ff-welcome-glow-b,
-          .ff-welcome-pulse, .ff-speck-1, .ff-speck-2, .ff-speck-3 { animation: none !important; }
-        }
-      `}</style>
-
-      {/* ONE welcome only: website artwork. Android adds no native splash. */}
       <div
         className="relative shrink-0 overflow-hidden bg-black"
         style={{
@@ -217,40 +168,31 @@ export default function Index() {
           height: 'min(177.68vw, 100vh)',
         }}
       >
-        <video src="/fai-fai-welcome-video.mp4" className="ff-welcome-art absolute inset-0 h-full w-full object-contain select-none" autoPlay muted playsInline />
-
-        {/* Soft moving light makes the still artwork feel cinematic/video-like. */}
-        <div
-          className="ff-welcome-glow-a pointer-events-none absolute -left-[22%] top-[5%] h-[44%] w-[58%] rounded-full blur-3xl"
-          style={{ background: 'radial-gradient(circle, rgba(255,112,0,.22), rgba(255,112,0,0) 68%)' }}
-        />
-        <div
-          className="ff-welcome-glow-b pointer-events-none absolute -right-[24%] bottom-[10%] h-[44%] w-[58%] rounded-full blur-3xl"
-          style={{ background: 'radial-gradient(circle, rgba(78,220,55,.19), rgba(78,220,55,0) 68%)' }}
-        />
-        <div
-          className="ff-welcome-pulse pointer-events-none absolute left-1/2 top-[31%] h-[20%] w-[46%] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-          style={{ background: 'radial-gradient(circle, rgba(255,137,0,.16), rgba(255,137,0,0) 70%)' }}
-        />
-        <div
-          className="ff-welcome-shine pointer-events-none absolute -left-[45%] -top-[10%] h-[125%] w-[38%]"
-          style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,.24), transparent)', filter: 'blur(16px)' }}
+        <video
+          src="/fai-fai-welcome-video.mp4"
+          className="absolute inset-0 h-full w-full object-cover select-none"
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          onEnded={dismissWelcome}
+          onError={dismissWelcome}
+          aria-label="Fai Fai Juice welcome video"
         />
 
-        {/* Tiny floating juice-like light specks. */}
-        <span className="ff-speck-1 pointer-events-none absolute left-[18%] top-[39%] h-1.5 w-1.5 rounded-full bg-orange-400/80 shadow-[0_0_12px_rgba(251,146,60,.8)]" />
-        <span className="ff-speck-2 pointer-events-none absolute right-[17%] top-[55%] h-1 w-1 rounded-full bg-lime-400/80 shadow-[0_0_10px_rgba(163,230,53,.8)]" />
-        <span className="ff-speck-3 pointer-events-none absolute left-[43%] bottom-[22%] h-1 w-1 rounded-full bg-orange-300/70 shadow-[0_0_10px_rgba(253,186,116,.8)]" />
+        {/* Subtle dark gradient keeps the control readable without making the intro feel like an ad. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-24"
+          style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,.45), transparent)' }}
+        />
 
-        {/* Invisible touch target over the Skip button drawn in the approved artwork. */}
         <button
           type="button"
           onClick={dismissWelcome}
           aria-label={language === 'ar' ? 'تخطي' : 'Skip'}
-          className="absolute z-20 bg-transparent border-0 p-0 cursor-pointer"
-          style={{ top: '2.0%', right: '3.2%', width: '24%', height: '7.5%' }}
+          className="absolute right-3 top-3 z-30 rounded-full border border-white/40 bg-black/45 px-4 py-2 text-sm font-semibold text-white backdrop-blur-md shadow-lg transition hover:bg-black/65 active:scale-95"
         >
-          <span className="sr-only">{language === 'ar' ? 'تخطي' : 'Skip'}</span>
+          {language === 'ar' ? 'تخطي' : 'Skip'}
         </button>
       </div>
     </div>
