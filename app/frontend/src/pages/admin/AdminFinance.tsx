@@ -5,7 +5,6 @@ import {
   BellOff,
   CalendarDays,
   CheckCircle2,
-  DollarSign,
   Loader2,
   RefreshCw,
   Send,
@@ -38,16 +37,7 @@ type Period =
   | 'all'
   | 'custom';
 
-interface RiderFinanceItem {
-  rider_id: number;
-  rider_name: string;
-  rider_phone: string;
-  is_active: boolean;
-  totals: Record<string, number>;
-  settlements: Record<string, number>;
-  payouts?: Record<string, number>;
-  current_balance: Record<string, number>;
-}
+
 
 interface Summary {
   period: {
@@ -62,7 +52,6 @@ interface Summary {
   payouts?: Record<string, number>;
   pickup_cash?: Record<string, number>;
   cash_control?: Record<string, number>;
-  riders?: RiderFinanceItem[];
 }
 
 interface Submission {
@@ -161,7 +150,6 @@ export default function AdminFinance() {
   const [financeLoading, setFinanceLoading] = useState(false);
   const [reviewingId, setReviewingId] = useState<number | null>(null);
   const [reviewingPickupId, setReviewingPickupId] = useState<number | null>(null);
-  const [payoutSubmittingId, setPayoutSubmittingId] = useState<number | null>(null);
 
   const [pushState, setPushState] = useState<AdminPushState>({
     supported: true,
@@ -363,136 +351,21 @@ export default function AdminFinance() {
     }
   }
 
-  async function recordRiderPayout(rider: RiderFinanceItem) {
-    const remaining = Number(rider.current_balance?.rider_remaining_to_receive || 0);
-    if (remaining <= 0.009) {
-      toast.info('No Rider earning is due');
-      return;
-    }
-
-    const entered = window.prompt(
-      `Pay ${rider.rider_name} - amount (max AED ${money(remaining)}):`,
-      money(remaining),
-    );
-    if (entered === null) return;
-
-    const amount = Number(entered);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > remaining + 0.01) {
-      toast.error(`Enter amount from AED 0.01 to AED ${money(remaining)}`);
-      return;
-    }
-
-    const note = window.prompt('Optional payment note:', '') || '';
-    if (!window.confirm(`Record AED ${money(amount)} paid to ${rider.rider_name}?`)) return;
-
-    setPayoutSubmittingId(rider.rider_id);
-    try {
-      await apiRequest(`/api/v1/finance/admin/riders/${rider.rider_id}/payouts`, {
-        method: 'POST',
-        body: JSON.stringify({
-          amount,
-          note,
-          paid_by: adminName(),
-          payment_method: 'cash',
-        }),
-      });
-      toast.success('Rider payment recorded');
-      await loadSummary(period);
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not record Rider payment');
-    } finally {
-      setPayoutSubmittingId(null);
-    }
-  }
-
-  async function handleEnablePush() {
-    setPushWorking(true);
-    try {
-      const state = await enableAdminPush({
-        cashEnabled: pushState.cashEnabled,
-        readyEnabled: pushState.readyEnabled,
-      });
-      setPushState(state);
-      localStorage.setItem('admin_push_ever_enabled', '1');
-      setPushEverEnabled(true);
-      toast.success('Admin background notifications enabled');
-      await scanAdminPushEventsNow();
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not enable notifications');
-    } finally {
-      setPushWorking(false);
-    }
-  }
-
-  async function handleDisablePush() {
-    setPushWorking(true);
-    try {
-      setPushState(await disableAdminPush());
-      toast.success('Admin background notifications disabled');
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not disable notifications');
-    } finally {
-      setPushWorking(false);
-    }
-  }
-
-  async function changePreference(
-    key: 'cashEnabled' | 'readyEnabled',
-    enabled: boolean,
-  ) {
-    const preferences = {
-      cashEnabled: key === 'cashEnabled' ? enabled : pushState.cashEnabled,
-      readyEnabled: key === 'readyEnabled' ? enabled : pushState.readyEnabled,
-    };
-
-    setPushState(current => ({ ...current, ...preferences }));
-    try {
-      const state = await updateAdminPushPreferences(preferences);
-      setPushState(state);
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not save notification setting');
-      await refreshPushState();
-    }
-  }
-
-  async function handlePushTest() {
-    setPushWorking(true);
-    try {
-      const sent = await sendAdminPushTest();
-      toast.success(`Test notification sent to ${sent} Admin device(s)`);
-    } catch (error: any) {
-      toast.error(error?.message || 'Test notification failed');
-    } finally {
-      setPushWorking(false);
-    }
-  }
 
   const totals = summary?.totals || {};
-  const settlements = summary?.settlements || {};
-  const payouts = summary?.payouts || {};
-  const currentBalance = summary?.current_balance || {};
-  const pickupCash = summary?.pickup_cash || {};
   const cashControl = summary?.cash_control || {};
+  const pickupCash = summary?.pickup_cash || {};
 
+  // Finance & Cash is intentionally limited to cash control and approvals.
+  // Sales breakdown and Rider earnings are shown on their dedicated pages.
   const cards = [
-    ['Food Sale (Period)', totals.shop_food_sale, 'text-emerald-300'],
     ['Cash Sales Completed', totals.cash_collected, 'text-green-300'],
     ['Admin Cash Received', cashControl.net_received, 'text-emerald-300'],
     ['Cash Refunds', cashControl.cash_refunds, 'text-red-300'],
-    ['Online Payment (Period)', totals.card_collected, 'text-blue-300'],
+    ['Online Payment', totals.card_collected, 'text-blue-300'],
     ['Pickup Cash With Kitchen', pickupCash.remaining_to_submit, 'text-orange-300'],
     ['Pickup Cash Waiting Admin', pickupCash.awaiting_approval, 'text-yellow-300'],
     ['Pickup Cash Approved', pickupCash.approved_cash, 'text-green-300'],
-    ['Service + Small Fee', totals.developer_fees, 'text-amber-300'],
-    ['Delivery Charges', totals.delivery_charges, 'text-purple-300'],
-    ['Rider Tips', totals.rider_tips, 'text-pink-300'],
-    ['Rider Cash to Shop (Period)', totals.cash_payable_to_shop, 'text-orange-300'],
-    ['Approved Cash (Period)', settlements.approved_cash, 'text-green-300'],
-    ['Still With Riders (Current)', currentBalance.remaining_to_submit, 'text-blue-300'],
-    ['Shop Cash Pending (Current)', currentBalance.total_pending_cash, 'text-red-300'],
-    ['Rider Earned (All Time)', currentBalance.rider_earnings_total, 'text-purple-300'],
-    ['Paid to Riders (Period)', payouts.paid_to_rider, 'text-green-300'],
-    ['Owed to Riders (Current)', currentBalance.rider_remaining_to_receive, 'text-yellow-300'],
   ] as const;
 
   return (
@@ -665,105 +538,13 @@ export default function AdminFinance() {
               ))}
             </div>
 
-            <Card className="bg-gray-900 border-gray-800 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-white font-semibold">Cash Status by Rider</h2>
-                  <p className="text-gray-500 text-xs mt-1">
-                    Shop cash and Rider earnings are tracked separately. Admin pays Rider earnings here.
-                  </p>
-                </div>
+            <Card className="bg-gray-900 border-gray-800 p-4">
+              <div>
+                <h2 className="text-white font-semibold">Cash Control</h2>
+                <p className="text-gray-500 text-xs mt-1">
+                  Detailed Rider cash and Rider earnings stay on the Rider page. This page handles only Admin cash control and approvals.
+                </p>
               </div>
-
-              {(summary?.riders || []).length === 0 ? (
-                <p className="text-gray-500 text-sm py-4">No riders found.</p>
-              ) : (
-                <div className="space-y-3">
-                  {(summary?.riders || []).map(rider => {
-                    const riderTotals = rider.totals || {};
-                    const riderSettlements = rider.settlements || {};
-                    const riderBalance = rider.current_balance || {};
-                    const totalPending = Number(riderBalance.total_pending_cash || 0);
-
-                    return (
-                      <Card key={rider.rider_id} className="bg-gray-950 border-gray-800 p-4">
-                        <div className="flex items-start justify-between gap-3 mb-3">
-                          <div>
-                            <p className="text-white font-semibold">{rider.rider_name}</p>
-                            <p className="text-gray-500 text-xs">{rider.rider_phone}</p>
-                          </div>
-                          <span
-                            className={`text-[11px] font-semibold rounded-full px-2 py-1 ${
-                              totalPending > 0.009
-                                ? 'bg-red-950/50 text-red-300 border border-red-900'
-                                : 'bg-green-950/40 text-green-300 border border-green-900'
-                            }`}
-                          >
-                            {totalPending > 0.009 ? `PENDING AED ${money(totalPending)}` : 'CASH CLEAR'}
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                          <div className="rounded-lg bg-gray-900 p-3">
-                            <p className="text-gray-500 text-[10px]">CASH DUE (PERIOD)</p>
-                            <p className="text-orange-300 font-bold mt-1">
-                              AED {money(riderTotals.cash_payable_to_shop)}
-                            </p>
-                          </div>
-                          <div className="rounded-lg bg-gray-900 p-3">
-                            <p className="text-gray-500 text-[10px]">APPROVED (PERIOD)</p>
-                            <p className="text-green-300 font-bold mt-1">
-                              AED {money(riderSettlements.approved_cash)}
-                            </p>
-                          </div>
-                          <div className="rounded-lg bg-gray-900 p-3">
-                            <p className="text-gray-500 text-[10px]">SUBMITTED / WAITING</p>
-                            <p className="text-yellow-300 font-bold mt-1">
-                              AED {money(riderBalance.awaiting_approval)}
-                            </p>
-                          </div>
-                          <div className="rounded-lg bg-gray-900 p-3">
-                            <p className="text-gray-500 text-[10px]">STILL WITH RIDER</p>
-                            <p className="text-blue-300 font-bold mt-1">
-                              AED {money(riderBalance.remaining_to_submit)}
-                            </p>
-                          </div>
-                          <div className="rounded-lg bg-gray-900 p-3 col-span-2 md:col-span-1">
-                            <p className="text-gray-500 text-[10px]">TOTAL PENDING NOW</p>
-                            <p className="text-red-300 font-bold mt-1">
-                              AED {money(riderBalance.total_pending_cash)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="mt-3 pt-3 border-t border-gray-800 grid grid-cols-2 md:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-stretch">
-                          <div className="rounded-lg bg-purple-950/20 border border-purple-900/40 p-3">
-                            <p className="text-purple-300/70 text-[10px]">RIDER EARNED (ALL TIME)</p>
-                            <p className="text-purple-300 font-bold mt-1">AED {money(riderBalance.rider_earnings_total)}</p>
-                          </div>
-                          <div className="rounded-lg bg-green-950/20 border border-green-900/40 p-3">
-                            <p className="text-green-300/70 text-[10px]">PAID TO RIDER</p>
-                            <p className="text-green-300 font-bold mt-1">AED {money(riderBalance.rider_paid_total)}</p>
-                          </div>
-                          <div className="rounded-lg bg-yellow-950/20 border border-yellow-900/40 p-3">
-                            <p className="text-yellow-300/70 text-[10px]">OWED TO RIDER</p>
-                            <p className="text-yellow-300 font-bold mt-1">AED {money(riderBalance.rider_remaining_to_receive)}</p>
-                          </div>
-                          <Button
-                            size="sm"
-                            disabled={payoutSubmittingId === rider.rider_id || Number(riderBalance.rider_remaining_to_receive || 0) <= 0.009}
-                            onClick={() => void recordRiderPayout(rider)}
-                            className="h-full min-h-14 bg-purple-600 hover:bg-purple-700 text-white"
-                          >
-                            {payoutSubmittingId === rider.rider_id ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <DollarSign className="w-4 h-4 mr-1" />}
-                            Pay Rider
-                          </Button>
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
             </Card>
 
             <Card className="bg-gray-900 border-gray-800 p-5">
