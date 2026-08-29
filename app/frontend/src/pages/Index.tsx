@@ -119,26 +119,33 @@ export default function Index() {
   }, []);
 
   const welcomeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const [needsVideoTap, setNeedsVideoTap] = useState(false);
 
   useEffect(() => {
     if (!showWelcome) return;
-    setNeedsVideoTap(false);
     const video = welcomeVideoRef.current;
     if (!video) return;
 
-    const tryPlay = async () => {
-      try {
-        video.muted = false;
-        await video.play();
-        setNeedsVideoTap(false);
-      } catch {
-        // Mobile browsers may block autoplay with sound until the first user gesture.
-        setNeedsVideoTap(true);
-      }
-    };
+    // Try to start immediately. Mobile browsers may block autoplay with sound;
+    // in that case the first tap anywhere on the welcome screen starts sound.
+    video.muted = false;
+    video.volume = 1;
+    const playPromise = video.play();
+    if (playPromise) playPromise.catch(() => { /* browser autoplay policy */ });
 
-    tryPlay();
+    const startWithSound = () => {
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(() => { /* browser policy */ });
+      window.removeEventListener('pointerdown', startWithSound);
+      window.removeEventListener('touchstart', startWithSound);
+    };
+    window.addEventListener('pointerdown', startWithSound, { once: true });
+    window.addEventListener('touchstart', startWithSound, { once: true, passive: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', startWithSound);
+      window.removeEventListener('touchstart', startWithSound);
+    };
   }, [showWelcome]);
 
   function getStatusColor(status: string) {
@@ -175,15 +182,20 @@ export default function Index() {
       aria-label="Welcome to Fai Fai Juice"
       role="dialog"
       aria-modal="true"
+      onClick={() => {
+        const video = welcomeVideoRef.current;
+        if (video) {
+          video.muted = false;
+          video.volume = 1;
+          video.play().catch(() => { /* browser policy */ });
+        }
+      }}
     >
       <div
-        className="relative h-full w-full overflow-hidden bg-black"
-        onPointerDown={(event) => {
-          if ((event.target as HTMLElement).closest('button')) return;
-          const video = welcomeVideoRef.current;
-          if (!video) return;
-          video.muted = false;
-          video.play().then(() => setNeedsVideoTap(false)).catch(() => setNeedsVideoTap(true));
+        className="relative shrink-0 overflow-hidden bg-black"
+        style={{
+          width: 'min(100vw, 56.25vh)',
+          height: 'min(177.78vw, 100vh)',
         }}
       >
         <video
@@ -194,6 +206,8 @@ export default function Index() {
           playsInline
           preload="auto"
           controls={false}
+          muted={false}
+          volume={1}
           onEnded={dismissWelcome}
           onError={dismissWelcome}
           aria-label="Fai Fai Juice welcome video"
@@ -201,31 +215,18 @@ export default function Index() {
 
         <button
           type="button"
-          onClick={dismissWelcome}
+          onClick={(e) => {
+            e.stopPropagation();
+            dismissWelcome();
+          }}
           aria-label={language === 'ar' ? 'تخطي' : 'Skip'}
-          className="absolute right-4 top-4 z-30 rounded-full border border-white/40 bg-black/45 px-5 py-2 text-sm font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-black/65 active:scale-95"
+          className="absolute right-3 top-3 z-30 rounded-full border border-white/35 bg-black/45 px-4 py-2 text-sm font-semibold text-white shadow-lg backdrop-blur-md active:scale-95 transition"
         >
           {language === 'ar' ? 'تخطي' : 'Skip'}
         </button>
-
-        {needsVideoTap && (
-          <button
-            type="button"
-            onClick={() => {
-              const video = welcomeVideoRef.current;
-              if (!video) return;
-              video.muted = false;
-              video.play().then(() => setNeedsVideoTap(false)).catch(() => setNeedsVideoTap(true));
-            }}
-            className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/55 px-6 py-3 text-sm font-semibold text-white backdrop-blur-md"
-          >
-            Tap to play with sound
-          </button>
-        )}
       </div>
     </div>
   );
-
 
   if (loading) {
     if (showWelcome) return welcomeOverlay;
