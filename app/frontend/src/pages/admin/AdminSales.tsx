@@ -596,7 +596,35 @@ export default function AdminSales() {
   const adminCashWaiting = cashControl ? numeric(cashControl.awaiting_approval) : 0;
   const cashRefunds = cashControl ? numeric(cashControl.cash_refunds) : 0;
 
-  const appCommission = Number(totals.developer_fees || 0);
+  // Service Fee is displayed as one combined customer charge.
+  // Small Order Fee is included here and must NOT be added again elsewhere.
+  const serviceFeeTotal =
+    numeric(totals.service_fee) + numeric(totals.small_order_fee);
+
+  // VAT is already included in the product prices, so it is intentionally
+  // NOT added as a separate amount in the sales reconciliation.
+  const salesBreakdownTotal =
+    numeric(totals.shop_food_sale) +
+    serviceFeeTotal +
+    numeric(totals.delivery_charges) +
+    numeric(totals.shop_tips) +
+    numeric(totals.rider_tips);
+
+  const salesDifference =
+    Math.round((numeric(totals.customer_total) - salesBreakdownTotal) * 100) / 100;
+
+  // Rider settlement is handled by the existing Rider/Admin Rider report.
+  // Therefore delivery charges and rider tips are NOT included in Shop Payable.
+  const shopPayable =
+    numeric(totals.shop_food_sale) + numeric(totals.shop_tips);
+
+  const paymentDifference =
+    Math.round(
+      (numeric(totals.customer_total) -
+        numeric(totals.cash_collected) -
+        numeric(totals.card_collected)) *
+        100,
+    ) / 100;
 
   function exportCsv(): void {
     const headers = [
@@ -746,23 +774,226 @@ export default function AdminSales() {
           )}
         </Card>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <Card className="bg-gradient-to-br from-emerald-950/70 to-gray-900 border-emerald-800/40 p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-emerald-300 text-[11px] uppercase font-semibold">Food Sale</p>
-              <PackageCheck className="w-4 h-4 text-emerald-400" />
+        {/* ================= SALES & SETTLEMENT SUMMARY ================= */}
+        <div className="grid lg:grid-cols-[1.35fr_1fr] gap-4 mb-5">
+          {/* TOTAL CUSTOMER PAID */}
+          <Card className="relative overflow-hidden bg-gradient-to-br from-gray-900 via-gray-900 to-emerald-950/40 border-gray-800 p-5">
+            <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-emerald-500/5 blur-3xl" />
+            <div className="relative">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-emerald-300 text-[11px] font-bold uppercase tracking-wider">
+                    Total Customer Paid
+                  </p>
+                  <p className="text-gray-500 text-xs mt-1">
+                    Completed sales for {summary?.period?.label || 'selected period'}
+                  </p>
+                </div>
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
+                  <CircleDollarSign className="w-5 h-5 text-emerald-400" />
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-end justify-between gap-4">
+                <div>
+                  <p className="text-white text-4xl font-black tracking-tight">
+                    AED {money(totals.customer_total)}
+                  </p>
+                  <p className="text-gray-500 text-xs mt-2">
+                    {totals.orders} completed orders
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-gray-500 text-[10px] uppercase">Average Order</p>
+                  <p className="text-white font-bold mt-1">AED {money(averageOrder)}</p>
+                </div>
+              </div>
             </div>
-            <p className="text-white text-2xl font-black mt-2">AED {money(totals.shop_food_sale)}</p>
-            <p className="text-gray-500 text-[11px] mt-1">Food after discount only</p>
           </Card>
 
+          {/* PAYMENT BREAKDOWN */}
+          <Card className="bg-gray-900 border-gray-800 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-white font-bold">Payment Breakdown</p>
+                <p className="text-gray-500 text-xs mt-1">How customers paid</p>
+              </div>
+              <Wallet className="w-5 h-5 text-gray-500" />
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-xl bg-gray-950/70 border border-gray-800 px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-green-500/10 flex items-center justify-center">
+                    <Banknote className="w-4 h-4 text-green-400" />
+                  </div>
+                  <div>
+                    <p className="text-white text-sm font-semibold">Cash</p>
+                    <p className="text-gray-600 text-[10px]">{totals.cash_orders} orders</p>
+                  </div>
+                </div>
+                <p className="text-green-400 font-black">AED {money(totals.cash_collected)}</p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl bg-gray-950/70 border border-gray-800 px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                    <CreditCard className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-white text-sm font-semibold">Visa / Online</p>
+                    <p className="text-gray-600 text-[10px]">{totals.card_orders} orders</p>
+                  </div>
+                </div>
+                <p className="text-blue-400 font-black">AED {money(totals.card_collected)}</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-gray-800">
+                <p className="text-gray-400 text-xs font-semibold">Total Paid</p>
+                <p className="text-white font-black">
+                  AED {money(numeric(totals.cash_collected) + numeric(totals.card_collected))}
+                </p>
+              </div>
+
+              <div className={`text-[10px] font-semibold text-right ${Math.abs(paymentDifference) < 0.01 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {Math.abs(paymentDifference) < 0.01
+                  ? '✓ Payment total matches customer paid'
+                  : `⚠ Payment difference AED ${money(paymentDifference)}`}
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* ================= CUSTOMER SALE + SHOP SETTLEMENT ================= */}
+        <Card className="bg-gray-900 border-gray-800 overflow-hidden mb-5">
+          <div className="p-5 border-b border-gray-800">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                <ShoppingBag className="w-5 h-5 text-purple-400" />
+              </div>
+              <div>
+                <h2 className="text-white font-bold">Sales Breakdown</h2>
+                <p className="text-gray-500 text-xs mt-1">
+                  Clear customer sale and shop settlement
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-5 grid lg:grid-cols-2 gap-5">
+            {/* CUSTOMER SALE */}
+            <div className="rounded-2xl bg-gray-950/60 border border-gray-800 p-4">
+              <p className="text-gray-500 text-[10px] uppercase font-bold tracking-wider mb-4">
+                Customer Sale
+              </p>
+
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Food Sale</span>
+                  <span className="text-white font-bold">AED {money(totals.shop_food_sale)}</span>
+                </div>
+
+                <div className="flex justify-between items-center gap-4">
+                  <div>
+                    <span className="text-gray-300 text-sm">Service Fee</span>
+                    <p className="text-gray-600 text-[10px]">Small Order Fee included</p>
+                  </div>
+                  <span className="text-amber-300 font-bold">AED {money(serviceFeeTotal)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Delivery Charges</span>
+                  <span className="text-purple-300 font-bold">AED {money(totals.delivery_charges)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Shop Tip</span>
+                  <span className="text-green-300 font-bold">AED {money(totals.shop_tips)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Rider Tip</span>
+                  <span className="text-pink-300 font-bold">AED {money(totals.rider_tips)}</span>
+                </div>
+
+                <div className="border-t border-gray-800 pt-3 flex justify-between items-center">
+                  <span className="text-white font-bold">Customer Paid</span>
+                  <span className="text-emerald-400 text-xl font-black">
+                    AED {money(totals.customer_total)}
+                  </span>
+                </div>
+
+                <div className={`rounded-xl border px-3 py-2.5 ${
+                  Math.abs(salesDifference) < 0.01
+                    ? 'bg-emerald-500/5 border-emerald-900/40'
+                    : 'bg-red-500/5 border-red-900/40'
+                }`}>
+                  <div className="flex justify-between items-center gap-3">
+                    <span className="text-gray-500 text-[10px]">Sales Check</span>
+                    <span className={`text-[10px] font-black ${
+                      Math.abs(salesDifference) < 0.01 ? 'text-emerald-400' : 'text-red-400'
+                    }`}>
+                      {Math.abs(salesDifference) < 0.01
+                        ? '✓ AED 0.00 Difference'
+                        : `⚠ AED ${money(salesDifference)} Difference`}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-gray-600 text-[10px] leading-relaxed">
+                  VAT is already included in product prices and is not added again here.
+                </p>
+              </div>
+            </div>
+
+            {/* SHOP SETTLEMENT */}
+            <div className="rounded-2xl bg-gradient-to-br from-emerald-950/30 to-gray-950/60 border border-emerald-900/40 p-4">
+              <p className="text-gray-500 text-[10px] uppercase font-bold tracking-wider mb-4">
+                Shop Settlement
+              </p>
+
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Food Sale</span>
+                  <span className="text-white font-bold">AED {money(totals.shop_food_sale)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-300 text-sm">Shop Tip</span>
+                  <span className="text-green-300 font-bold">AED {money(totals.shop_tips)}</span>
+                </div>
+
+                <div className="border-t border-gray-800 pt-4 mt-2">
+                  <p className="text-gray-500 text-[10px] uppercase">Shop Payable</p>
+                  <p className="text-emerald-400 text-3xl font-black mt-1">
+                    AED {money(shopPayable)}
+                  </p>
+                </div>
+
+                <div className="mt-4 rounded-xl bg-gray-900/80 border border-gray-800 px-3 py-3">
+                  <p className="text-gray-500 text-[10px] leading-relaxed">
+                    Delivery charges and rider tips are handled in the existing Rider settlement.
+                    They are not added to Shop Payable here.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* EXISTING CASH CONTROL */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
           <Card className="bg-gray-900 border-gray-800 p-4">
             <div className="flex items-center justify-between">
               <p className="text-gray-400 text-[11px] uppercase">Admin Cash Received</p>
               <Banknote className="w-4 h-4 text-green-400" />
             </div>
             <p className="text-green-400 text-xl font-black mt-2">AED {money(adminCashReceived)}</p>
-            <p className="text-gray-500 text-[11px] mt-1">Approved Kitchen + Rider cash − refunds{cashRefunds > 0 ? ` AED ${money(cashRefunds)}` : ''}{adminCashWaiting > 0 ? ` · Waiting AED ${money(adminCashWaiting)}` : ''}</p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              Approved Kitchen + Rider cash − refunds
+              {cashRefunds > 0 ? ` AED ${money(cashRefunds)}` : ''}
+              {adminCashWaiting > 0 ? ` · Waiting AED ${money(adminCashWaiting)}` : ''}
+            </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
@@ -771,7 +1002,9 @@ export default function AdminSales() {
               <CreditCard className="w-4 h-4 text-blue-400" />
             </div>
             <p className="text-blue-400 text-xl font-black mt-2">AED {money(totals.card_collected)}</p>
-            <p className="text-gray-500 text-[11px] mt-1">Completed online orders · {totals.card_orders} orders</p>
+            <p className="text-gray-500 text-[11px] mt-1">
+              Completed online orders · {totals.card_orders} orders
+            </p>
           </Card>
 
           <Card className="bg-gray-900 border-gray-800 p-4">
@@ -782,14 +1015,6 @@ export default function AdminSales() {
             <p className="text-white text-xl font-black mt-2">{totals.orders}</p>
             <p className="text-gray-500 text-[11px] mt-1">Counted on completion date</p>
           </Card>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Service + Small Fee</p><p className="text-amber-300 font-bold mt-1">AED {money(appCommission)}</p></Card>
-          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Delivery Charges</p><p className="text-purple-300 font-bold mt-1">AED {money(totals.delivery_charges)}</p></Card>
-          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Rider Tips</p><p className="text-pink-300 font-bold mt-1">AED {money(totals.rider_tips)}</p></Card>
-          <Card className="bg-gray-900 border-gray-800 p-3"><p className="text-gray-500 text-[10px] uppercase">Shop Tips</p><p className="text-green-300 font-bold mt-1">AED {money(totals.shop_tips)}</p></Card>
-          <Card className="bg-gray-900 border-gray-800 p-3 col-span-2 md:col-span-1"><p className="text-gray-500 text-[10px] uppercase">Customer Paid Total</p><p className="text-white font-bold mt-1">AED {money(totals.customer_total)}</p></Card>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-4 mb-4">
