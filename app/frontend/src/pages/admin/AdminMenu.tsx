@@ -13,6 +13,12 @@ import {
   ToggleRight,
   Trash2,
   Upload,
+  Coffee,
+  IceCream,
+  GlassWater,
+  CakeSlice,
+  Salad,
+  Sparkles,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -63,6 +69,8 @@ type ItemExtraOption = {
   name: string;
   name_ar: string;
   price: number;
+  choice_group: string;
+  required: boolean;
 };
 
 type ItemForm = {
@@ -153,6 +161,8 @@ function parseItemExtras(
             name: String(extra?.name || '').trim(),
             name_ar: String(extra?.name_ar || '').trim(),
             price: Math.max(0, Number(extra?.price || 0)),
+            choice_group: String(extra?.choice_group || '').trim(),
+            required: Boolean(extra?.required),
           }))
           .filter((extra: ItemExtraOption) => extra.name);
       }
@@ -175,6 +185,12 @@ function dateInputValue(value: unknown): string {
 function clearCustomerMenuCache() {
   localStorage.removeItem('vita_menu_cache');
   window.dispatchEvent(new Event('menu-updated'));
+}
+
+
+function categoryIcon(index: number) {
+  const icons = [Coffee, GlassWater, IceCream, CakeSlice, Salad, Sparkles];
+  return icons[index % icons.length];
 }
 
 function itemDiscountText(item: MenuItem): string {
@@ -443,7 +459,7 @@ export default function AdminMenu() {
   function addItemExtraOption() {
     setItemExtraOptions(current => [
       ...current,
-      { name: '', name_ar: '', price: 0 },
+      { name: '', name_ar: '', price: 0, choice_group: '', required: false },
     ]);
   }
 
@@ -455,8 +471,8 @@ export default function AdminMenu() {
 
   function updateItemExtraOption(
     index: number,
-    field: 'name' | 'name_ar' | 'price',
-    value: string | number,
+    field: 'name' | 'name_ar' | 'price' | 'choice_group' | 'required',
+    value: string | number | boolean,
   ) {
     setItemExtraOptions(current =>
       current.map((extra, itemIndex) =>
@@ -547,6 +563,8 @@ export default function AdminMenu() {
         name: String(extra.name || '').trim(),
         name_ar: String(extra.name_ar || '').trim(),
         price: Math.max(0, Number(extra.price || 0)),
+        choice_group: String(extra.choice_group || '').trim(),
+        required: Boolean(extra.required),
       }))
       .filter(extra => extra.name);
 
@@ -944,29 +962,24 @@ export default function AdminMenu() {
               Add Category
             </Button>
 
-            {categories.map((category) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {categories.map((category, index) => {
+              const Icon = categoryIcon(index);
+              const count = menuItems.filter((item) => item.category_id === category.id).length;
+              return (
               <Card
                 key={category.id}
-                className="bg-gray-900 border-gray-800 p-4"
+                className="bg-gradient-to-br from-gray-900 to-gray-950 border-gray-800 p-4 hover:border-green-700/60 transition-all"
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-white font-semibold">
-                      {category.name}
-                    </p>
-                    <p className="text-gray-500 text-sm">
-                      Order: {category.sort_order}
-                      {' • '}
-                      {
-                        menuItems.filter(
-                          (item) =>
-                            item.category_id === category.id,
-                        ).length
-                      }{' '}
-                      items
-                    </p>
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-green-500/10 border border-green-500/20 flex items-center justify-center shrink-0">
+                    <Icon className="w-6 h-6 text-green-400" />
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-semibold truncate">{category.name}</p>
+                    <p className="text-gray-500 text-xs mt-1">{count} items • Sort {category.sort_order}</p>
+                  </div>
+                  <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => openCategoryDialog(category)}
@@ -986,7 +999,9 @@ export default function AdminMenu() {
                   </div>
                 </div>
               </Card>
-            ))}
+              );
+            })}
+            </div>
           </TabsContent>
 
           <TabsContent value="extras" className="space-y-4">
@@ -1244,7 +1259,7 @@ export default function AdminMenu() {
                       {itemExtraOptions.map((extra, index) => (
                         <div
                           key={`item-extra-${index}`}
-                          className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_110px_42px] gap-2 items-center"
+                          className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_90px_110px_42px] gap-2 items-center"
                         >
                           <Input
                             value={extra.name}
@@ -1272,6 +1287,18 @@ export default function AdminMenu() {
                             className="bg-gray-800 border-gray-700 text-right"
                           />
                           <Input
+                            value={extra.choice_group}
+                            onChange={(event) =>
+                              updateItemExtraOption(
+                                index,
+                                'choice_group',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Choice group (e.g. Flavour)"
+                            className="bg-gray-800 border-gray-700"
+                          />
+                          <Input
                             type="number"
                             min="0"
                             step="0.01"
@@ -1286,6 +1313,19 @@ export default function AdminMenu() {
                             placeholder="AED"
                             className="bg-gray-800 border-gray-700"
                           />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateItemExtraOption(
+                                index,
+                                'required',
+                                !extra.required,
+                              )
+                            }
+                            className={`h-10 rounded-lg border px-2 text-xs font-semibold ${extra.required ? 'border-green-500 bg-green-500/10 text-green-300' : 'border-gray-700 text-gray-500'}`}
+                          >
+                            {extra.required ? 'Required' : 'Optional'}
+                          </button>
                           <button
                             type="button"
                             onClick={() => removeItemExtraOption(index)}
