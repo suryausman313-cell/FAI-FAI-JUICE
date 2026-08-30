@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShoppingBag, Clock, Phone, MapPin, ChevronRight, Tag, MessageSquare, Star, Package } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -42,31 +42,13 @@ function setCachedData(data: Omit<CachedData, 'timestamp'>) {
 export default function Index() {
   const navigate = useNavigate();
   const { t, isRTL } = useTranslation();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [showWelcomeAd, setShowWelcomeAd] = useState(() => {
-    try {
-      return sessionStorage.getItem('fai_welcome_ad_seen') !== '1';
-    } catch {
-      return true;
-    }
-  });
 
-  const closeWelcomeAd = useCallback(() => {
-    try { sessionStorage.setItem('fai_welcome_ad_seen', '1'); } catch {}
-    setShowWelcomeAd(false);
-  }, []);
-
+  // Welcome animation: plays once, then reveals the existing Home page.
+  const [showWelcome, setShowWelcome] = useState(true);
   useEffect(() => {
-    if (!showWelcomeAd) return;
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = true;
-    video.playsInline = true;
-    const play = () => video.play().catch(() => {});
-    play();
-    const timer = window.setTimeout(play, 300);
+    const timer = window.setTimeout(() => setShowWelcome(false), 22000);
     return () => window.clearTimeout(timer);
-  }, [showWelcomeAd]);
+  }, []);
 
   // Initialize from cache for instant display
   const cached = getCachedData();
@@ -158,30 +140,23 @@ export default function Index() {
   const restaurantStatus = settings?.restaurant_status || 'open';
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      {showWelcomeAd && (
-        <div className="fixed inset-0 z-[99999] bg-black overflow-hidden">
-          <video
-            ref={videoRef}
-            src="/fai-fai-welcome-video.mp4"
-            autoPlay
-            muted
-            playsInline
-            preload="auto"
-            controls={false}
-            onEnded={closeWelcomeAd}
-            onError={closeWelcomeAd}
-            className="absolute inset-0 w-full h-full object-cover"
+    <>
+      {showWelcome && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 2147483647, background: '#000', overflow: 'hidden' }}>
+          <img
+            src="/fai-fai-welcome-animation.webp"
+            alt=""
+            draggable={false}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
           />
           <button
             type="button"
-            onClick={closeWelcomeAd}
-            className="absolute top-4 right-4 z-[100000] rounded-full bg-black/70 px-4 py-2 text-sm font-bold text-white"
-          >
-            Skip
-          </button>
+            onClick={() => setShowWelcome(false)}
+            style={{ position: 'absolute', top: 18, right: 18, zIndex: 2147483648, padding: '9px 17px', border: 0, borderRadius: 999, background: 'rgba(0,0,0,.65)', color: '#fff', fontSize: 15, fontWeight: 700 }}
+          >Skip</button>
         </div>
       )}
+      <div className="min-h-screen bg-gray-950">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur-sm border-b border-gray-800">
         <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
@@ -458,6 +433,7 @@ export default function Index() {
         </div>
       </nav>
       )}
-    </div>
+      </div>
+    </>
   );
 }
