@@ -143,9 +143,18 @@ export const customerAuthApi = {
 
       saveSession(response.data);
       return response.data.customer;
-    } catch {
-      clearSession();
-      return null;
+    } catch (error) {
+      // Only clear a saved login when the server explicitly rejects the token.
+      // Temporary iPhone/Safari network or app-resume failures must not log
+      // the customer out after a successful login.
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        if (status === 401 || status === 403) {
+          clearSession();
+          return null;
+        }
+      }
+      throw error;
     }
   },
 
