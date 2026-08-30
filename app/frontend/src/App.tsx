@@ -30,7 +30,7 @@ import { BranchProvider } from '@/contexts/BranchContext';
 import Index from './pages/Index';
 
 // Customer pages
-import Menu from './pages/Menu';
+const Menu = lazy(() => import('./pages/Menu'));
 const Cart = lazy(() => import('./pages/Cart'));
 const Checkout = lazy(() => import('./pages/Checkout'));
 
@@ -235,10 +235,7 @@ const AppRoutes = () => (
         path="/"
         element={
           <ProtectedCustomerRoute>
-            <div style={{ position: 'relative', minHeight: '100vh' }}>
-              <Menu />
-              <Index />
-            </div>
+            <Index />
           </ProtectedCustomerRoute>
         }
       />
