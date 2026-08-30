@@ -1,54 +1,46 @@
-import React, { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+interface IndexProps {
+  onDone?: () => void;
+}
 
 /**
- * Fai Fai customer launch screen.
+ * Welcome advertisement overlay.
  *
- * The welcome video is intentionally rendered without native controls.
- * If a browser blocks autoplay (or the video fails), we immediately use a
- * lightweight branded fallback instead of leaving the customer on a black
- * screen with a native play button.
+ * The customer Menu is rendered underneath this overlay by App.tsx, so when
+ * the ad finishes (or Skip is pressed) the real Home/Menu is already mounted
+ * and is revealed immediately. The overlay never navigates to another route.
  */
-export default function Index() {
-  const navigate = useNavigate();
+export default function Index({ onDone }: IndexProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showVideo, setShowVideo] = useState(true);
-  const [showFallback, setShowFallback] = useState(false);
+  const doneRef = useRef(false);
+  const [visible, setVisible] = useState(true);
+  const [videoPlaying, setVideoPlaying] = useState(false);
 
-  const goToMenu = () => {
-    if (fallbackTimer.current) {
-      clearTimeout(fallbackTimer.current);
-      fallbackTimer.current = null;
-    }
-    navigate("/menu", { replace: true });
-  };
+  const finish = useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    setVisible(false);
+    onDone?.();
+  }, [onDone]);
 
-  const startFallback = () => {
-    setShowVideo(false);
-    setShowFallback(true);
-
-    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
-    fallbackTimer.current = setTimeout(goToMenu, 4000);
-  };
-
-  const tryPlay = () => {
+  const startVideo = useCallback(async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || doneRef.current) return;
 
+    // Set these as properties as well as JSX attributes. This is important on
+    // Android/Samsung browsers where autoplay policy is checked very early.
     video.muted = true;
     video.defaultMuted = true;
     video.volume = 0;
 
-    const playPromise = video.play();
-    if (playPromise && typeof playPromise.catch === "function") {
-      playPromise.catch(() => {
-        // Autoplay was blocked. Do not show the browser's play button;
-        // switch to the branded fallback and continue automatically.
-        startFallback();
-      });
+    try {
+      await video.play();
+    } catch {
+      // Autoplay can be blocked by the browser. We keep the video visually
+      // hidden until it actually starts, and a tap anywhere retries playback.
     }
-  };
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -57,116 +49,115 @@ export default function Index() {
     video.muted = true;
     video.defaultMuted = true;
     video.volume = 0;
-    tryPlay();
+
+    // Try immediately and again after the media is ready. Some Android WebViews
+    // reject play() until the media element has loaded enough data.
+    void startVideo();
+    const retry = () => void startVideo();
+    video.addEventListener('loadeddata', retry);
+    video.addEventListener('canplay', retry);
 
     return () => {
-      if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+      video.removeEventListener('loadeddata', retry);
+      video.removeEventListener('canplay', retry);
     };
-  }, []);
+  }, [startVideo]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const retryOnVisible = () => {
+      if (document.visibilityState === 'visible') void startVideo();
+    };
+
+    document.addEventListener('visibilitychange', retryOnVisible);
+    return () => document.removeEventListener('visibilitychange', retryOnVisible);
+  }, [visible, startVideo]);
+
+  if (!visible) return null;
 
   return (
     <div
+      aria-label="Welcome advertisement"
+      role="dialog"
       style={{
-        position: "fixed",
+        position: 'fixed',
         inset: 0,
         zIndex: 2147483647,
-        overflow: "hidden",
-        background: "#050505",
+        background: '#000',
+        overflow: 'hidden',
       }}
+      onPointerDown={() => void startVideo()}
+      onTouchStart={() => void startVideo()}
     >
-      {showVideo && (
-        <video
-          ref={videoRef}
-          src="/fai-fai-welcome-video.mp4"
-          autoPlay
-          muted
-          playsInline
-          preload="auto"
-          controls={false}
-          disablePictureInPicture
-          disableRemotePlayback
-          onCanPlay={tryPlay}
-          onLoadedData={tryPlay}
-          onEnded={goToMenu}
-          onError={startFallback}
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            pointerEvents: "none",
-            userSelect: "none",
-            WebkitUserSelect: "none",
-          }}
-        />
-      )}
+      {/*
+        The poster is shown until playback really starts. This prevents the
+        browser's native centered ▶ overlay from ever being visible when
+        autoplay is temporarily blocked.
+      */}
+      <img
+        src="/fai-fai-welcome-poster.jpg"
+        alt=""
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          opacity: videoPlaying ? 0 : 1,
+          transition: 'opacity 120ms linear',
+          pointerEvents: 'none',
+        }}
+      />
 
-      {showFallback && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            textAlign: "center",
-            background:
-              "radial-gradient(circle at 50% 35%, rgba(239,68,68,.20), transparent 35%), radial-gradient(circle at 25% 80%, rgba(34,197,94,.16), transparent 30%), #050505",
-            color: "#fff",
-          }}
-        >
-          <div style={{ padding: 24 }}>
-            <div
-              style={{
-                width: 82,
-                height: 82,
-                margin: "0 auto 20px",
-                display: "grid",
-                placeItems: "center",
-                borderRadius: "50%",
-                background: "linear-gradient(135deg,#ef4444,#f97316,#22c55e)",
-                fontSize: 30,
-                fontWeight: 900,
-                boxShadow: "0 16px 45px rgba(0,0,0,.45)",
-              }}
-            >
-              FF
-            </div>
-            <div style={{ fontSize: 42, fontWeight: 900, lineHeight: 1 }}>
-              FAI FAI
-            </div>
-            <div
-              style={{
-                marginTop: 10,
-                color: "rgba(255,255,255,.70)",
-                fontSize: 16,
-                fontWeight: 600,
-              }}
-            >
-              Fresh drinks made for you
-            </div>
-          </div>
-        </div>
-      )}
+      <video
+        ref={videoRef}
+        src="/fai-fai-welcome-video.mp4"
+        autoPlay
+        muted
+        defaultMuted
+        playsInline
+        preload="auto"
+        controls={false}
+        disablePictureInPicture
+        disableRemotePlayback
+        onPlaying={() => setVideoPlaying(true)}
+        onEnded={finish}
+        onError={finish}
+        // Prevent browser-specific media UI from being requested.
+        controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          opacity: videoPlaying ? 1 : 0,
+          pointerEvents: 'none',
+          background: 'transparent',
+        }}
+      />
 
+      {/* The only visible control is our own Skip button. */}
       <button
         type="button"
-        onClick={goToMenu}
+        onClick={(event) => {
+          event.stopPropagation();
+          finish();
+        }}
         style={{
-          position: "absolute",
+          position: 'absolute',
           top: 18,
           right: 18,
           zIndex: 2,
-          padding: "9px 17px",
+          padding: '9px 17px',
           border: 0,
           borderRadius: 999,
-          background: "rgba(0,0,0,.68)",
-          color: "#fff",
+          background: 'rgba(0,0,0,.65)',
+          color: '#fff',
           fontSize: 15,
           fontWeight: 700,
-          cursor: "pointer",
         }}
       >
         Skip
