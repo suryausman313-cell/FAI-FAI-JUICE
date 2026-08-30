@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike, CalendarDays, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Pencil, X, Check, UserCheck, UserX, RefreshCw, MapPin, Clock, Bike, CalendarDays, ChevronDown, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -49,6 +49,10 @@ interface RiderReport {
   total_pending_cash: number;
   cash_due_period: number;
   rider_earnings_period: number;
+  rider_tips_period: number;
+  rider_paid_total: number;
+  rider_pending_payment: number;
+  rider_remaining_to_receive: number;
   card_orders: number;
   current_lat: number | null;
   current_lng: number | null;
@@ -64,6 +68,7 @@ interface RiderFinanceItem {
     customer_total?: number;
     delivery_charges?: number;
     rider_earnings?: number;
+    rider_tips?: number;
     cash_payable_to_shop?: number;
   };
   settlements?: {
@@ -77,7 +82,11 @@ interface RiderFinanceItem {
     awaiting_approval?: number;
     remaining_to_submit?: number;
     total_pending_cash?: number;
+    rider_paid_total?: number;
+    rider_pending_payment?: number;
+    rider_remaining_to_receive?: number;
   };
+  payouts?: { paid_to_rider?: number; pending_to_rider?: number; payments?: number };
 }
 
 interface AdminFinanceSummary {
@@ -203,6 +212,12 @@ export default function AdminRiders() {
             today_order_value: Number(totals.customer_total || 0),
             delivery_charges_earned: Number(totals.delivery_charges || 0),
             rider_earnings_period: Number(totals.rider_earnings || 0),
+            rider_tips_period: Number(totals.rider_tips || 0),
+            // Paid/Pending shown in the selected-period report must use period payouts.
+            // The current balance remains the source of truth for the amount still owed now.
+            rider_paid_total: Number(finance?.payouts?.paid_to_rider || 0),
+            rider_pending_payment: Number(finance?.payouts?.pending_to_rider || 0),
+            rider_remaining_to_receive: Number(balance.rider_remaining_to_receive || 0),
             cash_due_period: Number(totals.cash_payable_to_shop || 0),
             approved_cash: Number(settlements.approved_cash || 0),
             awaiting_approval: Number(balance.awaiting_approval || 0),
@@ -285,6 +300,32 @@ export default function AdminRiders() {
       setEditingId(null);
       await loadReports();
     } catch (e: any) { toast.error(e?.response?.data?.detail || e?.data?.detail || 'Failed'); }
+  }
+
+  async function sendRiderPayment(rider: RiderReport) {
+    const due = Number(rider.rider_remaining_to_receive || 0);
+    if (due <= 0) {
+      toast.info('No Rider payment is currently due.');
+      return;
+    }
+    const raw = window.prompt(`Amount to send to ${rider.name} (max AED ${due.toFixed(2)})`, due.toFixed(2));
+    if (raw === null) return;
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > due + 0.01) {
+      toast.error(`Enter an amount from 0.01 to AED ${due.toFixed(2)}`);
+      return;
+    }
+    try {
+      await riderAdminApi({
+        url: `/api/v1/finance/admin/riders/${rider.id}/payouts`,
+        method: 'POST',
+        data: { amount, payment_method: 'cash', note: 'Rider earnings payment' },
+      });
+      toast.success(`AED ${amount.toFixed(2)} sent to ${rider.name} for confirmation`);
+      await loadReports();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Could not send Rider payment');
+    }
   }
 
   function saveTimeLimit() {
@@ -563,7 +604,7 @@ export default function AdminRiders() {
                   </div>
 
                   {/* Compact Rider Overview */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-white">{rider.today_orders}</p>
                       <p className="text-gray-500 text-[10px]">Period Orders</p>
@@ -575,10 +616,16 @@ export default function AdminRiders() {
                       <p className="text-gray-500 text-[10px]">Delivery Charges</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
-                      <p className="text-lg font-bold text-orange-400">
-                        AED {(rider.cash_pending || 0).toFixed(2)}
+                      <p className="text-lg font-bold text-pink-400">
+                        AED {(rider.rider_tips_period || 0).toFixed(2)}
                       </p>
-                      <p className="text-gray-500 text-[10px]">Still With Rider</p>
+                      <p className="text-gray-500 text-[10px]">Rider Tips</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-2 text-center">
+                      <p className="text-lg font-bold text-orange-400">
+                        AED {(rider.rider_remaining_to_receive || 0).toFixed(2)}
+                      </p>
+                      <p className="text-gray-500 text-[10px]">Still To Pay</p>
                     </div>
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
                       <p className="text-lg font-bold text-yellow-300">
@@ -595,9 +642,19 @@ export default function AdminRiders() {
                           <p className="text-white font-semibold">{rider.name} — Rider Report</p>
                           <p className="text-gray-500 text-xs">Selected Rider Report Period</p>
                         </div>
-                        <span className="text-xs rounded-full bg-green-600/10 text-green-400 px-2 py-1">
-                          {rider.today_orders} deliveries
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs rounded-full bg-green-600/10 text-green-400 px-2 py-1">
+                            {rider.today_orders} deliveries
+                          </span>
+                          <Button
+                            onClick={() => void sendRiderPayment(rider)}
+                            disabled={(rider.rider_remaining_to_receive || 0) <= 0 || (rider.rider_pending_payment || 0) > 0}
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                          >
+                            <Send className="w-3 h-3 mr-1" /> Send Payment
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
@@ -612,6 +669,26 @@ export default function AdminRiders() {
                           <p className="text-purple-400 font-bold mt-1">
                             AED {(rider.delivery_charges_earned || 0).toFixed(2)}
                           </p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Rider Tips (Period)</p>
+                          <p className="text-pink-400 font-bold mt-1">AED {(rider.rider_tips_period || 0).toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-lg bg-gray-800 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Rider Earnings (Period)</p>
+                          <p className="text-green-400 font-bold mt-1">AED {(rider.rider_earnings_period || 0).toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-lg bg-green-600/10 border border-green-600/20 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Paid / Confirmed To Rider</p>
+                          <p className="text-green-300 font-bold mt-1">AED {(rider.rider_paid_total || 0).toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-lg bg-orange-600/10 border border-orange-600/20 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Pending Rider Confirmation</p>
+                          <p className="text-orange-300 font-bold mt-1">AED {(rider.rider_pending_payment || 0).toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-lg bg-yellow-600/10 border border-yellow-600/20 p-3">
+                          <p className="text-gray-500 text-[10px] uppercase">Still To Pay Rider</p>
+                          <p className="text-yellow-300 font-bold mt-1">AED {(rider.rider_remaining_to_receive || 0).toFixed(2)}</p>
                         </div>
                         <div className="rounded-lg bg-gray-800 p-3">
                           <p className="text-gray-500 text-[10px] uppercase">Cash Due To Shop (Period)</p>
