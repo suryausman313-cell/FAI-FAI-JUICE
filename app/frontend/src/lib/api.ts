@@ -358,6 +358,8 @@ export interface Extra {
   translations_json?: string;
   price: number;
   is_active: boolean;
+  choice_group?: string;
+  required?: boolean;
 }
 
 
@@ -389,6 +391,8 @@ export function getItemExtras(
             name_ar: String(extra?.name_ar || '').trim(),
             price: Math.max(0, Number(extra?.price || 0)),
             is_active: true,
+            choice_group: String(extra?.choice_group || '').trim(),
+            required: Boolean(extra?.required),
           }))
           .filter((extra: Extra) => Boolean(extra.name));
       }
