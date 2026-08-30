@@ -44,7 +44,7 @@ function setCachedData(data: Omit<CachedData, 'timestamp'>) {
 
 export default function Index() {
   const navigate = useNavigate();
-  const { t, isRTL } = useTranslation();
+  const { t, isRTL, language } = useTranslation();
   // Show the welcome animation only once for this app/page-load session.
   // Navigating to Home again will NOT restart it. A full app reload starts a new session.
   const [showWelcome, setShowWelcome] = useState(() => {
@@ -440,7 +440,7 @@ export default function Index() {
             onClick={() => setShowWelcome(false)}
             className="absolute right-4 top-4 z-10 rounded-full bg-black/65 px-4 py-2 text-sm font-bold text-white"
           >
-            Skip
+            {language === 'ar' ? 'تخطي' : language === 'ur' ? 'چھوڑیں' : 'Skip'}
           </button>
         </div>
       )}
