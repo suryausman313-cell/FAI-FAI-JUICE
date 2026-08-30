@@ -781,9 +781,14 @@ async def _get_payout_totals(
     if rider_id is not None:
         query = query.where(Rider_payouts.rider_id == rider_id)
 
+    # Only confirmed payments count as actually paid. Pending admin-sent
+    # payments remain visible to both sides until the Rider confirms receipt.
+    query = query.where(
+        func.lower(func.coalesce(Rider_payouts.status, "confirmed")) == "confirmed"
+    )
     query = _apply_datetime_filter(
         query,
-        Rider_payouts.paid_at,
+        func.coalesce(Rider_payouts.confirmed_at, Rider_payouts.paid_at),
         start,
         end,
     )
@@ -791,9 +796,20 @@ async def _get_payout_totals(
     payouts = (await db.execute(query)).scalars().all()
     total = round(sum(_money(item.amount) for item in payouts), 2)
 
+    pending_query = select(func.coalesce(func.sum(Rider_payouts.amount), 0)).where(
+        func.lower(func.coalesce(Rider_payouts.status, "confirmed")) == "pending"
+    )
+    if rider_id is not None:
+        pending_query = pending_query.where(Rider_payouts.rider_id == rider_id)
+    pending_query = _apply_datetime_filter(
+        pending_query, Rider_payouts.sent_at, start, end
+    )
+    pending_amount = _money((await db.execute(pending_query)).scalar())
+
     return {
         "paid_to_rider": total,
         "payments": len(payouts),
+        "pending_to_rider": pending_amount,
     }
 
 
@@ -830,8 +846,9 @@ async def _get_current_rider_balance(
 
     rider_earnings_total = _money(all_time["rider_earnings"])
     rider_paid_total = _money(payout_totals["paid_to_rider"])
+    rider_pending_payment = _money(payout_totals.get("pending_to_rider"))
     rider_remaining_to_receive = max(
-        round(rider_earnings_total - rider_paid_total, 2),
+        round(rider_earnings_total - rider_paid_total - rider_pending_payment, 2),
         0.0,
     )
 
@@ -843,6 +860,7 @@ async def _get_current_rider_balance(
         "total_pending_cash": total_pending_cash,
         "rider_earnings_total": rider_earnings_total,
         "rider_paid_total": rider_paid_total,
+        "rider_pending_payment": rider_pending_payment,
         "rider_remaining_to_receive": rider_remaining_to_receive,
     }
 
@@ -859,6 +877,7 @@ async def _get_admin_current_balance(
         "total_pending_cash": 0.0,
         "rider_earnings_total": 0.0,
         "rider_paid_total": 0.0,
+        "rider_pending_payment": 0.0,
         "rider_remaining_to_receive": 0.0,
     }
 
@@ -1625,13 +1644,17 @@ async def record_rider_payout(
             detail=f"Payment cannot exceed Rider balance AED {remaining:.2f}.",
         )
 
+    now = datetime.now(timezone.utc)
     payout = Rider_payouts(
         rider_id=rider_id,
         amount=amount,
         note=(data.note or "").strip(),
         paid_by=(data.paid_by or "Admin").strip(),
         payment_method=data.payment_method,
-        paid_at=datetime.now(timezone.utc),
+        status="pending",
+        sent_at=now,
+        paid_at=now,
+        confirmed_at=None,
     )
     db.add(payout)
     await db.commit()
@@ -1639,7 +1662,7 @@ async def record_rider_payout(
 
     return {
         "success": True,
-        "message": "Rider payment recorded.",
+        "message": "Payment sent to Rider for confirmation.",
         "payout": {
             "id": payout.id,
             "rider_id": payout.rider_id,
@@ -1647,6 +1670,9 @@ async def record_rider_payout(
             "note": payout.note or "",
             "paid_by": payout.paid_by or "",
             "payment_method": payout.payment_method or "",
+            "status": payout.status or "confirmed",
+            "sent_at": payout.sent_at.isoformat() if payout.sent_at else None,
+            "confirmed_at": payout.confirmed_at.isoformat() if payout.confirmed_at else None,
             "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
         },
     }
@@ -1677,10 +1703,52 @@ async def get_admin_rider_payouts(
                 "note": payout.note or "",
                 "paid_by": payout.paid_by or "",
                 "payment_method": payout.payment_method or "",
+                "status": payout.status or "confirmed",
+                "sent_at": payout.sent_at.isoformat() if payout.sent_at else None,
+                "confirmed_at": payout.confirmed_at.isoformat() if payout.confirmed_at else None,
                 "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
             }
             for payout, rider in rows
         ]
+    }
+
+
+@router.post("/rider/{rider_id}/payouts/{payout_id}/confirm")
+async def confirm_rider_payout(
+    rider_id: int,
+    payout_id: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    require_rider_id(authorization, rider_id)
+    payout = (
+        await db.execute(
+            select(Rider_payouts).where(
+                Rider_payouts.id == payout_id,
+                Rider_payouts.rider_id == rider_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not payout:
+        raise HTTPException(status_code=404, detail="Rider payment not found.")
+    status_value = str(payout.status or "confirmed").lower()
+    if status_value == "confirmed":
+        return {"success": True, "message": "Payment already confirmed.", "status": "confirmed"}
+    if status_value != "pending":
+        raise HTTPException(status_code=400, detail="This payment cannot be confirmed.")
+
+    payout.status = "confirmed"
+    payout.confirmed_at = datetime.now(timezone.utc)
+    payout.paid_at = payout.confirmed_at
+    await db.commit()
+    await db.refresh(payout)
+
+    return {
+        "success": True,
+        "message": "Rider payment confirmed.",
+        "status": "confirmed",
+        "amount": _money(payout.amount),
+        "confirmed_at": payout.confirmed_at.isoformat(),
     }
 
 
@@ -1709,6 +1777,9 @@ async def get_rider_payouts(
                 "note": item.note or "",
                 "paid_by": item.paid_by or "",
                 "payment_method": item.payment_method or "",
+                "status": item.status or "confirmed",
+                "sent_at": item.sent_at.isoformat() if item.sent_at else None,
+                "confirmed_at": item.confirmed_at.isoformat() if item.confirmed_at else None,
                 "paid_at": item.paid_at.isoformat() if item.paid_at else None,
             }
             for item in items
