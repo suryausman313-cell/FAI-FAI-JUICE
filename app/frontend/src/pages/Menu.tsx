@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, Minus } from 'lucide-react';
+import { Plus, Minus, Coffee, GlassWater, IceCream, CakeSlice, Salad, Sparkles, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,12 @@ function getMenuCache(): MenuCache | null {
   } catch { return null; }
 }
 
+
+function categoryIcon(index: number) {
+  const icons = [Coffee, GlassWater, IceCream, CakeSlice, Salad, Sparkles];
+  return icons[index % icons.length];
+}
+
 function setMenuCache(data: Omit<MenuCache, 'timestamp'>) {
   try {
     localStorage.setItem(MENU_CACHE_KEY, JSON.stringify({ ...data, timestamp: Date.now() }));
@@ -48,6 +54,18 @@ export default function Menu() {
   const [quantity, setQuantity] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
+  const choiceGroups = selectedItem ? (() => {
+    const all = getItemExtras(selectedItem, extras);
+    const groups = new Map<string, Extra[]>();
+    all.forEach(extra => {
+      const key = String(extra.choice_group || '').trim();
+      if (!key) return;
+      const list = groups.get(key) || [];
+      list.push(extra);
+      groups.set(key, list);
+    });
+    return Array.from(groups.entries());
+  })() : [];
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -102,11 +120,16 @@ export default function Menu() {
   }
 
   function toggleExtra(extra: Extra) {
-    setSelectedExtras(prev =>
-      prev.find(e => e.id === extra.id)
+    const group = String(extra.choice_group || '').trim();
+    setSelectedExtras(prev => {
+      if (group) {
+        const withoutGroup = prev.filter(e => String(e.choice_group || '').trim() !== group);
+        return [...withoutGroup, extra];
+      }
+      return prev.find(e => e.id === extra.id)
         ? prev.filter(e => e.id !== extra.id)
-        : [...prev, extra]
-    );
+        : [...prev, extra];
+    });
   }
 
   function calculatePrice(): number {
@@ -121,6 +144,11 @@ export default function Menu() {
 
   function handleAddToCart() {
     if (!selectedItem) return;
+    const missingRequired = choiceGroups.find(([, options]) => options.some(option => option.required) && !selectedExtras.some(extra => String(extra.choice_group || '').trim() === String(options[0]?.choice_group || '').trim()));
+    if (missingRequired) {
+      window.alert(`Please select ${missingRequired[0]}.`);
+      return;
+    }
     addToCart(selectedItem, selectedSize, selectedExtras, quantity);
     setDialogOpen(false);
     window.dispatchEvent(new Event('cart-updated'));
@@ -137,23 +165,42 @@ export default function Menu() {
           </div>
         )}
 
-        {/* Category Tabs */}
-        <div className="sticky top-[60px] z-40 bg-black border-b border-gray-800">
-          <div className="overflow-x-auto scrollbar-hide">
-            <div className="flex gap-2 px-4 py-3 min-w-max">
-              {categories.map(cat => (
-                <button
-                  key={cat.id}
-                  onClick={() => setActiveCategory(cat.id)}
-                  className={`px-4 py-2 rounded-full text-sm font-medium transition-all cursor-pointer whitespace-nowrap ${
-                    activeCategory === cat.id
-                      ? 'bg-red-600 text-white'
-                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                  }`}
-                >
-                  {localizedMenuText(cat, language)}
-                </button>
-              ))}
+        {/* Modern Category Navigation */}
+        <div className="sticky top-[60px] z-40 border-b border-gray-800/80 bg-black/90 backdrop-blur-2xl">
+          <div className="max-w-4xl mx-auto px-3 py-3">
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-0.5 snap-x snap-mandatory">
+              {categories.map((cat, index) => {
+                const Icon = categoryIcon(index);
+                const count = menuItems.filter(item => item.category_id === cat.id).length;
+                const active = activeCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setActiveCategory(cat.id)}
+                    aria-pressed={active}
+                    className={`group relative min-w-[88px] snap-start flex-shrink-0 rounded-2xl border px-3 py-2.5 text-center transition-all duration-200 cursor-pointer ${
+                      active
+                        ? 'border-green-400/80 bg-gradient-to-b from-green-400 to-green-500 text-black shadow-lg shadow-green-500/20 scale-[1.02]'
+                        : 'border-gray-800 bg-gray-900/90 text-gray-300 hover:border-gray-600 hover:bg-gray-800/90 active:scale-95'
+                    }`}
+                  >
+                    <span className={`mx-auto mb-1.5 flex h-8 w-8 items-center justify-center rounded-xl ${
+                      active ? 'bg-black/10' : 'bg-gray-800 group-hover:bg-gray-700'
+                    }`}>
+                      <Icon className="h-4 w-4" strokeWidth={2.2} />
+                    </span>
+                    <span className="block max-w-[78px] truncate text-[11px] font-bold leading-4">
+                      {localizedMenuText(cat, language)}
+                    </span>
+                    <span className={`mt-1 inline-flex min-w-[18px] justify-center rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
+                      active ? 'bg-black/10 text-black/70' : 'bg-gray-800 text-gray-500'
+                    }`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -296,29 +343,55 @@ export default function Menu() {
                   </div>
                 )}
 
-                {/* Per-item Extras (legacy items fall back to global extras) */}
+                {/* Talabat-style item choices */}
                 {availableExtras.length > 0 && selectedItem.has_extras !== false && (
-                  <div>
-                    <h4 className="font-semibold mb-3">{t('menu.extras')}</h4>
-                    <div className="space-y-2">
-                      {availableExtras.map(extra => (
-                        <label
-                          key={extra.id}
-                          className="flex items-center justify-between p-3 rounded-xl border border-gray-700 hover:border-gray-500 cursor-pointer transition-all"
-                        >
-                          <div className="flex items-center gap-3">
-                            <Checkbox
-                              checked={selectedExtras.some(e => e.id === extra.id)}
-                              onCheckedChange={() => toggleExtra(extra)}
-                            />
-                            <span>{localizedMenuText(extra, language)}</span>
+                  <div className="space-y-5">
+                    {choiceGroups.map(([groupName, options]) => {
+                      const selected = selectedExtras.find(extra => String(extra.choice_group || '').trim() === groupName);
+                      const required = options.some(option => option.required);
+                      return (
+                        <div key={groupName}>
+                          <div className="flex items-end justify-between mb-3">
+                            <div>
+                              <h4 className="font-bold text-lg">{groupName}</h4>
+                              <p className="text-gray-500 text-xs mt-1">Choose {required ? '1' : 'any'}</p>
+                            </div>
+                            {required && <span className="text-[11px] px-2 py-1 rounded-full bg-gray-800 text-gray-400">Required</span>}
                           </div>
-                          <span className="text-red-400 font-medium">
-                            +AED {Number(extra.price || 0).toFixed(2)}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            {options.map(option => {
+                              const active = selected?.id === option.id;
+                              return (
+                                <button key={option.id} type="button" onClick={() => toggleExtra(option)} className={`relative overflow-hidden rounded-2xl border-2 text-left transition-all ${active ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/10' : 'border-gray-800 bg-gray-950 hover:border-gray-600'}`}>
+                                  <div className="h-24 bg-gray-900 flex items-center justify-center">
+                                    {selectedItem.image_url ? <img src={selectedItem.image_url} alt="" className="w-full h-full object-cover opacity-90" /> : <GlassWater className="w-8 h-8 text-gray-600" />}
+                                  </div>
+                                  <div className="p-3">
+                                    <div className="font-semibold text-sm">{localizedMenuText(option, language)}</div>
+                                    {Number(option.price || 0) > 0 && <div className="text-gray-400 text-xs mt-1">+AED {Number(option.price).toFixed(2)}</div>}
+                                  </div>
+                                  <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border flex items-center justify-center ${active ? 'bg-green-500 border-green-500 text-black' : 'bg-black/30 border-white/40'}`}>{active && <Check className="w-4 h-4" />}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {availableExtras.filter(extra => !String(extra.choice_group || '').trim()).length > 0 && (
+                      <div>
+                        <h4 className="font-bold text-lg mb-3">Extras</h4>
+                        <div className="space-y-2">
+                          {availableExtras.filter(extra => !String(extra.choice_group || '').trim()).map(extra => (
+                            <label key={extra.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-800 bg-gray-950 cursor-pointer">
+                              <div className="flex items-center gap-3"><Checkbox checked={selectedExtras.some(e => e.id === extra.id)} onCheckedChange={() => toggleExtra(extra)} /><span>{localizedMenuText(extra, language)}</span></div>
+                              <span className="text-green-400 font-medium">+AED {Number(extra.price || 0).toFixed(2)}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
