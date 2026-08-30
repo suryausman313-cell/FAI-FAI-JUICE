@@ -17,6 +17,10 @@ class Rider_payouts(Base):
     note = Column(String, nullable=True, default="", server_default="")
     paid_by = Column(String(200), nullable=True, default="Admin", server_default="Admin")
     payment_method = Column(String(20), nullable=False, default="cash", server_default="cash")
+    # Payment lifecycle: pending -> confirmed. Legacy rows default to confirmed so old paid records stay paid.
+    status = Column(String(20), nullable=False, default='pending', server_default='pending', index=True)
+    sent_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     paid_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
