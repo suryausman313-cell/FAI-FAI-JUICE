@@ -1,6 +1,9 @@
 import {
+  Component,
+  ErrorInfo,
   lazy,
   ReactElement,
+  ReactNode,
   Suspense,
 } from 'react';
 
@@ -190,9 +193,63 @@ const queryClient = new QueryClient({
 });
 
 function PageLoader() {
-  // Keep route/auth loading visually neutral so the customer sees only the
-  // single approved welcome artwork owned by pages/Index.tsx.
-  return <div className="min-h-screen bg-gray-950" aria-busy="true" />;
+  // Never leave the user with a completely blank/black screen while a lazy
+  // route or auth state is loading. Keep this lightweight for mobile devices.
+  return (
+    <div
+      className="min-h-screen bg-gray-950 flex items-center justify-center px-6"
+      aria-busy="true"
+    >
+      <div className="text-center" role="status">
+        <div className="text-white text-xl font-bold mb-3">Fai Fai Juice</div>
+        <div className="w-7 h-7 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto" />
+        <p className="text-gray-400 text-sm mt-3">Loading…</p>
+      </div>
+    </div>
+  );
+}
+
+interface AppErrorBoundaryState {
+  hasError: boolean;
+}
+
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  AppErrorBoundaryState
+> {
+  state: AppErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): AppErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Fai Fai app render error:', error, info);
+  }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-6 text-center">
+        <div>
+          <div className="text-white text-xl font-bold mb-2">Fai Fai Juice</div>
+          <p className="text-gray-400 text-sm mb-4">Something went wrong. Please reload the app.</p>
+          <button
+            type="button"
+            onClick={this.handleReload}
+            className="rounded-lg bg-red-600 px-5 py-3 text-white font-semibold"
+          >
+            Reload App
+          </button>
+        </div>
+      </div>
+    );
+  }
 }
 
 interface ProtectedCustomerRouteProps {
@@ -500,7 +557,9 @@ const App = () => (
           <CustomerAuthProvider>
             <BranchProvider>
               <CustomerHeartbeatProvider>
-                <AppRoutes />
+                <AppErrorBoundary>
+                  <AppRoutes />
+                </AppErrorBoundary>
               </CustomerHeartbeatProvider>
             </BranchProvider>
           </CustomerAuthProvider>
