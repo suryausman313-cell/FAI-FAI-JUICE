@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, Minus, Coffee, GlassWater, IceCream, CakeSlice, Salad, Sparkles, Check } from 'lucide-react';
+import { Plus, Minus, GlassWater, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -30,10 +30,6 @@ function getMenuCache(): MenuCache | null {
 }
 
 
-function categoryIcon(index: number) {
-  const icons = [Coffee, GlassWater, IceCream, CakeSlice, Salad, Sparkles];
-  return icons[index % icons.length];
-}
 
 function setMenuCache(data: Omit<MenuCache, 'timestamp'>) {
   try {
@@ -67,6 +63,8 @@ export default function Menu() {
     return Array.from(groups.entries());
   })() : [];
   const loadedRef = useRef(false);
+  const categoryRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const categoryNavRefs = useRef<Record<number, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     if (loadedRef.current) return;
@@ -109,6 +107,36 @@ export default function Menu() {
   }
 
   const filteredItems = menuItems.filter(item => item.category_id === activeCategory);
+
+  useEffect(() => {
+    if (!categories.length || !menuItems.length) return;
+    const sections = categories
+      .map(cat => categoryRefs.current[cat.id])
+      .filter((el): el is HTMLDivElement => Boolean(el));
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter(entry => entry.isIntersecting)
+        .sort((a, b) => Math.abs(a.boundingClientRect.top - 120) - Math.abs(b.boundingClientRect.top - 120));
+      if (visible[0]) {
+        const id = Number((visible[0].target as HTMLElement).dataset.categoryId);
+        if (id) {
+          setActiveCategory(id);
+          categoryNavRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+      }
+    }, { rootMargin: '-110px 0px -55% 0px', threshold: [0, 0.15, 0.5] });
+
+    sections.forEach(section => observer.observe(section));
+    return () => observer.disconnect();
+  }, [categories, menuItems]);
+
+  function scrollToCategory(id: number) {
+    setActiveCategory(id);
+    categoryRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    categoryNavRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
 
   function openItemDialog(item: MenuItem) {
     setSelectedItem(item);
@@ -166,38 +194,38 @@ export default function Menu() {
         )}
 
         {/* Modern Category Navigation */}
-        <div className="sticky top-[60px] z-40 border-b border-gray-800/80 bg-black/90 backdrop-blur-2xl">
+        <div className="sticky top-[60px] z-40 border-b border-gray-800/80 bg-black/95 backdrop-blur-2xl">
           <div className="max-w-4xl mx-auto px-3 py-3">
-            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-0.5 snap-x snap-mandatory">
-              {categories.map((cat, index) => {
-                const Icon = categoryIcon(index);
+            <div className="flex items-stretch gap-2.5 overflow-x-auto scrollbar-hide py-1 scrollbar-hide snap-x snap-mandatory pb-1">
+              {categories.map((cat) => {
                 const count = menuItems.filter(item => item.category_id === cat.id).length;
+                const image = menuItems.find(item => item.category_id === cat.id)?.image_url;
                 const active = activeCategory === cat.id;
                 return (
                   <button
                     key={cat.id}
+                    ref={el => { categoryNavRefs.current[cat.id] = el; }}
                     type="button"
-                    onClick={() => setActiveCategory(cat.id)}
+                    onClick={() => scrollToCategory(cat.id)}
                     aria-pressed={active}
-                    className={`group relative min-w-[88px] snap-start flex-shrink-0 rounded-2xl border px-3 py-2.5 text-center transition-all duration-200 cursor-pointer ${
-                      active
-                        ? 'border-green-400/80 bg-gradient-to-b from-green-400 to-green-500 text-black shadow-lg shadow-green-500/20 scale-[1.02]'
-                        : 'border-gray-800 bg-gray-900/90 text-gray-300 hover:border-gray-600 hover:bg-gray-800/90 active:scale-95'
-                    }`}
+                    className={`group relative min-w-[104px] snap-start flex-shrink-0 overflow-hidden rounded-2xl border transition-all duration-200 cursor-pointer ${active ? 'border-green-400 shadow-lg shadow-green-500/20 scale-[1.02]' : 'border-gray-800 hover:border-gray-600'}`}
                   >
-                    <span className={`mx-auto mb-1.5 flex h-8 w-8 items-center justify-center rounded-xl ${
-                      active ? 'bg-black/10' : 'bg-gray-800 group-hover:bg-gray-700'
-                    }`}>
-                      <Icon className="h-4 w-4" strokeWidth={2.2} />
-                    </span>
-                    <span className="block max-w-[78px] truncate text-[11px] font-bold leading-4">
-                      {localizedMenuText(cat, language)}
-                    </span>
-                    <span className={`mt-1 inline-flex min-w-[18px] justify-center rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
-                      active ? 'bg-black/10 text-black/70' : 'bg-gray-800 text-gray-500'
-                    }`}>
-                      {count}
-                    </span>
+                    <div className="relative h-16 w-full bg-gray-900">
+                      {image ? (
+                        <img src={image} alt="" className={`h-full w-full object-cover transition-transform duration-300 ${active ? 'scale-105' : 'group-hover:scale-105'}`} loading="lazy" />
+                      ) : (
+                        <div className="h-full w-full bg-gray-900 flex items-center justify-center">
+                          <span className="text-gray-600 text-xs">{t('menu.no_items')}</span>
+                        </div>
+                      )}
+                      <div className={`absolute inset-0 ${active ? 'bg-black/25' : 'bg-black/45 group-hover:bg-black/30'}`} />
+                      <div className="absolute inset-x-1 bottom-1 text-center text-white text-[11px] font-bold truncate drop-shadow-lg">
+                        {localizedMenuText(cat, language)}
+                      </div>
+                    </div>
+                    <div className={`px-2 py-1.5 text-center text-[9px] font-semibold ${active ? 'bg-green-400 text-black' : 'bg-gray-900 text-gray-500'}`}>
+                      {count} {count === 1 ? 'item' : 'items'}
+                    </div>
                   </button>
                 );
               })}
@@ -205,57 +233,76 @@ export default function Menu() {
           </div>
         </div>
 
-        {/* Menu Items */}
+        {/* Menu Items — grouped by category so the active category follows scrolling */}
         <div className="px-4 py-6 max-w-4xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredItems.map(item => {
-              const sizes = getItemSizes(item);
-              return (
-                <Card
-                  key={item.id}
-                  className="bg-gray-900 border-gray-800 overflow-hidden cursor-pointer hover:border-red-600/50 transition-all"
-                  onClick={() => openItemDialog(item)}
-                >
-                  <div className="flex gap-4 p-4">
-                    {item.image_url && (
-                      <img
-                        src={item.image_url}
-                        alt={localizedMenuText(item, language)}
-                        className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
-                        loading="lazy"
-                      />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-white font-semibold text-lg truncate">{localizedMenuText(item, language)}</h3>
-                      {item.description && (
-                        <p className="text-gray-400 text-sm mt-1 line-clamp-2">{item.description}</p>
-                      )}
-                      <div className="flex items-center gap-2 mt-3 flex-wrap">
-                        {sizes.map((size, idx) => {
-                          const price = getItemPriceBreakdown(item, size.price);
-                          return (
-                            <Badge key={idx} variant="secondary" className="bg-gray-800 text-gray-200">
-                              {sizes.length > 1 ? `${size.name}: ` : ''}
-                              {price.discountActive ? (
-                                <>
-                                  <span className="line-through text-gray-500 mr-1">AED {price.originalPrice.toFixed(2)}</span>
-                                  <span className="text-green-400">AED {price.finalPrice.toFixed(2)}</span>
-                                </>
-                              ) : (
-                                <>AED {price.finalPrice.toFixed(2)}</>
-                              )}
-                            </Badge>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
+          {categories.map(cat => {
+            const catItems = menuItems.filter(item => item.category_id === cat.id);
+            if (!catItems.length) return null;
+            return (
+              <section
+                key={cat.id}
+                data-category-id={cat.id}
+                ref={el => { categoryRefs.current[cat.id] = el; }}
+                className="scroll-mt-36 mb-8"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-px flex-1 bg-gray-800" />
+                  <h2 className="text-white font-bold text-xl whitespace-nowrap select-none">{localizedMenuText(cat, language)}</h2>
+                  <span className="rounded-full bg-gray-800 px-2 py-1 text-[10px] font-semibold text-gray-400">{catItems.length}</span>
+                  <div className="h-px flex-1 bg-gray-800" />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {catItems.map(item => {
+                    const sizes = getItemSizes(item);
+                    return (
+                      <Card
+                        key={item.id}
+                        className="bg-gray-900 border-gray-800 overflow-hidden cursor-pointer hover:border-red-600/50 transition-all"
+                        onClick={() => openItemDialog(item)}
+                      >
+                        <div className="flex gap-4 p-4">
+                          {item.image_url && (
+                            <img
+                              src={item.image_url}
+                              alt={localizedMenuText(item, language)}
+                              className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
+                              loading="lazy"
+                            />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-white font-semibold text-lg truncate">{localizedMenuText(item, language)}</h3>
+                            {item.description && (
+                              <p className="text-gray-400 text-sm mt-1 line-clamp-2">{localizedMenuDescription(item, language)}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-3 flex-wrap">
+                              {sizes.map((size, idx) => {
+                                const price = getItemPriceBreakdown(item, size.price);
+                                return (
+                                  <Badge key={idx} variant="secondary" className="bg-gray-800 text-gray-200">
+                                    {sizes.length > 1 ? `${size.name}: ` : ''}
+                                    {price.discountActive ? (
+                                      <>
+                                        <span className="line-through text-gray-500 mr-1">AED {price.originalPrice.toFixed(2)}</span>
+                                        <span className="text-green-400">AED {price.finalPrice.toFixed(2)}</span>
+                                      </>
+                                    ) : (
+                                      <>AED {price.finalPrice.toFixed(2)}</>
+                                    )}
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
 
-          {filteredItems.length === 0 && categories.length > 0 && (
+          {categories.length > 0 && menuItems.length === 0 && (
             <div className="text-center py-16">
               <p className="text-gray-500 text-lg">{t('menu.no_items')}</p>
             </div>
