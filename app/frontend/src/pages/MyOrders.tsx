@@ -129,6 +129,7 @@ function OrderProgressTracker({ status, estimatedTime, referenceTime, isDelivery
           estimatedTime={estimatedTime}
           referenceTime={referenceTime}
           status={status}
+          readySubtitle={isDelivery ? undefined : 'Waiting for customer pickup.'}
         />
       )}
 
