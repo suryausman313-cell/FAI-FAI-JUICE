@@ -435,6 +435,7 @@ function applyBrand(
 export default function FaiFaiBranding() {
   useEffect(() => {
     let active = true;
+    let frame = 0;
 
     void loadBrandSettings().then((settings) => {
       if (active) {
@@ -442,31 +443,46 @@ export default function FaiFaiBranding() {
       }
     });
 
-    const observer = new MutationObserver(
-      (mutations) => {
-        mutations.forEach((mutation) => {
-          if (mutation.type === 'characterData') {
-            replaceTextNode(
-              mutation.target as Text,
-              currentBrand,
-            );
+    // React can add many DOM nodes during one render. Batch branding work into
+    // one animation frame instead of scanning the whole document repeatedly.
+    const pendingElements = new Set<HTMLElement>();
+    const flushMutations = () => {
+      frame = 0;
+
+      if (!active) return;
+
+      pendingElements.forEach((element) => {
+        if (element.isConnected) {
+          replaceTree(element, currentBrand);
+        }
+      });
+      pendingElements.clear();
+    };
+
+    const scheduleFlush = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(flushMutations);
+    };
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'characterData') {
+          replaceTextNode(mutation.target as Text, currentBrand);
+        }
+
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            replaceTextNode(node as Text, currentBrand);
+          } else if (node instanceof HTMLElement) {
+            pendingElements.add(node);
           }
-
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeType === Node.TEXT_NODE) {
-              replaceTextNode(
-                node as Text,
-                currentBrand,
-              );
-            } else if (node instanceof HTMLElement) {
-              replaceTree(node, currentBrand);
-            }
-          });
         });
+      }
 
-        updateMetadata(currentBrand);
-      },
-    );
+      if (pendingElements.size) {
+        scheduleFlush();
+      }
+    });
 
     observer.observe(document.body, {
       childList: true,
@@ -474,34 +490,51 @@ export default function FaiFaiBranding() {
       characterData: true,
     });
 
-    const brandUpdated = (
-      event: Event,
-    ) => {
-      const customEvent =
-        event as CustomEvent<BrandSettings>;
-
+    const brandUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<BrandSettings>;
       applyBrand(customEvent.detail);
     };
 
-    window.addEventListener(
-      'fai-fai-brand-updated',
-      brandUpdated,
-    );
+    // Keep title/logo metadata correct after BrowserRouter navigation without
+    // rescanning the whole document.
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+    const notifyRouteChange = () => {
+      window.dispatchEvent(new Event('fai-fai-route-change'));
+    };
 
-    const interval = window.setInterval(() => {
-      replaceTree(document.body, currentBrand);
-      updateMetadata(currentBrand);
-    }, 2000);
+    window.history.pushState = function (...args) {
+      const result = originalPushState.apply(this, args);
+      notifyRouteChange();
+      return result;
+    };
+    window.history.replaceState = function (...args) {
+      const result = originalReplaceState.apply(this, args);
+      notifyRouteChange();
+      return result;
+    };
+
+    const routeChanged = () => updateMetadata(currentBrand);
+
+    window.addEventListener('fai-fai-brand-updated', brandUpdated);
+    window.addEventListener('fai-fai-route-change', routeChanged);
+    window.addEventListener('popstate', routeChanged);
 
     return () => {
       active = false;
       observer.disconnect();
-      window.clearInterval(interval);
+      pendingElements.clear();
 
-      window.removeEventListener(
-        'fai-fai-brand-updated',
-        brandUpdated,
-      );
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+
+      window.removeEventListener('fai-fai-brand-updated', brandUpdated);
+      window.removeEventListener('fai-fai-route-change', routeChanged);
+      window.removeEventListener('popstate', routeChanged);
     };
   }, []);
 
