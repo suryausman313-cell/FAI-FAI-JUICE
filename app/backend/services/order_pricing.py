@@ -146,6 +146,8 @@ def _item_specific_extras(menu_item: Menu_items) -> list[dict[str, Any]]:
                 "id": -(index + 1),
                 "name": name,
                 "price": max(0.0, money(entry.get("price"))),
+                "choice_group": _normalize_text(entry.get("choice_group")),
+                "required": bool(entry.get("required")),
             }
         )
     return result
@@ -367,6 +369,21 @@ async def validate_and_price_order_items(
                 raise HTTPException(status_code=400, detail=f"Duplicate extra selected for {menu_item.name}.")
             seen_extra_keys.add(key)
             chosen_extras.append(extra)
+
+        # Talabat-style required choice groups: exactly one option is required per group.
+        configured_groups: dict[str, dict[str, Any]] = {}
+        for extra in allowed_extras:
+            group = _normalize_text(extra.get("choice_group"))
+            if group:
+                bucket = configured_groups.setdefault(group, {"required": False, "options": set()})
+                bucket["required"] = bool(bucket["required"] or extra.get("required"))
+                bucket["options"].add(str(extra["name"]).strip().casefold())
+        for group, rule in configured_groups.items():
+            chosen = [e for e in chosen_extras if _normalize_text(e.get("choice_group")) == group]
+            if len(chosen) > 1:
+                raise HTTPException(status_code=400, detail=f"Please select only one option for {group}.")
+            if rule["required"] and len(chosen) != 1:
+                raise HTTPException(status_code=400, detail=f"Please select one option for {group}.")
 
         extras_each = money(sum(float(extra["price"]) for extra in chosen_extras))
         unit_final = money(base_final + extras_each)
