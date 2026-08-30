@@ -320,7 +320,7 @@ export default function AdminFinance() {
         },
       );
       toast.success(status === 'approved' ? 'Rider cash approved' : 'Rider cash rejected');
-      await Promise.all([loadSummary(period), loadSubmissions(), loadPickupSubmissions()]);
+      await Promise.all([loadSummary(period, true), loadSubmissions(true), loadPickupSubmissions(true)]);
     } catch (error: any) {
       toast.error(error?.message || 'Could not review rider cash');
     } finally {
@@ -353,7 +353,7 @@ export default function AdminFinance() {
         }),
       });
       toast.success(status === 'approved' ? 'Pickup Cash approved' : 'Pickup Cash rejected');
-      await Promise.all([loadSummary(period), loadPickupSubmissions()]);
+      await Promise.all([loadSummary(period, true), loadPickupSubmissions(true)]);
     } catch (error: any) {
       toast.error(error?.message || 'Could not review Pickup Cash');
     } finally {
