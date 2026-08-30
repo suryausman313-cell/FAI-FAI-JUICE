@@ -459,7 +459,7 @@ export default function AdminMenu() {
   function addItemExtraOption() {
     setItemExtraOptions(current => [
       ...current,
-      { name: '', name_ar: '', price: 0, choice_group: '', required: false },
+      { name: '', name_ar: '', price: 0, choice_group: 'Flavour', required: true },
     ]);
   }
 
@@ -1203,9 +1203,9 @@ export default function AdminMenu() {
             <div className="rounded-xl border border-gray-700 overflow-hidden">
               <div className="flex items-center justify-between p-3">
                 <div>
-                  <Label>Allow Extras</Label>
+                  <Label>Flavours / Choices</Label>
                   <p className="text-gray-500 text-xs">
-                    Is item ke liye apne extras aur unki price set karein.
+                    Is item ke liye bottle ke flavours / choices aur unki price set karein.
                   </p>
                 </div>
                 <button
@@ -1230,10 +1230,10 @@ export default function AdminMenu() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-white">
-                        Extras for this item
+                        Flavours / Choices for this item
                       </p>
                       <p className="text-gray-500 text-xs mt-0.5">
-                        Sirf isi item par customer ko ye options dikhengi.
+                        Customer ko isi item ke andar ye flavours / choices dikhengi.
                       </p>
                     </div>
                     <Button
@@ -1244,14 +1244,14 @@ export default function AdminMenu() {
                       className="border-green-700 text-green-400 hover:bg-green-950/40 shrink-0"
                     >
                       <Plus className="w-4 h-4 mr-1" />
-                      Add Extra
+                      Add Flavour
                     </Button>
                   </div>
 
                   {itemExtraOptions.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-gray-700 px-3 py-4 text-center">
                       <p className="text-gray-500 text-xs">
-                        Abhi koi extra nahi. “Add Extra” dabakar name aur price add karein.
+                        Abhi koi flavour nahi. “Add Flavour” dabakar flavour name aur price add karein.
                       </p>
                     </div>
                   ) : (
@@ -1270,7 +1270,7 @@ export default function AdminMenu() {
                                 event.target.value,
                               )
                             }
-                            placeholder="Extra name"
+                            placeholder="Flavour name"
                             className="bg-gray-800 border-gray-700"
                           />
                           <Input
@@ -1283,7 +1283,7 @@ export default function AdminMenu() {
                                 event.target.value,
                               )
                             }
-                            placeholder="Extra Arabic"
+                            placeholder="Flavour Arabic"
                             className="bg-gray-800 border-gray-700 text-right"
                           />
                           <Input
@@ -1295,7 +1295,7 @@ export default function AdminMenu() {
                                 event.target.value,
                               )
                             }
-                            placeholder="Choice group (e.g. Flavour)"
+                            placeholder="Choice group"
                             className="bg-gray-800 border-gray-700"
                           />
                           <Input
