@@ -1,78 +1,52 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-interface IndexProps {
-  onDone?: () => void;
+const WELCOME_SEEN_KEY = 'fai_fai_welcome_ad_seen_v2';
+const AD_DURATION_MS = 22000;
+
+function hasSeenWelcomeAd(): boolean {
+  try {
+    return sessionStorage.getItem(WELCOME_SEEN_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Welcome advertisement overlay.
- *
- * The customer Menu is rendered underneath this overlay by App.tsx, so when
- * the ad finishes (or Skip is pressed) the real Home/Menu is already mounted
- * and is revealed immediately. The overlay never navigates to another route.
- */
-export default function Index({ onDone }: IndexProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const doneRef = useRef(false);
-  const [visible, setVisible] = useState(true);
-  const [videoPlaying, setVideoPlaying] = useState(false);
+function markWelcomeAdSeen() {
+  try {
+    sessionStorage.setItem(WELCOME_SEEN_KEY, '1');
+  } catch {
+    // If storage is unavailable, the ad still works for this render.
+  }
+}
 
-  const finish = useCallback(() => {
-    if (doneRef.current) return;
-    doneRef.current = true;
+export default function Index() {
+  const navigate = useNavigate();
+  const [visible, setVisible] = useState(() => !hasSeenWelcomeAd());
+  const timerRef = useRef<number | null>(null);
+  const finishedRef = useRef(false);
+
+  const finish = () => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    markWelcomeAdSeen();
     setVisible(false);
-    onDone?.();
-  }, [onDone]);
-
-  const startVideo = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video || doneRef.current) return;
-
-    // Set these as properties as well as JSX attributes. This is important on
-    // Android/Samsung browsers where autoplay policy is checked very early.
-    video.muted = true;
-    video.defaultMuted = true;
-    video.volume = 0;
-
-    try {
-      await video.play();
-    } catch {
-      // Autoplay can be blocked by the browser. We keep the video visually
-      // hidden until it actually starts, and a tap anywhere retries playback.
-    }
-  }, []);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    video.muted = true;
-    video.defaultMuted = true;
-    video.volume = 0;
-
-    // Try immediately and again after the media is ready. Some Android WebViews
-    // reject play() until the media element has loaded enough data.
-    void startVideo();
-    const retry = () => void startVideo();
-    video.addEventListener('loadeddata', retry);
-    video.addEventListener('canplay', retry);
-
-    return () => {
-      video.removeEventListener('loadeddata', retry);
-      video.removeEventListener('canplay', retry);
-    };
-  }, [startVideo]);
+    // Keep the customer on the real Home/Menu route after the ad.
+    navigate('/menu', { replace: true });
+  };
 
   useEffect(() => {
     if (!visible) return;
 
-    const retryOnVisible = () => {
-      if (document.visibilityState === 'visible') void startVideo();
-    };
+    // The welcome artwork is an animated WebP rather than a <video> element.
+    // This completely removes browser video controls/play overlays.
+    timerRef.current = window.setTimeout(finish, AD_DURATION_MS);
 
-    document.addEventListener('visibilitychange', retryOnVisible);
-    return () => document.removeEventListener('visibilitychange', retryOnVisible);
-  }, [visible, startVideo]);
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -87,65 +61,27 @@ export default function Index({ onDone }: IndexProps) {
         background: '#000',
         overflow: 'hidden',
       }}
-      onPointerDown={() => void startVideo()}
-      onTouchStart={() => void startVideo()}
     >
-      {/*
-        The poster is shown until playback really starts. This prevents the
-        browser's native centered ▶ overlay from ever being visible when
-        autoplay is temporarily blocked.
-      */}
       <img
-        src="/fai-fai-welcome-poster.jpg"
+        src="/fai-fai-welcome-animation-v2.webp?v=20260830-2"
         alt=""
-        aria-hidden="true"
+        draggable={false}
         style={{
           position: 'absolute',
           inset: 0,
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          opacity: videoPlaying ? 0 : 1,
-          transition: 'opacity 120ms linear',
+          display: 'block',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
           pointerEvents: 'none',
         }}
       />
 
-      <video
-        ref={videoRef}
-        src="/fai-fai-welcome-video.mp4"
-        autoPlay
-        muted
-        defaultMuted
-        playsInline
-        preload="auto"
-        controls={false}
-        disablePictureInPicture
-        disableRemotePlayback
-        onPlaying={() => setVideoPlaying(true)}
-        onEnded={finish}
-        onError={finish}
-        // Prevent browser-specific media UI from being requested.
-        controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover',
-          opacity: videoPlaying ? 1 : 0,
-          pointerEvents: 'none',
-          background: 'transparent',
-        }}
-      />
-
-      {/* The only visible control is our own Skip button. */}
       <button
         type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          finish();
-        }}
+        onClick={finish}
         style={{
           position: 'absolute',
           top: 18,
@@ -158,6 +94,7 @@ export default function Index({ onDone }: IndexProps) {
           color: '#fff',
           fontSize: 15,
           fontWeight: 700,
+          cursor: 'pointer',
         }}
       >
         Skip
