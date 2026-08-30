@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getAPIBaseURL } from '@/lib/config';
+import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 
 type ScreenMode = 'login' | 'signup' | 'reset';
 
@@ -104,6 +105,7 @@ async function postCustomerAuth<T>(
 
 export default function CustomerAuth() {
   const navigate = useNavigate();
+  const { login: loginCustomer } = useCustomerAuth();
 
   const registeredOnThisDevice = useMemo(
     () => localStorage.getItem(DEVICE_ACCOUNT_KEY) === '1',
@@ -149,15 +151,12 @@ export default function CustomerAuth() {
 
     setLoading(true);
     try {
-      const result = await postCustomerAuth<AuthResponse>('/api/v1/customer-auth/login', {
-        phone,
-        customer_phone: phone,
-        pin: loginPin,
-      });
-
-      saveCustomerSession(result, phone);
+      // Use the shared auth context so the provider state is updated before
+      // navigating to protected pages. This prevents the first successful
+      // login from immediately bouncing back to the login screen on Safari/iPhone.
+      await loginCustomer(phone, loginPin);
       toast.success('Login successful');
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (error) {
       toast.error(getErrorMessage(error, 'Invalid mobile number or PIN.'));
     } finally {
