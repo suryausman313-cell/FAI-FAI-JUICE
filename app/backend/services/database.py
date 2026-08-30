@@ -387,6 +387,28 @@ async def ensure_homepage_settings_columns() -> None:
     logger.info("Restaurant/homepage settings database columns checked successfully")
 
 
+
+
+async def ensure_rider_payout_lifecycle_columns() -> None:
+    """Add the Rider payment lifecycle fields without touching existing payout data."""
+    if not db_manager.async_session_maker:
+        raise RuntimeError("Database session is not initialized")
+    statements = [
+        "ALTER TABLE rider_payouts ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'confirmed'",
+        "ALTER TABLE rider_payouts ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE rider_payouts ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ",
+        "UPDATE rider_payouts SET status = 'confirmed' WHERE status IS NULL",
+        "UPDATE rider_payouts SET confirmed_at = COALESCE(confirmed_at, paid_at) WHERE status = 'confirmed' AND confirmed_at IS NULL",
+        "UPDATE rider_payouts SET sent_at = COALESCE(sent_at, paid_at, created_at, NOW()) WHERE sent_at IS NULL",
+        "CREATE INDEX IF NOT EXISTS ix_rider_payouts_status ON rider_payouts (status)",
+    ]
+    async with db_manager.async_session_maker() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.commit()
+    logger.info("Rider payout lifecycle schema checked successfully")
+
+
 async def ensure_admin_alarm_columns() -> None:
     """Add Admin-controlled Kitchen and Rider alarm fields safely."""
     if not db_manager.async_session_maker:
@@ -445,6 +467,7 @@ async def initialize_database():
         logger.info("V7 rider auto-assign schema migration completed")
 
         await ensure_admin_alarm_columns()
+        await ensure_rider_payout_lifecycle_columns()
         logger.info("V8 Admin alarm schema migration completed")
 
         logger.info("V7 database schema migration completed successfully")
