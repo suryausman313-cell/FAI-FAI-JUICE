@@ -28,9 +28,9 @@ import { BranchProvider } from '@/contexts/BranchContext';
 // Customer home is loaded eagerly so opening the app does not show the generic
 // Suspense spinner before the real Fai Fai welcome screen.
 import Index from './pages/Index';
+import Menu from './pages/Menu';
 
 // Customer pages
-const Menu = lazy(() => import('./pages/Menu'));
 const Cart = lazy(() => import('./pages/Cart'));
 const Checkout = lazy(() => import('./pages/Checkout'));
 
@@ -235,7 +235,11 @@ const AppRoutes = () => (
         path="/"
         element={
           <ProtectedCustomerRoute>
-            <Index />
+            <div style={{ position: 'relative', minHeight: '100vh' }}>
+              {/* Keep the real Home/Menu mounted underneath the welcome ad. */}
+              <Menu />
+              <Index />
+            </div>
           </ProtectedCustomerRoute>
         }
       />
