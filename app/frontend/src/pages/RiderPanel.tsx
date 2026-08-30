@@ -131,6 +131,7 @@ interface FinanceCurrentBalance {
 interface FinancePayoutTotals {
   paid_to_rider: number;
   payments: number;
+  pending_to_rider?: number;
 }
 
 interface RiderFinanceSummary {
@@ -147,6 +148,19 @@ interface RiderFinanceSummary {
   settlements: FinanceSettlementTotals;
   payouts: FinancePayoutTotals;
   current_balance: FinanceCurrentBalance;
+}
+
+interface RiderPayout {
+  id: number;
+  rider_id: number;
+  amount: number;
+  note: string;
+  paid_by: string;
+  payment_method: string;
+  status: 'pending' | 'confirmed';
+  sent_at: string | null;
+  confirmed_at: string | null;
+  paid_at: string | null;
 }
 
 interface CashSubmission {
@@ -204,6 +218,7 @@ export default function RiderPanel() {
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [financeSummary, setFinanceSummary] = useState<RiderFinanceSummary | null>(null);
   const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
+  const [riderPayouts, setRiderPayouts] = useState<RiderPayout[]>([]);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [cashAmount, setCashAmount] = useState('');
   const [cashNote, setCashNote] = useState('');
@@ -232,6 +247,7 @@ export default function RiderPanel() {
         loadStats(parsed.id);
         loadFinance(parsed.id, 'today');
         loadCashSubmissions(parsed.id);
+        loadRiderPayouts(parsed.id);
       } catch { /* ignore */ }
     } else if (savedRider && !savedToken) {
       // One-time re-login after secure rider sessions are introduced.
@@ -264,6 +280,7 @@ export default function RiderPanel() {
       loadStats(rider.id);
       loadFinance(rider.id, financePeriod);
       loadCashSubmissions(rider.id);
+      loadRiderPayouts(rider.id);
     }, 8000);
     return () => clearInterval(interval);
   }, [rider, financePeriod]);
@@ -721,6 +738,35 @@ export default function RiderPanel() {
     }
   }
 
+  async function loadRiderPayouts(riderId: number) {
+    try {
+      const res = await riderApi({
+        url: `/api/v1/finance/rider/${riderId}/payouts?limit=100`,
+        method: 'GET',
+        data: {},
+      });
+      setRiderPayouts(res?.data?.items || []);
+    } catch (e: any) {
+      console.error('Failed to load rider payments:', e);
+      if (e?.response?.status === 401 || e?.response?.status === 403) handleRiderAuthFailure();
+    }
+  }
+
+  async function confirmRiderPayout(payoutId: number) {
+    if (!rider) return;
+    try {
+      await riderApi({
+        url: `/api/v1/finance/rider/${rider.id}/payouts/${payoutId}/confirm`,
+        method: 'POST',
+        data: {},
+      });
+      toast.success('Payment received and confirmed');
+      await Promise.all([loadFinance(rider.id, financePeriod), loadRiderPayouts(rider.id)]);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || e?.data?.detail || 'Payment confirmation failed');
+    }
+  }
+
   async function submitCashToShop() {
     if (!rider || !financeSummary) return;
     const amount = Number(cashAmount);
@@ -825,6 +871,7 @@ export default function RiderPanel() {
           loadStats(rider.id),
           loadFinance(rider.id, financePeriod),
           loadCashSubmissions(rider.id),
+          loadRiderPayouts(rider.id),
         ]);
       }
     } catch (e: any) {
@@ -1151,21 +1198,36 @@ export default function RiderPanel() {
                   <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-green-400" /> My Rider Payment
                   </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="bg-purple-600/10 border border-purple-600/30 rounded-xl p-3">
-                      <p className="text-purple-300/70 text-xs">Earned This Period</p>
+                      <p className="text-purple-300/70 text-xs">Earned · Selected Period</p>
                       <p className="text-purple-300 font-bold mt-1">AED {Number(financeSummary.totals.rider_earnings || 0).toFixed(2)}</p>
                     </div>
                     <div className="bg-green-600/10 border border-green-600/30 rounded-xl p-3">
-                      <p className="text-green-300/70 text-xs">Paid This Period</p>
+                      <p className="text-green-300/70 text-xs">Paid / Confirmed · Period</p>
                       <p className="text-green-300 font-bold mt-1">AED {Number(financeSummary.payouts?.paid_to_rider || 0).toFixed(2)}</p>
                     </div>
+                    <div className="bg-orange-600/10 border border-orange-600/30 rounded-xl p-3">
+                      <p className="text-orange-300/70 text-xs">Payment Pending · Current</p>
+                      <p className="text-orange-300 font-bold mt-1">AED {Number(financeSummary.payouts?.pending_to_rider || financeSummary.current_balance.rider_pending_payment || 0).toFixed(2)}</p>
+                    </div>
                     <div className="bg-yellow-600/10 border border-yellow-600/30 rounded-xl p-3">
-                      <p className="text-yellow-300/70 text-xs">Still Owed to Me · Current</p>
+                      <p className="text-yellow-300/70 text-xs">Still To Receive · Current</p>
                       <p className="text-yellow-300 font-bold mt-1">AED {Number(financeSummary.current_balance.rider_remaining_to_receive || 0).toFixed(2)}</p>
                     </div>
                   </div>
-                  <p className="text-gray-500 text-xs mt-3">Delivery charge + Rider tip are my earnings. Customer cash is submitted to the shop separately.</p>
+                  <div className="mt-4 space-y-2">
+                    {riderPayouts.filter(item => item.status === 'pending').map(item => (
+                      <div key={item.id} className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-orange-300 font-semibold">Admin sent AED {Number(item.amount).toFixed(2)}</p>
+                          <p className="text-gray-500 text-xs">Waiting for your confirmation · {formatDateTime(item.sent_at)}</p>
+                        </div>
+                        <Button onClick={() => confirmRiderPayout(item.id)} className="bg-green-600 hover:bg-green-700 text-white rounded-lg">Confirm Received</Button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-gray-500 text-xs mt-3">Rider earnings = Delivery Charges + Rider Tips only. Shop tips are never included. Cash/Card payment method does not change the Rider Tip.</p>
                 </Card>
 
                 <Card className="bg-gray-900 border-gray-800 p-4">
