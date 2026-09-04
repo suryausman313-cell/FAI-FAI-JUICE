@@ -1,3 +1,4 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getAPIBaseURL } from './config';
 
 type EntityRequest = {
@@ -76,6 +77,7 @@ export async function backendRequest(
 
   const adminToken = localStorage.getItem('fai_fai_admin_token') || '';
   const customerToken = localStorage.getItem('vita_customer_token') || '';
+
   // A shop owner may use Admin and Customer screens in the same browser.
   // Customer-only endpoints must never receive the saved Admin token.
   const isCustomerEndpoint =
@@ -84,32 +86,72 @@ export async function backendRequest(
     path.startsWith('/api/v1/customer-auth/') ||
     path.startsWith('/api/v1/rider/delivery-eta/') ||
     path === '/api/v1/admin/customer-heartbeat';
+
   const bearerToken = isCustomerEndpoint
     ? customerToken
     : adminToken || customerToken;
 
-  const response = await fetch(url.toString(), {
-    method,
-    headers: {
-      ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
-      ...(
-        bearerToken
-          ? {
-              Authorization: `Bearer ${bearerToken}`,
-            }
-          : {}
-      ),
-    },
-    body: data === undefined ? undefined : JSON.stringify(data),
-  });
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+    ...(bearerToken
+      ? {
+          Authorization: `Bearer ${bearerToken}`,
+        }
+      : {}),
+  };
 
-  let payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(payload?.detail || payload?.message || `Request failed (${response.status})`);
+  const isIOSNative =
+    Capacitor.isNativePlatform() &&
+    Capacitor.getPlatform() === 'ios';
+
+  let payload: any;
+  let status: number;
+
+  if (isIOSNative) {
+    const response = await CapacitorHttp.request({
+      url: url.toString(),
+      method,
+      headers,
+      ...(data === undefined ? {} : { data }),
+      connectTimeout: 30000,
+      readTimeout: 30000,
+    });
+
+    status = response.status;
+    payload = response.data;
+
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        // Keep non-JSON response as text.
+      }
+    }
+  } else {
+    // Existing Web + Android behavior stays unchanged.
+    const response = await fetch(url.toString(), {
+      method,
+      headers,
+      body: data === undefined ? undefined : JSON.stringify(data),
+    });
+
+    status = response.status;
+    payload = await response.json().catch(() => null);
   }
+
+  if (status < 200 || status >= 300) {
+    throw new Error(
+      payload?.detail ||
+        payload?.message ||
+        `Request failed (${status})`,
+    );
+  }
+
   if (path === '/api/v1/entities/menu_items') {
     payload = restoreMenuImages(payload);
   }
+
   return { data: payload };
 }
 
