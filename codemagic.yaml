@@ -12,18 +12,22 @@ workflows:
     scripts:
       - name: Install dependencies
         script: |
+          cd app/frontend
           npm install
 
       - name: Build web app
         script: |
+          cd app/frontend
           npm run build
 
       - name: Sync Capacitor iOS
         script: |
+          cd app/frontend
           npx cap sync ios
 
       - name: Build iOS
         script: |
+          cd app/frontend
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
@@ -32,4 +36,4 @@ workflows:
             -derivedDataPath build
 
     artifacts:
-      - build/Build/Products/**/*.app
+      - app/frontend/build/Build/Products/**/*.app
