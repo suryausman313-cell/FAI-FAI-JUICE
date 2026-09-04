@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getAPIBaseURL } from './config';
 
 export interface Customer {
@@ -13,7 +14,7 @@ export interface Customer {
 interface AuthResponse {
   token?: string;
   access_token?: string;
-  token_type: string;
+  token_type?: string;
   customer: Customer;
 }
 
@@ -24,12 +25,22 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 30000,
 });
 
-function getAuthHeaders(): Record<string, string> {
-  const token =
+function isIOSNative(): boolean {
+  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
+}
+
+function getToken(): string | null {
+  return (
     localStorage.getItem(TOKEN_KEY) ||
-    sessionStorage.getItem(TOKEN_KEY);
+    sessionStorage.getItem(TOKEN_KEY)
+  );
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getToken();
 
   if (!token) {
     return {};
@@ -40,41 +51,140 @@ function getAuthHeaders(): Record<string, string> {
   };
 }
 
-function saveSession(data: AuthResponse) {
-  const token = String(data.access_token || data.token || '').trim();
-  const customer = JSON.stringify(data.customer);
+function saveSession(data: AuthResponse): void {
+  const token = String(
+    data.access_token || data.token || ''
+  ).trim();
 
   if (token) {
     localStorage.setItem(TOKEN_KEY, token);
     sessionStorage.setItem(TOKEN_KEY, token);
   }
 
-  localStorage.setItem(CUSTOMER_KEY, customer);
-  sessionStorage.setItem(CUSTOMER_KEY, customer);
+  if (data.customer) {
+    const customer = JSON.stringify(data.customer);
+
+    localStorage.setItem(CUSTOMER_KEY, customer);
+    sessionStorage.setItem(CUSTOMER_KEY, customer);
+  }
 }
 
-function clearSession() {
+function clearSession(): void {
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(CUSTOMER_KEY);
 
-  // Purana permanent login bhi remove kar do
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_KEY);
 }
 
-function getErrorMessage(
+function extractErrorMessage(
+  data: any,
+  fallback: string
+): string {
+  if (typeof data?.detail === 'string') {
+    return data.detail;
+  }
+
+  if (typeof data?.message === 'string') {
+    return data.message;
+  }
+
+  return fallback;
+}
+
+function getAxiosErrorMessage(
   error: unknown,
   fallback: string
-) {
+): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
+    const message = error.response?.data?.message;
 
     if (typeof detail === 'string') {
       return detail;
     }
+
+    if (typeof message === 'string') {
+      return message;
+    }
+
+    if (error.message) {
+      return error.message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return fallback;
+}
+
+/*
+ * IMPORTANT:
+ * iOS native app uses CapacitorHttp directly.
+ * Website and Android keep using the existing Axios flow.
+ */
+async function iosPost<T>(
+  path: string,
+  data: Record<string, unknown>,
+  token?: string
+): Promise<T> {
+  const response = await CapacitorHttp.post({
+    url: `${getAPIBaseURL()}${path}`,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(token
+        ? { Authorization: `Bearer ${token}` }
+        : {}),
+    },
+    data,
+    connectTimeout: 30000,
+    readTimeout: 30000,
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(
+      extractErrorMessage(
+        response.data,
+        `Request failed (${response.status})`
+      )
+    );
+  }
+
+  return response.data as T;
+}
+
+async function iosGet<T>(
+  path: string,
+  token: string
+): Promise<T> {
+  const response = await CapacitorHttp.get({
+    url: `${getAPIBaseURL()}${path}`,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    connectTimeout: 30000,
+    readTimeout: 30000,
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    clearSession();
+    throw new Error('Session expired');
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(
+      extractErrorMessage(
+        response.data,
+        `Request failed (${response.status})`
+      )
+    );
+  }
+
+  return response.data as T;
 }
 
 export const customerAuthApi = {
@@ -82,51 +192,81 @@ export const customerAuthApi = {
     name: string,
     phone: string,
     pin: string
-  ) {
+  ): Promise<Customer> {
     try {
-      const response = await api.post<AuthResponse>(
-        `${getAPIBaseURL()}/api/v1/customer-auth/signup`,
-        {
-          name,
-          phone,
-          pin,
-        }
-      );
+      let data: AuthResponse;
 
-      saveSession(response.data);
+      if (isIOSNative()) {
+        data = await iosPost<AuthResponse>(
+          '/api/v1/customer-auth/signup',
+          {
+            name,
+            phone,
+            pin,
+          }
+        );
+      } else {
+        const response = await api.post<AuthResponse>(
+          `${getAPIBaseURL()}/api/v1/customer-auth/signup`,
+          {
+            name,
+            phone,
+            pin,
+          }
+        );
 
-      return response.data.customer;
+        data = response.data;
+      }
+
+      saveSession(data);
+
+      return data.customer;
     } catch (error) {
       throw new Error(
-        getErrorMessage(error, 'Sign up failed')
+        getAxiosErrorMessage(error, 'Sign up failed')
       );
     }
   },
 
-  async login(phone: string, pin: string) {
+  async login(
+    phone: string,
+    pin: string
+  ): Promise<Customer> {
     try {
-      const response = await api.post<AuthResponse>(
-        `${getAPIBaseURL()}/api/v1/customer-auth/login`,
-        {
-          phone,
-          pin,
-        }
-      );
+      let data: AuthResponse;
 
-      saveSession(response.data);
+      if (isIOSNative()) {
+        data = await iosPost<AuthResponse>(
+          '/api/v1/customer-auth/login',
+          {
+            phone,
+            pin,
+          }
+        );
+      } else {
+        const response = await api.post<AuthResponse>(
+          `${getAPIBaseURL()}/api/v1/customer-auth/login`,
+          {
+            phone,
+            pin,
+          }
+        );
 
-      return response.data.customer;
+        data = response.data;
+      }
+
+      saveSession(data);
+
+      return data.customer;
     } catch (error) {
       throw new Error(
-        getErrorMessage(error, 'Login failed')
+        getAxiosErrorMessage(error, 'Login failed')
       );
     }
   },
 
-  async getCurrentCustomer() {
-    const token =
-      localStorage.getItem(TOKEN_KEY) ||
-      sessionStorage.getItem(TOKEN_KEY);
+  async getCurrentCustomer(): Promise<Customer | null> {
+    const token = getToken();
 
     if (!token) {
       clearSession();
@@ -134,26 +274,45 @@ export const customerAuthApi = {
     }
 
     try {
-      const response = await api.get<AuthResponse>(
-        `${getAPIBaseURL()}/api/v1/customer-auth/me`,
-        {
-          headers: getAuthHeaders(),
-        }
-      );
+      let data: AuthResponse;
 
-      saveSession(response.data);
-      return response.data.customer;
+      if (isIOSNative()) {
+        data = await iosGet<AuthResponse>(
+          '/api/v1/customer-auth/me',
+          token
+        );
+      } else {
+        const response = await api.get<AuthResponse>(
+          `${getAPIBaseURL()}/api/v1/customer-auth/me`,
+          {
+            headers: getAuthHeaders(),
+          }
+        );
+
+        data = response.data;
+      }
+
+      saveSession(data);
+
+      return data.customer;
     } catch (error) {
-      // Only clear a saved login when the server explicitly rejects the token.
-      // Temporary iPhone/Safari network or app-resume failures must not log
-      // the customer out after a successful login.
-      if (axios.isAxiosError(error)) {
+      /*
+       * On web/Android only clear session when server explicitly
+       * rejects the token.
+       */
+      if (!isIOSNative() && axios.isAxiosError(error)) {
         const status = error.response?.status;
+
         if (status === 401 || status === 403) {
           clearSession();
           return null;
         }
       }
+
+      /*
+       * iOS iosGet() already clears the session for 401/403.
+       * Temporary network errors should not destroy a saved login.
+       */
       throw error;
     }
   },
@@ -162,11 +321,30 @@ export const customerAuthApi = {
     oldPin: string,
     newPin: string
   ) {
+    const token = getToken();
+
+    if (!token) {
+      throw new Error('Please login again');
+    }
+
     try {
+      if (isIOSNative()) {
+        return await iosPost<any>(
+          '/api/v1/customer-auth/change-pin',
+          {
+            old_pin: oldPin,
+            current_pin: oldPin,
+            new_pin: newPin,
+          },
+          token
+        );
+      }
+
       const response = await api.post(
         `${getAPIBaseURL()}/api/v1/customer-auth/change-pin`,
         {
           old_pin: oldPin,
+          current_pin: oldPin,
           new_pin: newPin,
         },
         {
@@ -177,7 +355,7 @@ export const customerAuthApi = {
       return response.data;
     } catch (error) {
       throw new Error(
-        getErrorMessage(error, 'PIN change failed')
+        getAxiosErrorMessage(error, 'PIN change failed')
       );
     }
   },
@@ -199,14 +377,11 @@ export const customerAuthApi = {
     }
   },
 
-  getToken() {
-    return (
-      localStorage.getItem(TOKEN_KEY) ||
-      sessionStorage.getItem(TOKEN_KEY)
-    );
+  getToken(): string | null {
+    return getToken();
   },
 
-  logout() {
+  logout(): void {
     clearSession();
   },
 };
