@@ -4,7 +4,13 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
 
+    integrations:
+      app_store_connect: Codemagic
+
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.faifaijuice.app
       node: latest
       xcode: latest
       cocoapods: default
@@ -25,15 +31,22 @@ workflows:
           cd app/frontend
           npx cap sync ios
 
-      - name: Build iOS
+      - name: Set up code signing
         script: |
           cd app/frontend
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -derivedDataPath build
+          xcode-project use-profiles
+
+      - name: Build IPA
+        script: |
+          cd app/frontend
+          xcode-project build-ipa \
+            --project ios/App/App.xcodeproj \
+            --scheme App
 
     artifacts:
-      - app/frontend/build/Build/Products/**/*.app
+      - app/frontend/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
