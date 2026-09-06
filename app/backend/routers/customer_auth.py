@@ -401,3 +401,55 @@ async def me(
         raise HTTPException(status_code=401, detail="Customer account not found")
 
     return auth_response(account)
+
+@router.delete("/account")
+async def delete_account(
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently remove the customer's login account.
+
+    Transaction/order records are not deleted here because they may need to be
+    retained for accounting, fraud-prevention, tax, or other legal purposes.
+    The linked customer-session profile is anonymized when found.
+    """
+    token = get_bearer_token(authorization)
+    payload = decode_customer_token(token)
+
+    try:
+        account_id = int(payload.get("sub", ""))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid customer token")
+
+    result = await db.execute(
+        select(Customer_pin_accounts_v2).where(Customer_pin_accounts_v2.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Customer account not found")
+
+    phone = account.phone
+
+    # Remove direct customer profile data from the legacy/session profile too,
+    # while leaving historical transaction records untouched.
+    legacy = await find_legacy_customer(db, phone)
+    if legacy:
+        legacy.customer_name = "Deleted Customer"
+        legacy.customer_email = None
+        legacy.customer_phone = None
+        legacy.last_active = utc_now()
+
+    await db.delete(account)
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Could not delete customer account")
+        raise HTTPException(status_code=500, detail="Could not delete account")
+
+    return {
+        "success": True,
+        "message": "Your Fai Fai Juice account has been deleted",
+    }
+
