@@ -187,6 +187,33 @@ async function iosGet<T>(
   return response.data as T;
 }
 
+
+async function iosDelete<T>(
+  path: string,
+  token: string
+): Promise<T> {
+  const response = await CapacitorHttp.delete({
+    url: `${getAPIBaseURL()}${path}`,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    connectTimeout: 30000,
+    readTimeout: 30000,
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(
+      extractErrorMessage(
+        response.data,
+        `Request failed (${response.status})`
+      )
+    );
+  }
+
+  return response.data as T;
+}
+
 export const customerAuthApi = {
   async signup(
     name: string,
@@ -356,6 +383,42 @@ export const customerAuthApi = {
     } catch (error) {
       throw new Error(
         getAxiosErrorMessage(error, 'PIN change failed')
+      );
+    }
+  },
+
+
+  async deleteAccount() {
+    const token = getToken();
+
+    if (!token) {
+      throw new Error('Please login again');
+    }
+
+    try {
+      let data: any;
+
+      if (isIOSNative()) {
+        data = await iosDelete<any>(
+          '/api/v1/customer-auth/account',
+          token
+        );
+      } else {
+        const response = await api.delete(
+          `${getAPIBaseURL()}/api/v1/customer-auth/account`,
+          {
+            headers: getAuthHeaders(),
+          }
+        );
+
+        data = response.data;
+      }
+
+      clearSession();
+      return data;
+    } catch (error) {
+      throw new Error(
+        getAxiosErrorMessage(error, 'Account deletion failed')
       );
     }
   },
