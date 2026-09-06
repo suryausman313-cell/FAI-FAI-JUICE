@@ -51,6 +51,10 @@ const CustomerAuth = lazy(
   () => import('./pages/CustomerAuth')
 );
 
+const AccountSettings = lazy(
+  () => import('./pages/AccountSettings')
+);
+
 const RiderPanel = lazy(
   () => import('./pages/RiderPanel')
 );
@@ -286,6 +290,15 @@ const AppRoutes = () => (
       <Route
         path="/account"
         element={<CustomerAuth />}
+      />
+
+      <Route
+        path="/account-settings"
+        element={
+          <ProtectedCustomerRoute>
+            <AccountSettings />
+          </ProtectedCustomerRoute>
+        }
       />
 
       <Route
