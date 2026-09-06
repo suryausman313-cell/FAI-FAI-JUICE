@@ -330,10 +330,10 @@ export default function CustomerAuth() {
         <div className="mb-9 text-center">
           <h1 className="text-4xl font-black tracking-tight">
             <span className="text-white">
-              Vita
+              Fai Fai
             </span>{' '}
             <span className="text-red-600">
-              Napoli
+              Juice
             </span>
           </h1>
 
