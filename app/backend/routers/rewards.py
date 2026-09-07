@@ -2,7 +2,7 @@
 
 Rules:
 - Rewards master switch controlled by Admin.
-- Normal reward after completed AED 15+ order; expires in 7 days.
+- Normal Surprise Box after completed AED 15+ order; expires in 7 days. New boxes stay unopened until customer taps Open Box.
 - 3 completed AED 100+ orders within 30 days unlock Golden; expires in 30 days.
 - Normal free item is only Small Ice Cream.
 - Reward and promo cannot be combined (enforced in orders.py).
@@ -146,7 +146,7 @@ async def _insert_reward(db: AsyncSession, *, customer_id: int, source_order_id:
         max_discount=float(definition["max_discount"]),
         minimum_order=float(definition["minimum_order"]),
         title=str(definition["title"]),
-        status="available",
+        status="unopened",
         expires_at=utc_now() + timedelta(days=days),
     ))
     try:
@@ -204,7 +204,7 @@ async def sync_customer_rewards(db: AsyncSession, customer_id: int) -> None:
     changed = await _repair_old_reward_usage(db, customer_id, list(rewards))
 
     for reward in rewards:
-        if reward.status == "available" and reward.expires_at and reward.expires_at < now:
+        if reward.status in {"unopened", "available"} and reward.expires_at and reward.expires_at < now:
             reward.status = "expired"
             changed = True
         if reward.status in {"redeemed", "reserved"} and reward.redeemed_order_id:
@@ -264,16 +264,20 @@ async def get_reward_for_checkout(db: AsyncSession, *, customer_id: int, reward_
     return reward
 
 
-def reward_to_dict(reward: Customer_rewards) -> dict[str, Any]:
+def reward_to_dict(reward: Customer_rewards, *, hide_unopened: bool = False) -> dict[str, Any]:
+    unopened = reward.status == "unopened"
+    hidden = bool(hide_unopened and unopened)
     return {
         "id": reward.id,
         "tier": reward.reward_tier,
-        "type": reward.reward_type,
-        "value": float(reward.reward_value or 0),
-        "max_discount": float(reward.max_discount or 0),
-        "minimum_order": float(reward.minimum_order or 0),
-        "title": reward.title,
+        # Never reveal the prize before Open Box.
+        "type": "hidden" if hidden else reward.reward_type,
+        "value": 0.0 if hidden else float(reward.reward_value or 0),
+        "max_discount": 0.0 if hidden else float(reward.max_discount or 0),
+        "minimum_order": 0.0 if hidden else float(reward.minimum_order or 0),
+        "title": "Surprise Box" if hidden else reward.title,
         "status": reward.status,
+        "opened": not unopened,
         "expires_at": reward.expires_at.isoformat() if reward.expires_at else None,
         "source_order_id": reward.source_order_id,
     }
@@ -295,11 +299,53 @@ async def update_admin_reward_settings(body: RewardSettingsUpdate, identity: Adm
     return {"enabled": enabled, "message": "Rewards turned ON" if enabled else "Rewards turned OFF"}
 
 
+@router.post("/{reward_id}/open")
+async def open_reward_box(
+    reward_id: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open one Surprise Box exactly once and reveal its pre-assigned prize."""
+    customer_id = customer_id_from_authorization(authorization)
+    if not await get_rewards_enabled(db):
+        raise HTTPException(status_code=400, detail="Rewards are currently turned off")
+
+    await sync_customer_rewards(db, customer_id)
+
+    # Row lock makes two rapid taps / two devices safe. Only one request can
+    # transition unopened -> available; a repeated open simply returns the
+    # already-open reward without creating or changing the prize.
+    reward = await db.scalar(
+        select(Customer_rewards)
+        .where(
+            Customer_rewards.id == int(reward_id),
+            Customer_rewards.customer_id == customer_id,
+        )
+        .with_for_update()
+    )
+    if not reward:
+        raise HTTPException(status_code=404, detail="Surprise Box not found")
+
+    if reward.expires_at and reward.expires_at < utc_now():
+        reward.status = "expired"
+        await db.commit()
+        raise HTTPException(status_code=400, detail="This Surprise Box has expired")
+
+    if reward.status == "unopened":
+        reward.status = "available"
+        await db.commit()
+        await db.refresh(reward)
+    elif reward.status not in {"available", "reserved", "redeemed"}:
+        raise HTTPException(status_code=400, detail="This Surprise Box cannot be opened")
+
+    return {"reward": reward_to_dict(reward)}
+
+
 @router.get("/me")
 async def my_rewards(authorization: Optional[str] = Header(default=None, alias="Authorization"), db: AsyncSession = Depends(get_db)):
     customer_id = customer_id_from_authorization(authorization)
     if not await get_rewards_enabled(db):
-        return {"enabled": False, "available": [], "history": [], "gold_progress": 0, "gold_required": GOLD_REQUIRED_ORDERS, "gold_order_min": GOLD_ORDER_MIN, "gold_window_days": GOLD_WINDOW_DAYS, "normal_order_min": NORMAL_MIN_ORDER}
+        return {"enabled": False, "boxes": [], "available": [], "history": [], "gold_progress": 0, "gold_required": GOLD_REQUIRED_ORDERS, "gold_order_min": GOLD_ORDER_MIN, "gold_window_days": GOLD_WINDOW_DAYS, "normal_order_min": NORMAL_MIN_ORDER}
 
     await sync_customer_rewards(db, customer_id)
     rows = (
@@ -311,8 +357,9 @@ async def my_rewards(authorization: Optional[str] = Header(default=None, alias="
         )
     ).scalars().all()
 
+    boxes = [reward_to_dict(row, hide_unopened=True) for row in rows if row.status == "unopened"]
     available = [reward_to_dict(row) for row in rows if row.status == "available"]
-    history = [reward_to_dict(row) for row in rows if row.status != "available"]
+    history = [reward_to_dict(row) for row in rows if row.status not in {"unopened", "available"}]
 
     latest_gold_source = max([int(row.source_order_id) for row in rows if row.reward_tier == "golden"] or [0])
     qualifying = (
@@ -336,6 +383,7 @@ async def my_rewards(authorization: Optional[str] = Header(default=None, alias="
 
     return {
         "enabled": True,
+        "boxes": boxes,
         "available": available,
         "history": history,
         "gold_progress": min(count, GOLD_REQUIRED_ORDERS),
