@@ -543,10 +543,13 @@ async def place_order(
 
         tax_percent = max(0.0, min(100.0, float(getattr(settings, "tax_percent", 0) or 0)))
         vat_included = bool(getattr(settings, "vat_included", False))
+        # Rewards/promos reduce ITEMS only. Service fee, small-order fee,
+        # delivery/rider charge and tip are never discounted.
+        items_after_discount = money(max(0.0, subtotal_amount - discount_amount))
         taxable_amount = money(
             max(
                 0.0,
-                subtotal_amount - discount_amount + service_fee + small_order_fee + delivery_charge,
+                items_after_discount + service_fee + small_order_fee + delivery_charge,
             )
         )
         if tax_percent > 0:
@@ -563,13 +566,12 @@ async def place_order(
         server_total = money(
             max(
                 0.0,
-                subtotal_amount
+                items_after_discount
                 + service_fee
                 + small_order_fee
                 + delivery_charge
                 + tax_added_to_total
-                + tip_amount
-                - discount_amount,
+                + tip_amount,
             )
         )
 

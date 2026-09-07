@@ -119,6 +119,14 @@ def choose_golden_reward() -> dict[str, Any]:
 
 
 async def _insert_reward(db: AsyncSession, *, customer_id: int, source_order_id: int, reward_tier: str, definition: dict[str, Any]) -> None:
+    # Serialize reward creation on the source order. This prevents two simultaneous
+    # /rewards/me calls (or two devices) from creating the same reward twice.
+    await db.scalar(
+        select(Orders.id)
+        .where(Orders.id == source_order_id)
+        .with_for_update()
+    )
+
     existing = await db.scalar(
         select(Customer_rewards.id).where(
             Customer_rewards.customer_id == customer_id,
