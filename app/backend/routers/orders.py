@@ -7,13 +7,14 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, or_
+from sqlalchemy import select, desc, func, or_, update
 from typing import Optional
 
 from core.database import get_db
 from models.orders import Orders
 from models.menu_items import Menu_items
 from models.offers import Offers
+from models.customer_rewards import Customer_rewards
 from services.rider_assignment import auto_assign_order, cancel_order_assignments
 from services.order_notes import public_order_notes
 from routers.customer_auth import (
@@ -56,7 +57,7 @@ class PlaceOrderRequest(BaseModel):
     tip_amount: Optional[float] = Field(default=0, ge=0, le=500)
     tip_type: Optional[str] = Field(default="", max_length=20)  # 'rider' or 'shop'
     items_json: str = Field(min_length=2, max_length=100000)
-    # Optional customer reward. Old app builds omit this and continue unchanged.
+    # Optional reward selected by the customer. Old app builds omit it safely.
     reward_id: Optional[int] = Field(default=None, ge=1)
 
 
@@ -311,8 +312,7 @@ async def place_order(
             delivery_zone_name = str(delivery_result.get("zone_name") or "")[:100]
 
         # ===== PROMO / REWARD VALIDATION =====
-        # Reward support is additive: old builds send no reward_id and follow the
-        # exact existing promo path below. Promo + reward stacking is blocked.
+        # A customer can use ONE reward OR ONE promo code, never both.
         promo_code = str(data.promo_code or "").strip().upper()
         discount_type = ""
         discount_percent = 0.0
@@ -330,6 +330,40 @@ async def place_order(
                 customer_id=int(customer_payload.get("sub")),
                 reward_id=int(data.reward_id),
             )
+
+            # Repair/defence for rewards created by an older buggy build:
+            # if this reward ID is already recorded on a real previous order,
+            # mark it redeemed and refuse to apply it again. This fixes existing
+            # customers immediately, not only rewards used after this deployment.
+            prior_reward_order_id = await db.scalar(
+                select(Orders.id)
+                .where(
+                    Orders.user_id == guest_user_id,
+                    Orders.status.notin_(["cancelled", "expired", "payment_pending"]),
+                    Orders.discount_type.like("reward_%"),
+                    Orders.order_notes.like(f"%Reward:%(#{int(selected_reward.id)})%"),
+                )
+                .order_by(Orders.id.desc())
+                .limit(1)
+            )
+            if prior_reward_order_id:
+                await db.execute(
+                    update(Customer_rewards)
+                    .where(
+                        Customer_rewards.id == int(selected_reward.id),
+                        Customer_rewards.customer_id == int(customer_payload.get("sub")),
+                    )
+                    .values(
+                        status="redeemed",
+                        redeemed_order_id=int(prior_reward_order_id),
+                        redeemed_at=datetime.now(timezone.utc),
+                    )
+                )
+                await db.commit()
+                raise HTTPException(
+                    status_code=409,
+                    detail="This reward was already used. Please choose another reward.",
+                )
 
             minimum = money(selected_reward.minimum_order)
             if subtotal_amount + 0.001 < minimum:
@@ -694,10 +728,31 @@ async def place_order(
         db.add(order)
         await db.flush()
 
+        # CRITICAL ONE-TIME REWARD CLAIM:
+        # Claim by SQL WHERE status='available' in the SAME transaction as the order.
+        # Even two taps/devices at the same moment cannot redeem the same reward twice.
         if selected_reward is not None:
-            selected_reward.status = "reserved" if initial_status == "payment_pending" else "redeemed"
-            selected_reward.redeemed_order_id = order.id
-            selected_reward.redeemed_at = datetime.now(timezone.utc) if initial_status != "payment_pending" else None
+            reward_status = "reserved" if initial_status == "payment_pending" else "redeemed"
+            claim_result = await db.execute(
+                update(Customer_rewards)
+                .where(
+                    Customer_rewards.id == int(selected_reward.id),
+                    Customer_rewards.customer_id == int(customer_payload.get("sub")),
+                    Customer_rewards.status == "available",
+                    Customer_rewards.expires_at >= datetime.now(timezone.utc),
+                )
+                .values(
+                    status=reward_status,
+                    redeemed_order_id=order.id,
+                    redeemed_at=(datetime.now(timezone.utc) if reward_status == "redeemed" else None),
+                )
+            )
+            if int(claim_result.rowcount or 0) != 1:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="This reward was already used. Please choose another reward.",
+                )
 
         await db.commit()
         await db.refresh(order)
