@@ -16,6 +16,7 @@ import { useTranslation } from '@/lib/i18n';
 import { isPromoOfferCurrentlyActive } from '@/lib/discounts';
 import { getGuestSessionId } from '@/lib/guest-session';
 import { getAPIBaseURL } from '@/lib/config';
+import { CustomerReward, getMyRewards, rewardDiscountForCart } from '@/lib/rewards';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -476,6 +477,11 @@ export default function Checkout() {
   const [validatingPromo, setValidatingPromo] = useState(false);
   const [activePromoOffers, setActivePromoOffers] = useState<Offer[]>([]);
 
+  // Fai Fai Surprise Box / Golden rewards
+  const [availableRewards, setAvailableRewards] = useState<CustomerReward[]>([]);
+  const [selectedReward, setSelectedReward] = useState<CustomerReward | null>(null);
+  const [rewardsLoading, setRewardsLoading] = useState(false);
+
   // Shop status
   const [shopClosed, setShopClosed] = useState(false);
   const [shopClosedMessage, setShopClosedMessage] = useState('');
@@ -499,6 +505,34 @@ export default function Checkout() {
   useEffect(() => {
     setCart(getCart());
     loadActivePromoOffers();
+
+    let active = true;
+    setRewardsLoading(true);
+    getMyRewards()
+      .then(payload => {
+        if (!active) return;
+        if (payload?.enabled === false) {
+          setAvailableRewards([]);
+          setSelectedReward(null);
+          localStorage.removeItem('fai_fai_selected_reward_id');
+          return;
+        }
+        const rewards = payload?.available || [];
+        setAvailableRewards(rewards);
+        const savedId = Number(localStorage.getItem('fai_fai_selected_reward_id') || 0);
+        if (savedId) {
+          const saved = rewards.find(reward => Number(reward.id) === savedId) || null;
+          if (saved) setSelectedReward(saved);
+          else localStorage.removeItem('fai_fai_selected_reward_id');
+        }
+      })
+      .catch(() => {
+        // Rewards are optional. A temporary rewards error must never block checkout.
+        if (active) setAvailableRewards([]);
+      })
+      .finally(() => { if (active) setRewardsLoading(false); });
+
+    return () => { active = false; };
   }, []);
 
   // Read only the public Ziina ON/OFF state. The secret API key stays on Render.
@@ -548,6 +582,8 @@ export default function Checkout() {
           if (finalStatus === 'completed') {
             localStorage.removeItem('vita_pending_ziina_order_id');
             clearCart();
+      localStorage.removeItem('fai_fai_selected_reward_id');
+      setSelectedReward(null);
             window.dispatchEvent(new Event('cart-updated'));
             toast.success(`${t('checkout.order_number')} #${orderId} — online payment successful`);
             navigate('/order-confirmation', { replace: true, state: { orderId } });
@@ -1104,6 +1140,8 @@ export default function Checkout() {
         const value = isFixed
           ? Number(matchedOffer.fixed_discount_amount || 0)
           : Number(matchedOffer.discount_percent || 0);
+        setSelectedReward(null);
+        localStorage.removeItem('fai_fai_selected_reward_id');
         setPromoApplied(true);
         setPromoDiscount(value);
         setPromoOffer(matchedOffer);
@@ -1128,6 +1166,17 @@ export default function Checkout() {
     setPromoCode('');
   }
 
+  function chooseReward(reward: CustomerReward) {
+    removePromo();
+    setSelectedReward(reward);
+    localStorage.setItem('fai_fai_selected_reward_id', String(reward.id));
+  }
+
+  function removeReward() {
+    setSelectedReward(null);
+    localStorage.removeItem('fai_fai_selected_reward_id');
+  }
+
   const subtotal = getCartTotal(cart);
   const originalSubtotal = getCartOriginalTotal(cart);
   const itemDiscountTotal = getCartItemDiscountTotal(cart);
@@ -1138,9 +1187,13 @@ export default function Checkout() {
       ? Math.min(subtotal, Number(promoOffer.fixed_discount_amount || promoDiscount || 0))
       : (subtotal * Number(promoOffer.discount_percent || promoDiscount || 0)) / 100;
   const maximumPromoDiscount = Number(promoOffer?.maximum_discount_amount || 0);
-  const discountAmount = maximumPromoDiscount > 0
+  const promoDiscountAmount = maximumPromoDiscount > 0
     ? Math.min(rawPromoDiscount, maximumPromoDiscount)
     : rawPromoDiscount;
+  const rewardDiscountAmount = selectedReward
+    ? rewardDiscountForCart(selectedReward, subtotal, cart)
+    : 0;
+  const discountAmount = selectedReward ? rewardDiscountAmount : promoDiscountAmount;
   // Service fee only applies based on admin setting (pickup/delivery/both)
   const shouldApplyServiceFee = serviceFeeEnabled && (
     serviceFeeAppliesTo === 'both' ||
@@ -1376,6 +1429,9 @@ export default function Checkout() {
           : `${Number(promoOffer.discount_percent || promoDiscount)}%`;
         noteParts.push(`Promo: ${promoOffer.promo_code} (-${promoLabel})`);
       }
+      if (selectedReward) {
+        noteParts.push(`Reward: ${selectedReward.title} (#${selectedReward.id})`);
+      }
       noteParts.push(`Order Type: ${orderType === 'delivery' ? 'Delivery' : 'Pickup'}`);
       const fullNotes = noteParts.filter(Boolean).join(' | ');
 
@@ -1402,6 +1458,7 @@ export default function Checkout() {
           discount_type: promoApplied && promoOffer ? (promoOffer.discount_type || 'percentage') : '',
           discount_percent: promoApplied && promoOffer && (promoOffer.discount_type || 'percentage') !== 'fixed' ? Number(promoOffer.discount_percent || 0) : 0,
           discount_amount: Number(discountAmount.toFixed(2)),
+          reward_id: selectedReward ? Number(selectedReward.id) : null,
           service_fee: Number(serviceFee.toFixed(2)),
           small_order_fee: Number(smallOrderFee.toFixed(2)),
           delivery_charge: orderType === 'delivery' ? Number(deliveryFee.toFixed(2)) : 0,
@@ -1435,6 +1492,8 @@ export default function Checkout() {
       if (response?.data?.payment_already_completed === true) {
         localStorage.removeItem('vita_pending_ziina_order_id');
         clearCart();
+      localStorage.removeItem('fai_fai_selected_reward_id');
+      setSelectedReward(null);
         window.dispatchEvent(new Event('cart-updated'));
         toast.success(`${t('checkout.order_number')} #${orderId} — online payment already completed`);
         navigate('/order-confirmation', { state: { orderId } });
@@ -1461,6 +1520,8 @@ export default function Checkout() {
           if (payment?.data?.already_paid === true) {
             localStorage.removeItem('vita_pending_ziina_order_id');
             clearCart();
+      localStorage.removeItem('fai_fai_selected_reward_id');
+      setSelectedReward(null);
             window.dispatchEvent(new Event('cart-updated'));
             navigate('/order-confirmation', { state: { orderId } });
             return;
@@ -1505,6 +1566,8 @@ export default function Checkout() {
       localStorage.removeItem('vita_pending_ziina_order_id');
       
       clearCart();
+      localStorage.removeItem('fai_fai_selected_reward_id');
+      setSelectedReward(null);
       window.dispatchEvent(new Event('cart-updated'));
       toast.success(`${t('checkout.order_number')} #${orderId} ${t('checkout.order_success')}`);
       navigate('/order-confirmation', { state: { orderId } });
@@ -1931,6 +1994,60 @@ export default function Checkout() {
             </div>
           </div>
 
+          {/* Fai Fai Surprise Box rewards */}
+          {(rewardsLoading || availableRewards.length > 0) && (
+            <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-bold text-white">🎁 Fai Fai Rewards</p>
+                  <p className="text-xs text-gray-400">Use one reward on this order. Promo codes cannot be combined.</p>
+                </div>
+                <button type="button" onClick={() => navigate('/rewards')} className="text-xs font-semibold text-yellow-400 hover:text-yellow-300">View all</button>
+              </div>
+
+              {rewardsLoading ? (
+                <p className="text-sm text-gray-500">Loading rewards…</p>
+              ) : selectedReward ? (
+                <div className="rounded-xl border border-yellow-500/30 bg-black/30 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-yellow-300">{selectedReward.title}</p>
+                      <p className="mt-1 text-xs text-gray-400">Minimum order AED {Number(selectedReward.minimum_order || 0).toFixed(0)}</p>
+                      {subtotal < Number(selectedReward.minimum_order || 0) && (
+                        <p className="mt-1 text-xs text-orange-300">Add more items to reach the minimum order.</p>
+                      )}
+                      {selectedReward.type === 'free_ice_cream' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
+                        <p className="mt-1 text-xs text-orange-300">Add a Small Ice Cream priced AED 5 or less to use it.</p>
+                      )}
+                      {selectedReward.type === 'golden_free_item' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
+                        <p className="mt-1 text-xs text-orange-300">Add an eligible item up to AED 15 (Acai, smoothies, bottles and boxes excluded).</p>
+                      )}
+                      {rewardDiscountAmount > 0 && <p className="mt-1 text-xs text-green-400">Saving AED {rewardDiscountAmount.toFixed(2)}</p>}
+                    </div>
+                    <button type="button" onClick={removeReward} className="text-xs text-gray-400 hover:text-red-400">Remove</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {availableRewards.slice(0, 3).map(reward => (
+                    <button
+                      key={reward.id}
+                      type="button"
+                      onClick={() => chooseReward(reward)}
+                      className="flex w-full items-center justify-between rounded-xl border border-gray-800 bg-black/30 p-3 text-left hover:border-yellow-500/40"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-white">{reward.tier === 'golden' ? '👑 ' : '🎁 '}{reward.title}</p>
+                        <p className="text-xs text-gray-500">Min. AED {Number(reward.minimum_order || 0).toFixed(0)}</p>
+                      </div>
+                      <span className="text-xs font-bold text-yellow-400">Use</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Promo Code — hidden until Admin has a currently active promo-code offer */}
           {activePromoOffers.length > 0 && (
             <div>
@@ -2132,9 +2249,11 @@ export default function Checkout() {
                   <span className="text-green-400">AED {tipAmount.toFixed(2)}</span>
                 </div>
               )}
-              {promoApplied && (
+              {(promoApplied || selectedReward) && discountAmount > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">{t('checkout.discount')} ({(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})</span>
+                  <span className="text-green-400">
+                    {selectedReward ? `Reward: ${selectedReward.title}` : `${t('checkout.discount')} (${(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})`}
+                  </span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
               )}
