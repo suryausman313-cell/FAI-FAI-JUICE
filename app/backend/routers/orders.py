@@ -56,6 +56,8 @@ class PlaceOrderRequest(BaseModel):
     tip_amount: Optional[float] = Field(default=0, ge=0, le=500)
     tip_type: Optional[str] = Field(default="", max_length=20)  # 'rider' or 'shop'
     items_json: str = Field(min_length=2, max_length=100000)
+    # Optional customer reward. Old app builds omit this and continue unchanged.
+    reward_id: Optional[int] = Field(default=None, ge=1)
 
 
 class DeliveryLocationData(BaseModel):
@@ -308,13 +310,82 @@ async def place_order(
                 delivery_distance_km = None
             delivery_zone_name = str(delivery_result.get("zone_name") or "")[:100]
 
-        # ===== PROMO VALIDATION =====
+        # ===== PROMO / REWARD VALIDATION =====
+        # Reward support is additive: old builds send no reward_id and follow the
+        # exact existing promo path below. Promo + reward stacking is blocked.
         promo_code = str(data.promo_code or "").strip().upper()
         discount_type = ""
         discount_percent = 0.0
         discount_amount = 0.0
+        selected_reward = None
 
-        if promo_code:
+        if data.reward_id is not None:
+            if promo_code:
+                raise HTTPException(status_code=400, detail="Promo code and reward cannot be used together")
+
+            from routers.rewards import get_reward_for_checkout
+
+            selected_reward = await get_reward_for_checkout(
+                db,
+                customer_id=int(customer_payload.get("sub")),
+                reward_id=int(data.reward_id),
+            )
+
+            minimum = money(selected_reward.minimum_order)
+            if subtotal_amount + 0.001 < minimum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Minimum order for this reward is AED {minimum:.2f}",
+                )
+
+            reward_type = str(selected_reward.reward_type or "").lower().strip()
+            reward_value = money(selected_reward.reward_value)
+            maximum = money(selected_reward.max_discount)
+
+            if reward_type == "fixed":
+                discount_type = "reward_fixed"
+                discount_amount = min(subtotal_amount, reward_value)
+            elif reward_type == "percent":
+                discount_type = "reward_percentage"
+                discount_percent = max(0.0, min(100.0, reward_value))
+                discount_amount = money(subtotal_amount * discount_percent / 100)
+            elif reward_type == "free_ice_cream":
+                eligible = [
+                    item for item in canonical_items
+                    if not bool(item.get("is_deal"))
+                    and "ice cream" in str(item.get("name") or "").lower()
+                    and money(item.get("unit_price")) <= 5.01
+                ]
+                if not eligible:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Add one Small Ice Cream (AED 5 or less) to use this reward",
+                    )
+                discount_type = "reward_free_ice_cream"
+                discount_amount = min(5.0, min(money(item.get("unit_price")) for item in eligible))
+            elif reward_type == "golden_free_item":
+                blocked_words = ("acai", "smoothie", "bottle", "box")
+                eligible = [
+                    item for item in canonical_items
+                    if not bool(item.get("is_deal"))
+                    and money(item.get("unit_price")) <= 15.01
+                    and not any(word in str(item.get("name") or "").lower() for word in blocked_words)
+                ]
+                if not eligible:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Add an eligible item priced AED 15 or less to use this Golden reward",
+                    )
+                discount_type = "reward_golden_free_item"
+                discount_amount = min(15.0, max(money(item.get("unit_price")) for item in eligible))
+            else:
+                raise HTTPException(status_code=400, detail="Unsupported reward type")
+
+            if maximum > 0:
+                discount_amount = min(discount_amount, maximum)
+            discount_amount = money(max(0.0, min(subtotal_amount, discount_amount)))
+
+        elif promo_code:
             offer_result = await db.execute(
                 select(Offers).where(
                     Offers.is_active.is_(True),
@@ -621,6 +692,13 @@ async def place_order(
             items_json=canonical_items_json,
         )
         db.add(order)
+        await db.flush()
+
+        if selected_reward is not None:
+            selected_reward.status = "reserved" if initial_status == "payment_pending" else "redeemed"
+            selected_reward.redeemed_order_id = order.id
+            selected_reward.redeemed_at = datetime.now(timezone.utc) if initial_status != "payment_pending" else None
+
         await db.commit()
         await db.refresh(order)
 
@@ -644,6 +722,8 @@ async def place_order(
             "pricing": {
                 "subtotal": subtotal_amount,
                 "discount": discount_amount,
+                "reward_id": int(selected_reward.id) if selected_reward is not None else None,
+                "reward_title": str(selected_reward.title) if selected_reward is not None else "",
                 "service_fee": service_fee,
                 "small_order_fee": small_order_fee,
                 "delivery_charge": delivery_charge,
