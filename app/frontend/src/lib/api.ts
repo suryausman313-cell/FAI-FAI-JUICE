@@ -84,6 +84,7 @@ export async function backendRequest(
     path.startsWith('/api/v1/orders/') ||
     path.startsWith('/api/v1/customer-push/') ||
     path.startsWith('/api/v1/customer-auth/') ||
+    path.startsWith('/api/v1/rewards/') ||
     path.startsWith('/api/v1/rider/delivery-eta/') ||
     path === '/api/v1/admin/customer-heartbeat';
 
