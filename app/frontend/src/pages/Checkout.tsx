@@ -1226,7 +1226,9 @@ export default function Checkout() {
   const rewardDiscountAmount = selectedReward
     ? rewardDiscountForCart(selectedReward, subtotal, cart)
     : 0;
-  const discountAmount = selectedReward ? rewardDiscountAmount : promoDiscountAmount;
+  // Discount applies to item subtotal only. Fees/delivery/tip stay unchanged.
+  const discountAmount = Math.min(subtotal, selectedReward ? rewardDiscountAmount : promoDiscountAmount);
+  const itemsAfterDiscount = Math.max(0, subtotal - discountAmount);
   // Service fee only applies based on admin setting (pickup/delivery/both)
   const shouldApplyServiceFee = serviceFeeEnabled && (
     serviceFeeAppliesTo === 'both' ||
@@ -1238,14 +1240,14 @@ export default function Checkout() {
     ? (serviceFeeType === 'percentage' ? (subtotal * serviceFeeAmount) / 100 : serviceFeeAmount)
     : 0;
   const smallOrderFee = (smallOrderFeeEnabled && subtotal < smallOrderFeeThreshold) ? smallOrderFeeAmount : 0;
-  const taxableAmount = Math.max(0, subtotal - discountAmount + deliveryFee + serviceFee + smallOrderFee);
+  const taxableAmount = Math.max(0, itemsAfterDiscount + deliveryFee + serviceFee + smallOrderFee);
   const taxAmount = taxPercent > 0
     ? vatIncluded
       ? taxableAmount - taxableAmount / (1 + taxPercent / 100)
       : (taxableAmount * taxPercent) / 100
     : 0;
   const taxAddedToTotal = vatIncluded ? 0 : taxAmount;
-  const total = subtotal + deliveryFee + serviceFee + smallOrderFee + taxAddedToTotal + tipAmount - discountAmount;
+  const total = itemsAfterDiscount + deliveryFee + serviceFee + smallOrderFee + taxAddedToTotal + tipAmount;
 
   // Simple customer-facing payment choices: Cash + Ziina online card only.
   const availablePaymentMethods: { value: string; label: string }[] = [];
