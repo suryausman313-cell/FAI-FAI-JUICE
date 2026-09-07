@@ -42,6 +42,7 @@ const OrderConfirmation = lazy(
 );
 
 const MyOrders = lazy(() => import('./pages/MyOrders'));
+const Rewards = lazy(() => import('./pages/Rewards'));
 const Contact = lazy(() => import('./pages/Contact'));
 const Deals = lazy(() => import('./pages/Deals'));
 const Feedback = lazy(() => import('./pages/Feedback'));
@@ -122,6 +123,10 @@ const AdminDeliverySettings = lazy(
 
 const AdminFeesSettings = lazy(
   () => import('./pages/admin/AdminFeesSettings')
+);
+
+const AdminRewardsSettings = lazy(
+  () => import('./pages/admin/AdminRewardsSettings')
 );
 
 const AdminPromotionSettings = lazy(
@@ -356,6 +361,15 @@ const AppRoutes = () => (
       />
 
       <Route
+        path="/rewards"
+        element={
+          <ProtectedCustomerRoute>
+            <Rewards />
+          </ProtectedCustomerRoute>
+        }
+      />
+
+      <Route
         path="/contact"
         element={
           <ProtectedCustomerRoute>
@@ -478,6 +492,11 @@ const AppRoutes = () => (
       <Route
         path="/admin/settings/fees"
         element={<AdminFeesSettings />}
+      />
+
+      <Route
+        path="/admin/settings/rewards"
+        element={<AdminRewardsSettings />}
       />
 
       <Route
