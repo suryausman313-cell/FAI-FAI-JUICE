@@ -523,9 +523,10 @@ export default function Checkout() {
     loadActivePromoOffers();
 
     let active = true;
-    setRewardsLoading(true);
-    getMyRewards()
-      .then(payload => {
+    const refreshRewards = async () => {
+      setRewardsLoading(true);
+      try {
+        const payload = await getMyRewards();
         if (!active) return;
         if (payload?.enabled === false) {
           setAvailableRewards([]);
@@ -539,16 +540,31 @@ export default function Checkout() {
         if (savedId) {
           const saved = rewards.find(reward => Number(reward.id) === savedId) || null;
           if (saved) setSelectedReward(saved);
-          else localStorage.removeItem('fai_fai_selected_reward_id');
+          else {
+            setSelectedReward(null);
+            localStorage.removeItem('fai_fai_selected_reward_id');
+          }
+        } else {
+          setSelectedReward(current => current && rewards.some(r => Number(r.id) === Number(current.id)) ? current : null);
         }
-      })
-      .catch(() => {
-        // Rewards are optional. A temporary rewards error must never block checkout.
-        if (active) setAvailableRewards([]);
-      })
-      .finally(() => { if (active) setRewardsLoading(false); });
+      } catch {
+        // Reward sync must never break checkout.
+      } finally {
+        if (active) setRewardsLoading(false);
+      }
+    };
 
-    return () => { active = false; };
+    void refreshRewards();
+    const onFocus = () => void refreshRewards();
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refreshRewards(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      active = false;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   // Read only the public Ziina ON/OFF state. The secret API key stays on Render.
@@ -599,6 +615,7 @@ export default function Checkout() {
             localStorage.removeItem('vita_pending_ziina_order_id');
             clearCart();
       localStorage.removeItem('fai_fai_selected_reward_id');
+      if (selectedReward) setAvailableRewards(prev => prev.filter(r => Number(r.id) !== Number(selectedReward.id)));
       setSelectedReward(null);
             window.dispatchEvent(new Event('cart-updated'));
             toast.success(`${t('checkout.order_number')} #${orderId} — online payment successful`);
@@ -1426,6 +1443,30 @@ export default function Checkout() {
         deal_selected_items: item.isDeal ? (item.dealSelectedItems || []) : [],
       }));
 
+      // ONE-TIME REWARD FRONTEND CHECK:
+      // Refresh right before order placement so a reward already used in another
+      // order/tab/device disappears before the customer can submit again.
+      if (selectedReward) {
+        try {
+          const latestRewards = await getMyRewards();
+          const latestAvailable = latestRewards?.available || [];
+          const stillAvailable = latestAvailable.some(
+            reward => Number(reward.id) === Number(selectedReward.id)
+          );
+          if (!stillAvailable) {
+            setAvailableRewards(latestAvailable);
+            setSelectedReward(null);
+            localStorage.removeItem('fai_fai_selected_reward_id');
+            toast.error(language === 'ar'
+              ? 'تم استخدام هذه المكافأة بالفعل. اختر مكافأة أخرى.'
+              : 'This reward was already used. Choose another reward.');
+            return;
+          }
+        } catch {
+          // Backend still performs the final atomic one-time claim.
+        }
+      }
+
       // Combine notes with car info or delivery address
       const noteParts = [notes];
       if (orderType === 'pickup' && carInfo) {
@@ -1509,6 +1550,7 @@ export default function Checkout() {
         localStorage.removeItem('vita_pending_ziina_order_id');
         clearCart();
       localStorage.removeItem('fai_fai_selected_reward_id');
+      if (selectedReward) setAvailableRewards(prev => prev.filter(r => Number(r.id) !== Number(selectedReward.id)));
       setSelectedReward(null);
         window.dispatchEvent(new Event('cart-updated'));
         toast.success(`${t('checkout.order_number')} #${orderId} — online payment already completed`);
@@ -1537,6 +1579,7 @@ export default function Checkout() {
             localStorage.removeItem('vita_pending_ziina_order_id');
             clearCart();
       localStorage.removeItem('fai_fai_selected_reward_id');
+      if (selectedReward) setAvailableRewards(prev => prev.filter(r => Number(r.id) !== Number(selectedReward.id)));
       setSelectedReward(null);
             window.dispatchEvent(new Event('cart-updated'));
             navigate('/order-confirmation', { state: { orderId } });
@@ -1583,6 +1626,7 @@ export default function Checkout() {
       
       clearCart();
       localStorage.removeItem('fai_fai_selected_reward_id');
+      if (selectedReward) setAvailableRewards(prev => prev.filter(r => Number(r.id) !== Number(selectedReward.id)));
       setSelectedReward(null);
       window.dispatchEvent(new Event('cart-updated'));
       toast.success(`${t('checkout.order_number')} #${orderId} ${t('checkout.order_success')}`);
@@ -2010,7 +2054,7 @@ export default function Checkout() {
             </div>
           </div>
 
-          {/* Fai Fai Surprise Box rewards */}
+          {/* Fai Fai Rewards */}
           {(rewardsLoading || availableRewards.length > 0) && (
             <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -2020,7 +2064,6 @@ export default function Checkout() {
                 </div>
                 <button type="button" onClick={() => navigate('/rewards')} className="text-xs font-semibold text-yellow-400 hover:text-yellow-300">{language === 'ar' ? 'عرض الكل' : 'View all'}</button>
               </div>
-
               {rewardsLoading ? (
                 <p className="text-sm text-gray-500">{language === 'ar' ? 'جارٍ تحميل المكافآت…' : 'Loading rewards…'}</p>
               ) : selectedReward ? (
@@ -2029,15 +2072,6 @@ export default function Checkout() {
                     <div>
                       <p className="font-semibold text-yellow-300">{localizedRewardTitle(selectedReward, language)}</p>
                       <p className="mt-1 text-xs text-gray-400">{language === 'ar' ? 'الحد الأدنى للطلب' : 'Minimum order'} AED {Number(selectedReward.minimum_order || 0).toFixed(0)}</p>
-                      {subtotal < Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف المزيد من المنتجات للوصول إلى الحد الأدنى للطلب.' : 'Add more items to reach the minimum order.'}</p>
-                      )}
-                      {selectedReward.type === 'free_ice_cream' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف آيس كريم صغير بسعر 5 دراهم أو أقل لاستخدام المكافأة.' : 'Add a Small Ice Cream priced AED 5 or less to use it.'}</p>
-                      )}
-                      {selectedReward.type === 'golden_free_item' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف منتجاً مؤهلاً حتى 15 درهماً (الأساي والسموثي والزجاجات والبوكسات غير مشمولة).' : 'Add an eligible item up to AED 15 (Acai, smoothies, bottles and boxes excluded).'}</p>
-                      )}
                       {rewardDiscountAmount > 0 && <p className="mt-1 text-xs text-green-400">{language === 'ar' ? 'توفير' : 'Saving'} AED {rewardDiscountAmount.toFixed(2)}</p>}
                     </div>
                     <button type="button" onClick={removeReward} className="text-xs text-gray-400 hover:text-red-400">{language === 'ar' ? 'إزالة' : 'Remove'}</button>
@@ -2046,17 +2080,12 @@ export default function Checkout() {
               ) : (
                 <div className="space-y-2">
                   {availableRewards.slice(0, 3).map(reward => (
-                    <button
-                      key={reward.id}
-                      type="button"
-                      onClick={() => chooseReward(reward)}
-                      className="flex w-full items-center justify-between rounded-xl border border-gray-800 bg-black/30 p-3 text-left hover:border-yellow-500/40"
-                    >
+                    <button key={reward.id} type="button" onClick={() => chooseReward(reward)} className="flex w-full items-center justify-between rounded-xl border border-gray-800 bg-black/30 p-3 text-left hover:border-yellow-500/40">
                       <div>
                         <p className="text-sm font-semibold text-white">{reward.tier === 'golden' ? '👑 ' : '🎁 '}{localizedRewardTitle(reward, language)}</p>
                         <p className="text-xs text-gray-500">{language === 'ar' ? 'الحد الأدنى' : 'Min.'} AED {Number(reward.minimum_order || 0).toFixed(0)}</p>
                       </div>
-                      <span className="text-xs font-bold text-yellow-400">Use</span>
+                      <span className="text-xs font-bold text-yellow-400">{language === 'ar' ? 'استخدم' : 'Use'}</span>
                     </button>
                   ))}
                 </div>
@@ -2267,9 +2296,7 @@ export default function Checkout() {
               )}
               {(promoApplied || selectedReward) && discountAmount > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-green-400">
-                    {selectedReward ? `${language === 'ar' ? 'المكافأة' : 'Reward'}: ${localizedRewardTitle(selectedReward, language)}` : `${t('checkout.discount')} (${(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})`}
-                  </span>
+                  <span className="text-green-400">{selectedReward ? `${language === 'ar' ? 'المكافأة' : 'Reward'}: ${localizedRewardTitle(selectedReward, language)}` : `${t('checkout.discount')} (${(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})`}</span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
               )}
