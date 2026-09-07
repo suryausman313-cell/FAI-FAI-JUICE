@@ -30,6 +30,28 @@ export interface RewardsPayload {
   normal_order_min: number;
 }
 
+
+export interface AdminRewardSettings {
+  enabled: boolean;
+}
+
+export async function getAdminRewardSettings(): Promise<AdminRewardSettings> {
+  const response = await client.apiCall.invoke({
+    url: '/api/v1/rewards/admin/settings',
+    method: 'GET',
+  });
+  return { enabled: response?.data?.enabled !== false };
+}
+
+export async function updateAdminRewardSettings(enabled: boolean): Promise<AdminRewardSettings> {
+  const response = await client.apiCall.invoke({
+    url: '/api/v1/rewards/admin/settings',
+    method: 'PUT',
+    data: { enabled: Boolean(enabled) },
+  });
+  return { enabled: response?.data?.enabled !== false };
+}
+
 export async function getRewardsStatus(): Promise<{ enabled: boolean }> {
   const response = await client.apiCall.invoke({ url: '/api/v1/rewards/status', method: 'GET' });
   return response?.data || { enabled: false };
