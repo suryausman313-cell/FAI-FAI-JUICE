@@ -7,6 +7,7 @@ import {
   CreditCard,
   Database,
   Home,
+  Gift,
   KeyRound,
   MapPinned,
   Megaphone,
@@ -86,6 +87,14 @@ const SETTINGS = [
       'Service fee, small-order fee, VAT and thresholds.',
     icon: Percent,
     color: 'text-emerald-400',
+  },
+  {
+    path: '/admin/settings/rewards',
+    title: 'Customer Rewards',
+    description:
+      'Turn Surprise Box and Golden Rewards ON or OFF for customers.',
+    icon: Gift,
+    color: 'text-yellow-400',
   },
   {
     path: '/admin/settings/promotions',
