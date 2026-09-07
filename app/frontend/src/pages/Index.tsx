@@ -252,11 +252,11 @@ export default function Index() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-base font-black text-white">Fai Fai Rewards</p>
+                    <p className="text-base font-black text-white">{language === 'ar' ? 'مكافآت فاي فاي' : 'Fai Fai Rewards'}</p>
                     <p className="mt-0.5 text-xs text-gray-300">
                       {(rewardsData.available?.length || 0) > 0
-                        ? `${rewardsData.available.length} reward${rewardsData.available.length > 1 ? 's' : ''} ready to use`
-                        : 'Order AED 15+ to unlock a Surprise Reward'}
+                        ? (language === 'ar' ? `${rewardsData.available.length} مكافأة جاهزة للاستخدام` : `${rewardsData.available.length} reward${rewardsData.available.length > 1 ? 's' : ''} ready to use`)
+                        : (language === 'ar' ? 'اطلب بقيمة 15 درهماً أو أكثر لفتح صندوق مفاجأة' : 'Order AED 15+ to unlock a Surprise Reward')}
                     </p>
                   </div>
                   <ChevronRight className="h-5 w-5 shrink-0 text-yellow-400" />
@@ -264,7 +264,7 @@ export default function Index() {
 
                 <div className="mt-3 flex items-center gap-2">
                   <Crown className="h-4 w-4 shrink-0 text-yellow-400" />
-                  <span className="text-xs font-semibold text-yellow-200">Golden Reward</span>
+                  <span className="text-xs font-semibold text-yellow-200">{language === 'ar' ? 'المكافأة الذهبية' : 'Golden Reward'}</span>
                   <span className="ml-auto text-xs font-black text-white">
                     {rewardsData.gold_progress || 0}/{rewardsData.gold_required || 3}
                   </span>
@@ -277,7 +277,7 @@ export default function Index() {
                     }}
                   />
                 </div>
-                <p className="mt-1.5 text-[11px] text-gray-400">3 orders of AED 100+ within 30 days</p>
+                <p className="mt-1.5 text-[11px] text-gray-400">{language === 'ar' ? '3 طلبات بقيمة 100 درهم أو أكثر خلال 30 يوماً' : '3 orders of AED 100+ within 30 days'}</p>
               </div>
             </div>
           </button>

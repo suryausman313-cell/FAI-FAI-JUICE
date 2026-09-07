@@ -45,6 +45,22 @@ function isWithinDailySchedule(start: string, end: string, now: Date): boolean {
     : currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
 
+function localizedRewardTitle(reward: CustomerReward, language: string): string {
+  if (language !== 'ar') return reward.title;
+  if (reward.type === 'free_ice_cream') return 'آيس كريم صغير مجاناً';
+  if (reward.type === 'golden_free_item') return 'ذهبي: منتج مختار مجاناً حتى 15 درهماً';
+  if (reward.type === 'fixed') return reward.tier === 'golden'
+    ? `ذهبي: خصم ${Number(reward.value || 0).toFixed(0)} درهم`
+    : `خصم ${Number(reward.value || 0).toFixed(0)} درهم`;
+  if (reward.type === 'percent') {
+    const cap = Number(reward.max_discount || 0);
+    return reward.tier === 'golden'
+      ? `ذهبي: خصم ${Number(reward.value || 0).toFixed(0)}%${cap > 0 ? ` حتى ${cap.toFixed(0)} درهماً` : ''}`
+      : `خصم ${Number(reward.value || 0).toFixed(0)}%${cap > 0 ? ` حتى ${cap.toFixed(0)} دراهم` : ''}`;
+  }
+  return reward.title;
+}
+
 function formatScheduleTime(value: string, language: string): string {
   const [hours, minutes] = value.split(':').map(Number);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
@@ -1999,32 +2015,32 @@ export default function Checkout() {
             <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-bold text-white">🎁 Fai Fai Rewards</p>
-                  <p className="text-xs text-gray-400">Use one reward on this order. Promo codes cannot be combined.</p>
+                  <p className="font-bold text-white">🎁 {language === 'ar' ? 'مكافآت فاي فاي' : 'Fai Fai Rewards'}</p>
+                  <p className="text-xs text-gray-400">{language === 'ar' ? 'استخدم مكافأة واحدة في هذا الطلب.' : 'Use one reward on this order.'}</p>
                 </div>
-                <button type="button" onClick={() => navigate('/rewards')} className="text-xs font-semibold text-yellow-400 hover:text-yellow-300">View all</button>
+                <button type="button" onClick={() => navigate('/rewards')} className="text-xs font-semibold text-yellow-400 hover:text-yellow-300">{language === 'ar' ? 'عرض الكل' : 'View all'}</button>
               </div>
 
               {rewardsLoading ? (
-                <p className="text-sm text-gray-500">Loading rewards…</p>
+                <p className="text-sm text-gray-500">{language === 'ar' ? 'جارٍ تحميل المكافآت…' : 'Loading rewards…'}</p>
               ) : selectedReward ? (
                 <div className="rounded-xl border border-yellow-500/30 bg-black/30 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-yellow-300">{selectedReward.title}</p>
-                      <p className="mt-1 text-xs text-gray-400">Minimum order AED {Number(selectedReward.minimum_order || 0).toFixed(0)}</p>
+                      <p className="font-semibold text-yellow-300">{localizedRewardTitle(selectedReward, language)}</p>
+                      <p className="mt-1 text-xs text-gray-400">{language === 'ar' ? 'الحد الأدنى للطلب' : 'Minimum order'} AED {Number(selectedReward.minimum_order || 0).toFixed(0)}</p>
                       {subtotal < Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">Add more items to reach the minimum order.</p>
+                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف المزيد من المنتجات للوصول إلى الحد الأدنى للطلب.' : 'Add more items to reach the minimum order.'}</p>
                       )}
                       {selectedReward.type === 'free_ice_cream' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">Add a Small Ice Cream priced AED 5 or less to use it.</p>
+                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف آيس كريم صغير بسعر 5 دراهم أو أقل لاستخدام المكافأة.' : 'Add a Small Ice Cream priced AED 5 or less to use it.'}</p>
                       )}
                       {selectedReward.type === 'golden_free_item' && rewardDiscountAmount <= 0 && subtotal >= Number(selectedReward.minimum_order || 0) && (
-                        <p className="mt-1 text-xs text-orange-300">Add an eligible item up to AED 15 (Acai, smoothies, bottles and boxes excluded).</p>
+                        <p className="mt-1 text-xs text-orange-300">{language === 'ar' ? 'أضف منتجاً مؤهلاً حتى 15 درهماً (الأساي والسموثي والزجاجات والبوكسات غير مشمولة).' : 'Add an eligible item up to AED 15 (Acai, smoothies, bottles and boxes excluded).'}</p>
                       )}
-                      {rewardDiscountAmount > 0 && <p className="mt-1 text-xs text-green-400">Saving AED {rewardDiscountAmount.toFixed(2)}</p>}
+                      {rewardDiscountAmount > 0 && <p className="mt-1 text-xs text-green-400">{language === 'ar' ? 'توفير' : 'Saving'} AED {rewardDiscountAmount.toFixed(2)}</p>}
                     </div>
-                    <button type="button" onClick={removeReward} className="text-xs text-gray-400 hover:text-red-400">Remove</button>
+                    <button type="button" onClick={removeReward} className="text-xs text-gray-400 hover:text-red-400">{language === 'ar' ? 'إزالة' : 'Remove'}</button>
                   </div>
                 </div>
               ) : (
@@ -2037,8 +2053,8 @@ export default function Checkout() {
                       className="flex w-full items-center justify-between rounded-xl border border-gray-800 bg-black/30 p-3 text-left hover:border-yellow-500/40"
                     >
                       <div>
-                        <p className="text-sm font-semibold text-white">{reward.tier === 'golden' ? '👑 ' : '🎁 '}{reward.title}</p>
-                        <p className="text-xs text-gray-500">Min. AED {Number(reward.minimum_order || 0).toFixed(0)}</p>
+                        <p className="text-sm font-semibold text-white">{reward.tier === 'golden' ? '👑 ' : '🎁 '}{localizedRewardTitle(reward, language)}</p>
+                        <p className="text-xs text-gray-500">{language === 'ar' ? 'الحد الأدنى' : 'Min.'} AED {Number(reward.minimum_order || 0).toFixed(0)}</p>
                       </div>
                       <span className="text-xs font-bold text-yellow-400">Use</span>
                     </button>
@@ -2252,7 +2268,7 @@ export default function Checkout() {
               {(promoApplied || selectedReward) && discountAmount > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-green-400">
-                    {selectedReward ? `Reward: ${selectedReward.title}` : `${t('checkout.discount')} (${(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})`}
+                    {selectedReward ? `${language === 'ar' ? 'المكافأة' : 'Reward'}: ${localizedRewardTitle(selectedReward, language)}` : `${t('checkout.discount')} (${(promoOffer?.discount_type || 'percentage') === 'fixed' ? `AED ${Number(promoOffer?.fixed_discount_amount || promoDiscount).toFixed(2)}` : `${Number(promoOffer?.discount_percent || promoDiscount)}%`})`}
                   </span>
                   <span className="text-green-400">-AED {discountAmount.toFixed(2)}</span>
                 </div>
